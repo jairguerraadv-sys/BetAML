@@ -147,12 +147,6 @@ class MappingTransformer:
         String casing / whitespace transforms.
     """
 
-    _TRANSFORMS: dict[str, Any] = {
-        "parse_date": parse_date,
-        "normalize_cpf": normalize_cpf,
-        "coerce_decimal": coerce_decimal,
-    }
-
     def apply(self, record: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
         """Transform *record* according to *config* and return a new dict."""
         field_configs: dict[str, Any] = config.get("fields", {})
@@ -199,8 +193,5 @@ class MappingTransformer:
 
         if name == "coerce_decimal":
             return coerce_decimal(value)
-
-        if name in self._TRANSFORMS:
-            return self._TRANSFORMS[name](value, **args)
 
         raise MappingError(f"Unknown transform {name!r}")

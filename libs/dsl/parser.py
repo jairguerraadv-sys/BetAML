@@ -198,24 +198,29 @@ class _Parser:
         if tok[0] == "IDENT":
             name = self._consume()[1]
             # Function call
-            if self._peek() and self._peek()[0] == "LPAREN":  # type: ignore[index]
+            next_tok = self._peek()
+            if next_tok is not None and next_tok[0] == "LPAREN":
                 self._consume()  # consume '('
                 args: list[dict] = []
                 while True:
-                    if self._peek() and self._peek()[0] == "RPAREN":  # type: ignore[index]
+                    next_tok = self._peek()
+                    if next_tok is not None and next_tok[0] == "RPAREN":
                         self._consume()
                         break
                     args.append(self._term())
-                    if self._peek() and self._peek()[0] == "COMMA":  # type: ignore[index]
+                    next_tok = self._peek()
+                    if next_tok is not None and next_tok[0] == "COMMA":
                         self._consume()
                 return {"type": "func", "name": name, "args": args}
 
             # Field access  (a.b.c)
             parts = [name]
-            while self._peek() and self._peek()[0] == "DOT":  # type: ignore[index]
+            next_tok = self._peek()
+            while next_tok is not None and next_tok[0] == "DOT":
                 self._consume()  # consume '.'
                 field = self._expect("IDENT")[1]
                 parts.append(field)
+                next_tok = self._peek()
             return {"type": "field", "path": parts}
 
         raise DSLParseError(f"Unexpected token: {tok}")
