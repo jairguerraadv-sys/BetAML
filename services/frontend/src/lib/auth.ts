@@ -50,7 +50,8 @@ export function getCurrentUser(): User | null {
   if (!token) return null;
   const payload = parseJwt(token);
   if (!payload) return null;
-  // Check expiry
+  // Client-side expiry check – UX optimisation only.
+  // The API's 401 interceptor is the authoritative security boundary.
   if (payload.exp * 1000 < Date.now()) {
     clearTokens();
     return null;
