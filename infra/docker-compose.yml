@@ -1,0 +1,246 @@
+x-common-env: &common-env
+  POSTGRES_DB: betaml
+  POSTGRES_USER: betaml
+  POSTGRES_PASSWORD: devpass
+  REDIS_PASSWORD: devpass
+  JWT_SECRET: dev-secret-change-me
+  MINIO_ENDPOINT: http://minio:9000
+  MINIO_ACCESS_KEY: minio
+  MINIO_SECRET_KEY: minio123
+  MINIO_BUCKET: betaml
+  KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+  CLICKHOUSE_HOST: clickhouse
+  CLICKHOUSE_USER: default
+  CLICKHOUSE_PASSWORD: ""
+  DATABASE_URL: postgresql+asyncpg://betaml:devpass@postgres:5432/betaml
+  REDIS_URL: redis://:devpass@redis:6379/0
+  ML_SERVICE_URL: http://ml_service:8001
+  ML_SERVICE_API_KEY: dev-ml-key
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: betaml
+      POSTGRES_USER: betaml
+      POSTGRES_PASSWORD: devpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U betaml -d betaml"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - betaml-network
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass devpass
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "devpass", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - betaml-network
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - betaml-network
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minio minio123 &&
+      mc mb --ignore-existing local/betaml &&
+      echo 'Bucket betaml created or already exists.'
+      "
+    networks:
+      - betaml-network
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    ports:
+      - "8123:8123"
+      - "9009:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - betaml-network
+
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+      - --pandaproxy-addr=0.0.0.0:8082
+      - --advertise-pandaproxy-addr=redpanda:8082
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=redpanda:33145
+    ports:
+      - "9092:9092"
+      - "9644:9644"
+      - "8082:8082"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - betaml-network
+
+  redpanda-console:
+    image: redpandadata/console:latest
+    environment:
+      KAFKA_BROKERS: redpanda:29092
+    ports:
+      - "8080:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    networks:
+      - betaml-network
+
+  api:
+    build:
+      context: ../services/api
+      dockerfile: Dockerfile
+    environment:
+      <<: *common-env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    networks:
+      - betaml-network
+
+  stream_processor:
+    build:
+      context: ../services/stream_processor
+      dockerfile: Dockerfile
+    environment:
+      <<: *common-env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - betaml-network
+
+  rules_engine:
+    build:
+      context: ../services/rules_engine
+      dockerfile: Dockerfile
+    environment:
+      <<: *common-env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - betaml-network
+
+  ml_service:
+    build:
+      context: ../services/ml_service
+      dockerfile: Dockerfile
+    environment:
+      <<: *common-env
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - betaml-network
+
+  frontend:
+    build:
+      context: ../services/frontend
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    networks:
+      - betaml-network
+
+  seed:
+    build:
+      context: ./seed
+      dockerfile: Dockerfile
+    environment:
+      <<: *common-env
+    depends_on:
+      api:
+        condition: service_started
+    networks:
+      - betaml-network
+
+volumes:
+  postgres_data:
+  minio_data:
+  clickhouse_data:
+  redpanda_data:
+
+networks:
+  betaml-network:
+    driver: bridge
