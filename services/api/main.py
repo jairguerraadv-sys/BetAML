@@ -190,6 +190,17 @@ async def me(current_user: User = Depends(get_current_user)):
     }
 
 
+@app.post("/auth/refresh", response_model=TokenResponse, tags=["auth"])
+async def refresh(current_user: User = Depends(get_current_user)):
+    """Re-emite um novo token JWT a partir de um token ainda válido."""
+    token = create_access_token({
+        "sub": current_user.id,
+        "tenant_id": current_user.tenant_id,
+        "role": current_user.role,
+    })
+    return TokenResponse(access_token=token, role=current_user.role, tenant_id=current_user.tenant_id)
+
+
 @app.post("/auth/logout", tags=["auth"])
 async def logout():
     # JWT stateless — cliente descarta o token

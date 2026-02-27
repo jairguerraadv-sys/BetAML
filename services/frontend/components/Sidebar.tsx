@@ -4,15 +4,17 @@ import { usePathname, useRouter } from 'next/navigation';
 import { clsx } from 'clsx';
 import {
   LayoutDashboard, AlertTriangle, FolderOpen,
-  BookOpen, Users, LogOut,
+  BookOpen, Users, LogOut, Plug, ScrollText,
 } from 'lucide-react';
 
 const NAV = [
-  { href: '/dashboard', label: 'Dashboard',  icon: LayoutDashboard },
-  { href: '/alerts',    label: 'Alertas',     icon: AlertTriangle },
-  { href: '/cases',     label: 'Casos',       icon: FolderOpen },
-  { href: '/rules',     label: 'Regras DSL',  icon: BookOpen },
-  { href: '/players',   label: 'Jogadores',   icon: Users },
+  { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard },
+  { href: '/alerts',     label: 'Alertas',     icon: AlertTriangle },
+  { href: '/cases',      label: 'Casos',       icon: FolderOpen },
+  { href: '/rules',      label: 'Regras DSL',  icon: BookOpen },
+  { href: '/players',    label: 'Jogadores',   icon: Users },
+  { href: '/mappings',   label: 'Conectores',  icon: Plug },
+  { href: '/audit-logs', label: 'Auditoria',   icon: ScrollText },
 ];
 
 export default function Sidebar() {

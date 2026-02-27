@@ -128,12 +128,12 @@ DEFAULT_RULES = [
         "params": {"round_trip_ratio": "0.8", "max_stake": 50},
     },
     {
-        "name": "Volume alto absoluto",
-        "description": "Depósito único acima de threshold absoluto",
+        "name": "Saque rápido após depósito",
+        "description": "Saque alto realizado logo após depósito relevante no mesmo dia",
         "severity": "HIGH",
         "scope": "TRANSACTION",
-        "condition_dsl": "transaction.amount >= params.high_amount and transaction.type == \"DEPOSIT\"",
-        "params": {"high_amount": 10000},
+        "condition_dsl": "transaction.type == \"WITHDRAWAL\" and features.deposit_sum_24h >= params.min_deposit and ratio(features.withdrawal_sum_24h, features.deposit_sum_24h) >= params.ratio_threshold",
+        "params": {"min_deposit": 1000, "ratio_threshold": "0.7"},
     },
 ]
 

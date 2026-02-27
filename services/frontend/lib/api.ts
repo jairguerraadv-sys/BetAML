@@ -35,6 +35,19 @@ export async function login(username: string, password: string) {
   return data as { access_token: string; token_type: string; user: User };
 }
 
+export async function refreshToken() {
+  const { data } = await api.post('/auth/refresh');
+  return data as { access_token: string; token_type: string };
+}
+
+export interface AuditLog {
+  id: string; actor_id: string; action: string; entity_type: string;
+  entity_id: string; ip_address?: string; created_at: string;
+}
+
+export const fetchAuditLogs = (params?: Record<string, string>) =>
+  api.get<AuditLog[]>('/audit-logs', { params }).then((r) => r.data);
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface User {
