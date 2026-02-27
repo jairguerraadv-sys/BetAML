@@ -141,8 +141,8 @@ services:
   # ─── APPLICATION SERVICES ─────────────────────────
   api:
     build:
-      context: ../services/api
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/api/Dockerfile
     container_name: betaml-api
     depends_on:
       postgres: {condition: service_healthy}
@@ -246,6 +246,7 @@ services:
       context: ../services/frontend
       dockerfile: Dockerfile
     container_name: betaml-frontend
+
     depends_on: [api]
     environment:
       NEXT_PUBLIC_API_URL:     http://localhost:8000

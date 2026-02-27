@@ -102,6 +102,12 @@ ALTER TABLE alerts               ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cases                ENABLE ROW LEVEL SECURITY;
 ALTER TABLE case_events          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs           ENABLE ROW LEVEL SECURITY;
+-- Adicionar coluna weight em rule_definitions (adicionada em models.py)
+ALTER TABLE rule_definitions ADD COLUMN IF NOT EXISTS weight DECIMAL(4,3) NOT NULL DEFAULT 0.5;
+
+-- Adicionar compound_rule_id em alerts (FK para compound_rules)
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS compound_rule_id UUID REFERENCES compound_rules(id);
+
 ALTER TABLE rule_definitions     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingest_jobs          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE financial_transactions ENABLE ROW LEVEL SECURITY;
