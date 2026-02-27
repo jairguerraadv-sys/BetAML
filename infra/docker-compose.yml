@@ -144,8 +144,8 @@ services:
 
   api:
     build:
-      context: ../services/api
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/api/Dockerfile
     environment:
       <<: *common-env
     ports:
@@ -162,8 +162,8 @@ services:
 
   stream_processor:
     build:
-      context: ../services/stream_processor
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/stream_processor/Dockerfile
     environment:
       <<: *common-env
     depends_on:
@@ -180,8 +180,8 @@ services:
 
   rules_engine:
     build:
-      context: ../services/rules_engine
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/rules_engine/Dockerfile
     environment:
       <<: *common-env
     depends_on:
@@ -196,8 +196,8 @@ services:
 
   ml_service:
     build:
-      context: ../services/ml_service
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/ml_service/Dockerfile
     environment:
       <<: *common-env
     ports:
@@ -212,8 +212,8 @@ services:
 
   frontend:
     build:
-      context: ../services/frontend
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/frontend/Dockerfile
     environment:
       NEXT_PUBLIC_API_URL: http://api:8000
     ports:

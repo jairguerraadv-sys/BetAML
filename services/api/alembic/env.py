@@ -17,6 +17,12 @@ from app.db import Base  # noqa: E402
 import app.models  # noqa: F401, E402
 
 config = context.config
+
+# Override sqlalchemy.url from DATABASE_URL env var if set
+_db_url = os.environ.get("DATABASE_URL")
+if _db_url:
+    config.set_main_option("sqlalchemy.url", _db_url)
+
 fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
