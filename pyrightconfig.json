@@ -4,6 +4,12 @@
   "pythonVersion": "3.11",
   "exclude": [
     "services/frontend",
-    "**/node_modules"
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.git",
+    "**/.venv",
+    "**/venv",
+    "**/.mypy_cache",
+    "**/.pytest_cache"
   ]
 }
