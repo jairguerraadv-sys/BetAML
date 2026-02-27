@@ -57,7 +57,7 @@ from auth import (
     verify_password,
 )
 from config import settings
-from database import AsyncSessionLocal, engine, get_db
+from database import AsyncSessionLocal, current_tenant_id, engine, get_db
 from models import (
     Alert,
     AuditLog,
@@ -83,20 +83,45 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# Em desenvolvimento aceita localhost; em produção exige CORS_ALLOW_ORIGINS explícito.
+_cors_origins: list[str] = (
+    ["*"]
+    if settings.environment == "development"
+    else [o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ─── Middleware: propaga tenant_id para RLS do Postgres ───────────────────────
+@app.middleware("http")
+async def set_rls_tenant_middleware(request: Request, call_next):
+    from jose import jwt as _jwt, JWTError
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        try:
+            payload = _jwt.decode(
+                auth_header[7:], settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+            )
+            tid = payload.get("tenant_id")
+            if tid:
+                current_tenant_id.set(tid)
+        except JWTError:
+            pass  # token inválido — get_current_user rejeitará na rota
+    try:
+        response = await call_next(request)
+    finally:
+        current_tenant_id.set(None)  # evita vazamento entre requests no mesmo worker
+    return response
+
+
 # ─── Enterprise routes ────────────────────────────
-try:
-    from routes_enterprise import enterprise_router
-    app.include_router(enterprise_router)
-except ImportError:
-    pass  # graceful degradation if file not yet in image
+from routes_enterprise import enterprise_router  # noqa: E402
+app.include_router(enterprise_router)
 
 # ─── Prometheus metrics ───────────────────────────
 Instrumentator(
@@ -125,6 +150,22 @@ async def get_producer():
 # ─── Startup / shutdown ───────────────────────────
 @app.on_event("startup")
 async def startup():
+    # Guard: JWT secret inseguro em ambientes não-dev
+    if (
+        settings.environment not in ("development", "test")
+        and settings.jwt_secret == "dev-secret-change-me"
+    ):
+        raise RuntimeError(
+            "JWT_SECRET não pode ser o valor padrão em ambientes de staging/produção. "
+            "Gere um segredo com: python -c 'import secrets; print(secrets.token_hex(32))'"
+        )
+    if (
+        settings.environment not in ("development", "test")
+        and settings.pii_encryption_key == "ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5"
+    ):
+        raise RuntimeError(
+            "PII_ENCRYPTION_KEY não pode ser o valor padrão em staging/produção."
+        )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await get_producer()

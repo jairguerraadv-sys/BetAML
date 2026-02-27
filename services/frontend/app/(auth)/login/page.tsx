@@ -17,7 +17,10 @@ export default function LoginPage() {
     try {
       const res = await login(username, password);
       localStorage.setItem('betaml_token', res.access_token);
-      localStorage.setItem('betaml_user', JSON.stringify(res.user));
+      localStorage.setItem('betaml_user', JSON.stringify({
+        role: res.role,
+        tenant_id: res.tenant_id,
+      }));
       router.push('/dashboard');
     } catch {
       setError('Credenciais inválidas.');

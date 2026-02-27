@@ -18,26 +18,26 @@ from dsl_parser import eval_dsl, validate_dsl, expand_macros
 def test_expand_simple_macro():
     macros = {"HIGH_RISK": "risk_score > 0.8"}
     result = expand_macros("%HIGH_RISK%", macros)
-    assert result == "risk_score > 0.8"
+    # macros are wrapped in () for precedence safety
+    assert result.replace("(", "").replace(")", "") == "risk_score > 0.8"
 
 
 def test_expand_macro_inside_expression():
     macros = {"LIMIT": "500"}
     result = expand_macros("amount > %LIMIT%", macros)
-    assert result == "amount > 500"
+    assert result.replace("(", "").replace(")", "") == "amount > 500"
 
 
 def test_expand_multiple_macros():
     macros = {"A": "1", "B": "2"}
     result = expand_macros("%A% + %B%", macros)
-    assert result == "1 + 2"
+    assert result.replace("(", "").replace(")", "") == "1 + 2"
 
 
 def test_expand_macro_undefined_leaves_placeholder():
     """Undefined macros should remain as-is (not crash)."""
     result = expand_macros("%UNDEFINED_MACRO%", {})
     assert "%UNDEFINED_MACRO%" in result
-
 
 def test_expand_no_macros():
     result = expand_macros("amount > 100", {})
@@ -47,7 +47,7 @@ def test_expand_no_macros():
 def test_expand_nested_macro():
     macros = {"INNER": "100", "OUTER": "amount > %INNER%"}
     result = expand_macros("%OUTER%", macros)
-    assert result == "amount > 100"
+    assert result.replace("(", "").replace(")", "") == "amount > 100"
 
 
 def test_expand_cycle_detection():
@@ -143,7 +143,7 @@ def test_eval_dsl_macro_in_compound_expr():
 def test_validate_valid_expression():
     ok, errors = validate_dsl("risk_score > 0.5")
     assert ok is True
-    assert errors == []
+    assert errors == ""
 
 
 def test_validate_invalid_expression():

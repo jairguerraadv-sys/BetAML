@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useRouter } from 'next/navigation';
 import { fetchAlerts, triageAlert, Alert } from '@/lib/api';
 import DataTable from '@/components/DataTable';
 
@@ -12,16 +13,18 @@ const SEV_BADGE: Record<string, string> = {
 };
 
 export default function AlertsPage() {
+  const router = useRouter();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Alert | null>(null);
   const [filter, setFilter]     = useState<string>('OPEN');
   const [note, setNote]         = useState('');
   const [disposition, setDisp]  = useState('');
 
-  const { data: alerts = [], isLoading } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['alerts', filter],
-    queryFn:  () => fetchAlerts({ status: filter }),
+    queryFn:  () => fetchAlerts(filter ? { status: filter } : undefined),
   });
+  const alerts = data?.items ?? [];
 
   const triage = useMutation({
     mutationFn: () => triageAlert(selected!.id, disposition, note),
@@ -45,29 +48,52 @@ export default function AlertsPage() {
       accessorKey: 'created_at' as keyof Alert,
       cell: (v: unknown) => new Date(v as string).toLocaleString('pt-BR'),
     },
+    {
+      header: 'Ações',
+      accessorKey: 'id' as keyof Alert,
+      cell: (v: unknown, row: Alert) => (
+        <div className="flex gap-2">
+          <button
+            onClick={(e) => { e.stopPropagation(); router.push(`/alerts/${row.id}`); }}
+            className="text-xs text-blue-600 hover:underline"
+          >
+            Ver detalhes
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setSelected(row); }}
+            className="text-xs text-indigo-600 hover:underline"
+          >
+            Triagem
+          </button>
+        </div>
+      ),
+    },
   ];
 
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Alertas</h1>
-        <select
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="rounded-lg border px-3 py-1.5 text-sm"
-        >
-          <option value="">Todos</option>
-          <option value="OPEN">Abertos</option>
-          <option value="IN_REVIEW">Em Revisão</option>
-          <option value="CLOSED">Fechados</option>
-        </select>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-gray-500">{data?.total ?? 0} total</span>
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="rounded-lg border px-3 py-1.5 text-sm"
+          >
+            <option value="">Todos</option>
+            <option value="OPEN">Abertos</option>
+            <option value="IN_REVIEW">Em Revisão</option>
+            <option value="CLOSED">Fechados</option>
+          </select>
+        </div>
       </div>
 
       <DataTable
         data={alerts}
         columns={columns}
         loading={isLoading}
-        onRowClick={setSelected}
+        onRowClick={(row) => router.push(`/alerts/${row.id}`)}
       />
 
       {/* Triagem modal */}

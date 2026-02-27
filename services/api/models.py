@@ -441,3 +441,84 @@ class SystemFlag(Base):
     value      = Column(JSONB, nullable=False, default=None)
     updated_by = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# ── Eventos de Negócio (OLTP) ─────────────────────────────────────────────────
+
+class FinancialTransaction(Base):
+    """Tabela OLTP para transações financeiras ingeridas.
+    Permite que analistas consultem transações individuais durante investigações,
+    complementando os dados agregados do ClickHouse (Gold layer).
+    """
+    __tablename__ = "financial_transactions"
+
+    id                 = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id          = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    player_id          = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="SET NULL"))
+    external_tx_id     = Column(Text)
+    source_system      = Column(Text, nullable=False)
+    type               = Column(Text, nullable=False)           # DEPOSIT, WITHDRAWAL, CHARGEBACK, BONUS
+    amount             = Column(Numeric(15, 2), nullable=False)
+    currency           = Column(Text, nullable=False, default="BRL")
+    status             = Column(String(20), nullable=False, default="PENDING")
+    payment_method     = Column(Text)
+    payment_instrument = Column(Text)                          # token hash do instrumento
+    bank_account_hash  = Column(Text)                          # SHA-256 do IBAN/conta
+    source_event_id    = Column(Text)
+    ingest_job_id      = Column(UUID(as_uuid=False), ForeignKey("ingest_jobs.id", ondelete="SET NULL"))
+    raw_payload        = Column(JSONB, default={})
+    occurred_at        = Column(DateTime(timezone=True), nullable=False)
+    settled_at         = Column(DateTime(timezone=True))
+    created_at         = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Bet(Base):
+    """Tabela OLTP para apostas ingeridas."""
+    __tablename__ = "bets"
+
+    id               = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id        = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    player_id        = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="SET NULL"))
+    external_bet_id  = Column(Text)
+    source_system    = Column(Text, nullable=False)
+    bet_type         = Column(Text, nullable=False, default="SPORTS")
+    stake_amount     = Column(Numeric(15, 2), nullable=False)
+    potential_payout = Column(Numeric(15, 2))
+    actual_payout    = Column(Numeric(15, 2))
+    odds             = Column(Numeric(10, 4))
+    currency         = Column(Text, nullable=False, default="BRL")
+    status           = Column(String(20), nullable=False, default="OPEN")
+    event_name       = Column(Text)
+    market_name      = Column(Text)
+    selection_name   = Column(Text)
+    source_event_id  = Column(Text)
+    ingest_job_id    = Column(UUID(as_uuid=False), ForeignKey("ingest_jobs.id", ondelete="SET NULL"))
+    raw_payload      = Column(JSONB, default={})
+    occurred_at      = Column(DateTime(timezone=True), nullable=False)
+    settled_at       = Column(DateTime(timezone=True))
+    created_at       = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class DeviceEvent(Base):
+    """Tabela OLTP para eventos de dispositivo (logins, sessões)."""
+    __tablename__ = "device_events"
+
+    id              = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id       = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    player_id       = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="SET NULL"))
+    external_evt_id = Column(Text)
+    source_system   = Column(Text, nullable=False)
+    action          = Column(Text, nullable=False)              # LOGIN, LOGOUT, DEPOSIT_ATTEMPT
+    device_id       = Column(Text)
+    device_type     = Column(Text)                             # MOBILE_IOS, DESKTOP, ...
+    device_hash     = Column(Text)                             # fingerprint SHA-256
+    ip_address      = Column(Text)
+    ip_hash         = Column(Text)                             # SHA-256 do IP
+    country_code    = Column(Text)
+    user_agent      = Column(Text)
+    session_id      = Column(Text)
+    source_event_id = Column(Text)
+    ingest_job_id   = Column(UUID(as_uuid=False), ForeignKey("ingest_jobs.id", ondelete="SET NULL"))
+    raw_payload     = Column(JSONB, default={})
+    occurred_at     = Column(DateTime(timezone=True), nullable=False)
+    created_at      = Column(DateTime(timezone=True), server_default=func.now())

@@ -61,6 +61,9 @@ TOKEN_PATTERNS = [
     ("LT",       r"<"),
     ("LPAREN",   r"\("),
     ("RPAREN",   r"\)"),
+    ("LBRACKET", r"\["),
+    ("RBRACKET", r"\]"),
+    ("MUL",      r"\*"),
     ("COMMA",    r","),
     ("IDENT",    r"[A-Za-z_][A-Za-z0-9_.]*"),
     ("SKIP",     r"[ \t\n]+"),
@@ -162,11 +165,17 @@ class FuncCallNode(ASTNode):
         self.args = args
 
 
+class ListNode(ASTNode):
+    """Literal list, e.g. ['PIX', 'TED', 'DOC'] used with `in` operator."""
+    def __init__(self, items: list[ASTNode]):
+        self.items = items
+
+
 # ──────────────────────────────────────────────────
 # Parser (recursive descent)
 # ──────────────────────────────────────────────────
 
-class DSLSyntaxError(Exception):
+class DSLSyntaxError(ValueError):
     pass
 
 
@@ -218,16 +227,25 @@ class DSLParser:
             return UnaryNotNode(self.parse_not_expr())
         return self.parse_compare_expr()
 
-    # compare_expr := call_expr (OP call_expr)?
+    # mul_expr := call_expr ('*' call_expr)*
+    def parse_mul_expr(self) -> ASTNode:
+        node = self.parse_call_expr()
+        while self.peek_type() == "MUL":
+            self.consume("MUL")
+            right = self.parse_call_expr()
+            node = BinOpNode("*", node, right)
+        return node
+
+    # compare_expr := mul_expr (OP mul_expr)?
     def parse_compare_expr(self) -> ASTNode:
-        left = self.parse_call_expr()
+        left = self.parse_mul_expr()
         op_map = {
             "GT": ">", "LT": "<", "GE": ">=", "LE": "<=",
             "EQ": "==", "NE": "!=", "IN": "in", "CONTAINS": "contains",
         }
         if self.peek_type() in op_map:
             op_tok = self.consume()
-            right = self.parse_call_expr()
+            right = self.parse_mul_expr()
             return BinOpNode(op_map[op_tok.type], left, right)
         return left
 
@@ -269,6 +287,16 @@ class DSLParser:
             node = self.parse_expr()
             self.consume("RPAREN")
             return node
+        if tok.type == "LBRACKET":
+            self.consume("LBRACKET")
+            items: list[ASTNode] = []
+            if self.peek_type() != "RBRACKET":
+                items.append(self.parse_expr())
+                while self.peek_type() == "COMMA":
+                    self.consume("COMMA")
+                    items.append(self.parse_expr())
+            self.consume("RBRACKET")
+            return ListNode(items)
         raise DSLSyntaxError(f"Token inesperado: {tok!r}")
 
 
@@ -337,6 +365,9 @@ def evaluate(node: ASTNode, context: dict[str, Any]) -> Any:
     if isinstance(node, FuncCallNode):
         return _eval_func(node, context)
 
+    if isinstance(node, ListNode):
+        return [evaluate(item, context) for item in node.items]
+
     if isinstance(node, BinOpNode):
         return _eval_binop(node, context)
 
@@ -385,7 +416,12 @@ def _eval_func(node: FuncCallNode, context: dict[str, Any]) -> Any:
 
     # ── feature window lookups ───────────────────────────────────────────────
     if node.name in ("sum", "window_sum"):
-        # sum(feature_field, window) or sum(literal_value)
+        # sum(a, b, ...) → arithmetic sum; sum(feature, window) → feature value
+        if len(args) >= 2:
+            try:
+                return sum(_to_decimal(a) for a in args if a is not None)
+            except (DSLEvaluationError, TypeError):
+                pass
         if args:
             raw = args[0]
             if raw is not None:
@@ -445,6 +481,12 @@ def _eval_binop(node: BinOpNode, context: dict[str, Any]) -> Any:
     left = evaluate(node.left, context)
     right = evaluate(node.right, context)
 
+    if node.op == "*":
+        try:
+            return _to_decimal(left) * _to_decimal(right)
+        except (DSLEvaluationError, TypeError):
+            return Decimal("0")
+
     if node.op in (">", "<", ">=", "<=", "==", "!="):
         # Tenta comparação numérica primeiro
         try:
@@ -455,16 +497,27 @@ def _eval_binop(node: BinOpNode, context: dict[str, Any]) -> Any:
         except DSLEvaluationError:
             pass
 
-        if node.op == ">":  return left > right        # type: ignore[operator]
-        if node.op == "<":  return left < right        # type: ignore[operator]
-        if node.op == ">=": return left >= right       # type: ignore[operator]
-        if node.op == "<=": return left <= right       # type: ignore[operator]
-        if node.op == "==": return left == right
-        if node.op == "!=": return left != right
+        # None comparisons: only == and != make sense
+        if left is None or right is None:
+            if node.op == "==": return left == right
+            if node.op == "!=": return left != right
+            return False
+
+        try:
+            if node.op == ">":  return left > right        # type: ignore[operator]
+            if node.op == "<":  return left < right        # type: ignore[operator]
+            if node.op == ">=": return left >= right       # type: ignore[operator]
+            if node.op == "<=": return left <= right       # type: ignore[operator]
+            if node.op == "==": return left == right
+            if node.op == "!=": return left != right
+        except TypeError:
+            return False
 
     if node.op == "in":
         if isinstance(right, str):
             return str(left) in right
+        if isinstance(right, (list, tuple, set)):
+            return left in right or str(left) in [str(x) for x in right]
         return left in right  # type: ignore[operator]
 
     if node.op == "contains":
@@ -507,7 +560,7 @@ def expand_macros(expression: str, macros: dict[str, str], max_depth: int = 10) 
         def replace(m: re.Match) -> str:
             name = m.group(1)
             if name not in macros:
-                raise DSLSyntaxError(f"Macro não definida: %{name}%")
+                return m.group(0)  # leave undefined macro as-is
             return f"({macros[name]})"
 
         new_expr = _MACRO_RE.sub(replace, expression)
@@ -538,14 +591,9 @@ def eval_dsl(
             - "features": features do player (pré-computadas)
             - "feature_stats": médias/desvios/percentis para zscore e percentile_rank
             - "player": dados do player
-            - "pa
-    expression: str,
-    macros: dict[str, str] | None = None,
-) -> tuple[bool, str]:
-    """Valida sintaxe da expressão DSL sem avaliar. Retorna (ok, mensagem)."""
-    try:
-        if macros:
-            expression = expand_macros(expression, macros)macros: dict opcional de macros a expandir antes do parse.
+            - "params": parâmetros configuráveis da regra
+            - "player_lists": sets de CPFs/IDs para uso nos predicados
+        macros: dict opcional de macros a expandir antes do parse.
 
     Exemplo de contexto:
       {
@@ -561,13 +609,14 @@ def eval_dsl(
         expression = expand_macros(expression, macros)
     ast = parse_dsl(expression)
     result = evaluate(ast, context)
-    return bool(result)
+    return result if result is not None else False
 
 
-def validate_dsl(expression: str) -> tuple[bool, str]:
-    """Valida sintaxe da expressão DSL sem avaliar. Retorna (ok, mensagem)."""
+def validate_dsl(expression: str, *, macros: dict[str, str] | None = None) -> tuple[bool, str]:
+    """Valida sintaxe da expressão DSL sem avaliar. Retorna (ok, mensagem vazia se ok)."""
     try:
-        parse_dsl(expression)
-        return True, "OK"
-    except DSLSyntaxError as e:
+        expr = expand_macros(expression, macros) if macros else expression
+        parse_dsl(expr)
+        return True, ""
+    except (DSLSyntaxError, DSLEvaluationError) as e:
         return False, str(e)

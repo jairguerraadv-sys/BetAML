@@ -27,12 +27,17 @@ api.interceptors.response.use(
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
-export async function login(username: string, password: string) {
-  const form = new URLSearchParams({ username, password });
-  const { data } = await api.post('/auth/login', form, {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-  });
-  return data as { access_token: string; token_type: string; user: User };
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  role: string;
+  tenant_id: string;
+}
+
+export async function login(username: string, password: string): Promise<LoginResponse> {
+  // Backend espera JSON (LoginRequest BaseModel), não form-urlencoded
+  const { data } = await api.post<LoginResponse>('/auth/login', { username, password });
+  return data;
 }
 
 export async function refreshToken() {
@@ -57,6 +62,19 @@ export interface User {
 export interface Alert {
   id: string; title: string; severity: string; status: string;
   player_id: string; alert_type: string; created_at: string; rule_id?: string;
+  anomaly_score?: number; case_id?: string;
+}
+
+export interface AlertDetail extends Alert {
+  description?: string;
+  evidence: Record<string, unknown>;
+  source_event_id?: string;
+  composite_score?: number;
+  score_breakdown?: Record<string, unknown>;
+  triaged_by?: string;
+  triaged_at?: string;
+  label?: string;
+  labeled_at?: string;
 }
 
 export interface Case {
@@ -77,7 +95,10 @@ export interface Rule {
 // ── Resources ─────────────────────────────────────────────────────────────────
 
 export const fetchAlerts = (params?: Record<string, string>) =>
-  api.get<Alert[]>('/alerts', { params }).then((r) => r.data);
+  api.get<{ total: number; items: Alert[] }>('/alerts', { params }).then((r) => r.data);
+
+export const fetchAlert = (id: string) =>
+  api.get<AlertDetail>(`/alerts/${id}`).then((r) => r.data);
 
 export const fetchCases = (params?: Record<string, string>) =>
   api.get<Case[]>('/cases', { params }).then((r) => r.data);

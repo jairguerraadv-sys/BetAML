@@ -4,7 +4,11 @@ clickhouse-driver==0.2.7
 sqlalchemy[asyncio]==2.0.29
 asyncpg==0.29.0
 pydantic==2.7.1
+pydantic-settings==2.2.1
 minio==7.2.7
 pandas==2.2.2
 pyarrow==16.0.0
+numpy==1.26.4
+pyyaml==6.0.2
+cryptography>=42.0.0
 structlog==24.1.0

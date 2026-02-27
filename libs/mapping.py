@@ -20,9 +20,27 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
+
+# Literal type enumerating all supported transform names
+TransformType = Literal[
+    "copy",
+    "copyField",
+    "parseDate",
+    "normalizeCpf",
+    "coerceDecimal",
+    "coerceArray",
+    "lowercase",
+    "strip",
+    "constant",
+    "mapEnum",
+    "normalize",
+    "conditional",
+    "extractXMLAttr",
+    "stringify",
+]
 
 
 # ──────────────────────────────────────────────────
@@ -53,18 +71,14 @@ BACKOFFICE_ALPHA_TRANSACTION: dict[str, Any] = {
     "source_system": "BackofficeAlpha",
     "entity_type": "TRANSACTION",
     "fields": [
-        {"target": "external_transaction_id", "source": "txnId",    "transform": "copy"},
-        {"target": "player_cpf",              "source": "cpf",      "transform": "normalizeCpf"},
-        {"target": "type",                    "source": "txnType",  "transform": "mapEnum",
-         "params": {"CREDIT": "DEPOSIT", "DEBIT": "WITHDRAWAL", "CB": "CHARGEBACK",
-                    "BONUS_CREDIT": "BONUS", "ADJ": "ADJUSTMENT"}},
-        {"target": "amount",                  "source": "value",    "transform": "coerceDecimal"},
-        {"target": "currency",                "source": None,       "transform": "constant",     "params": {"value": "BRL"}},
-        {"target": "method",                  "source": "payMethod","transform": "mapEnum",
-         "params": {"pix": "PIX", "ted": "TED", "card": "CARD", "wallet": "WALLET"}},
-        {"target": "status",                  "source": "state",    "transform": "mapEnum",
-         "params": {"PROCESSED": "SETTLED", "PENDING": "PENDING", "ERROR": "FAILED", "REVERSED": "REVERSED"}},
-        {"target": "occurred_at",             "source": "createdAt","transform": "parseDate"},
+        {"target": "transaction_id",  "source": "transactionId",  "transform": "copy"},
+        {"target": "player_id",       "source": "playerId",       "transform": "copy"},
+        {"target": "type",            "source": "type",           "transform": "copy"},
+        {"target": "amount",          "source": "amount",         "transform": "coerceDecimal"},
+        {"target": "currency",        "source": "currency",       "transform": "copy"},
+        {"target": "method",          "source": "paymentMethod",  "transform": "copy"},
+        {"target": "status",          "source": "status",         "transform": "copy"},
+        {"target": "occurred_at",     "source": "transactionDate","transform": "parseDate"},
     ],
 }
 
@@ -73,12 +87,13 @@ BACKOFFICE_ALPHA_PLAYER: dict[str, Any] = {
     "source_system": "BackofficeAlpha",
     "entity_type": "PLAYER",
     "fields": [
-        {"target": "external_player_id", "source": "userId",      "transform": "copy"},
-        {"target": "cpf",                "source": "document",    "transform": "normalizeCpf"},
-        {"target": "name",               "source": "fullName",    "transform": "strip"},
-        {"target": "birth_date",         "source": "birthdate",   "transform": "parseDate"},
-        {"target": "pep_flag",           "source": "isPEP",       "transform": "copy"},
-        {"target": "declared_income_monthly", "source": "income", "transform": "coerceDecimal"},
+        {"target": "external_player_id",       "source": "playerId",       "transform": "copy"},
+        {"target": "full_name",                "source": "fullName",       "transform": "strip"},
+        {"target": "cpf",                      "source": "cpf",            "transform": "normalizeCpf"},
+        {"target": "email",                    "source": "email",          "transform": "lowercase"},
+        {"target": "birth_date",               "source": "dateOfBirth",    "transform": "parseDate"},
+        {"target": "pep_flag",                 "source": "pepFlag",        "transform": "copy"},
+        {"target": "declared_income_monthly",  "source": "declaredIncome", "transform": "coerceDecimal"},
     ],
 }
 
@@ -87,17 +102,14 @@ BACKOFFICE_BETA_TRANSACTION: dict[str, Any] = {
     "source_system": "BackofficeBeta",
     "entity_type": "TRANSACTION",
     "fields": [
-        {"target": "external_transaction_id", "source": "ref",       "transform": "copy"},
-        {"target": "player_cpf",              "source": "playerDoc", "transform": "normalizeCpf"},
-        {"target": "type",                    "source": "kind",      "transform": "mapEnum",
-         "params": {"dep": "DEPOSIT", "saque": "WITHDRAWAL", "estorno": "CHARGEBACK"}},
-        {"target": "amount",                  "source": "gross",     "transform": "coerceDecimal"},
-        {"target": "currency",                "source": None,        "transform": "constant",    "params": {"value": "BRL"}},
-        {"target": "method",                  "source": "channel",   "transform": "mapEnum",
-         "params": {"PIX": "PIX", "DOC": "TED", "CC": "CARD"}},
-        {"target": "status",                  "source": "result",    "transform": "mapEnum",
-         "params": {"ok": "SETTLED", "pendente": "PENDING", "falhou": "FAILED"}},
-        {"target": "occurred_at",             "source": "ts",        "transform": "parseDate"},
+        {"target": "transaction_id",  "source": "txn_id",      "transform": "copy"},
+        {"target": "player_id",       "source": "user_id",     "transform": "copy"},
+        {"target": "type",            "source": "txn_type",    "transform": "copy"},
+        {"target": "amount",          "source": "value",       "transform": "coerceDecimal"},
+        {"target": "currency",        "source": "ccy",         "transform": "copy"},
+        {"target": "method",          "source": "method",      "transform": "copy"},
+        {"target": "status",          "source": "txn_status",  "transform": "copy"},
+        {"target": "occurred_at",     "source": "occurred_utc","transform": "parseDate"},
     ],
 }
 
@@ -185,7 +197,7 @@ TRANSFORMS: dict[str, Any] = {
     "copy":          lambda v, p: v,
     "parseDate":     lambda v, p: _parse_date(v),
     "normalizeCpf":  lambda v, p: _normalize_cpf(v),
-    "coerceDecimal": lambda v, p: _coerce_decimal(v),
+    "coerceDecimal": lambda v, p: (lambda d: float(d) if d is not None else None)(_coerce_decimal(v)),
     "coerceArray":   lambda v, p: (v if isinstance(v, list) else [x.strip() for x in str(v).split(",")]) if v is not None else [],
     "lowercase":     lambda v, p: str(v).lower() if v is not None else None,
     "strip":         lambda v, p: str(v).strip() if v is not None else None,

@@ -20,9 +20,16 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "localhost:9092"
 
     # JWT
+    # AVISO: altere JWT_SECRET para um valor aleatório em staging/prod.
+    # Gere com: python -c "import secrets; print(secrets.token_hex(32))"
     jwt_secret: str = "dev-secret-change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_min: int = 60
+
+    # CORS
+    # Em produção, defina CORS_ALLOW_ORIGINS como lista separada por vírgula,
+    # ex.: "https://app.betaml.io,https://admin.betaml.io"
+    cors_allow_origins: str = "http://localhost:3000"
 
     # MinIO / S3
     minio_endpoint: str = "http://localhost:9000"

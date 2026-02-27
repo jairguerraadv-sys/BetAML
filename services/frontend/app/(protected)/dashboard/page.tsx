@@ -13,10 +13,11 @@ const SEV_COLOR: Record<string, string> = {
 };
 
 export default function DashboardPage() {
-  const { data: alerts = [] } = useQuery({
+  const { data: alertsData } = useQuery({
     queryKey: ['alerts'],
     queryFn:  () => fetchAlerts({ status: 'OPEN', per_page: '100' }),
   });
+  const alerts = alertsData?.items ?? [];
   const { data: cases = [] } = useQuery({
     queryKey: ['cases'],
     queryFn:  () => fetchCases({ per_page: '100' }),

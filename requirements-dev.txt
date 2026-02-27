@@ -1,0 +1,53 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# BetAML — Dependências de desenvolvimento e teste
+# Instala: pytest + plugins, stubs de tipos, linters, ferramentas de carga/seg.
+#
+# Uso:
+#   pip install -r requirements-dev.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Test runner ───────────────────────────────────────────────────────────────
+pytest==8.2.2
+pytest-asyncio==0.23.7
+pytest-cov==5.0.0
+pytest-mock==3.14.0
+anyio[trio]==4.4.0         # backend async para pytest-asyncio
+
+# ── HTTP clients (unit/integration tests) ────────────────────────────────────
+requests==2.32.3
+httpx==0.27.0              # usado em test_tenant_isolation.py
+
+# ── Load testing ─────────────────────────────────────────────────────────────
+locust==2.29.1             # requer gevent
+
+# ── Linting / type checking ───────────────────────────────────────────────────
+ruff==0.4.7
+mypy==1.10.0
+
+# ── Shared libs (necessários para importar libs/ nos testes) ─────────────────
+pydantic[email]==2.7.1
+pydantic-settings==2.2.1
+structlog==24.1.0
+cryptography>=42.0.0       # Fernet (PII encrypt/decrypt em auth.py)
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# ── DSL + Mapping (libs/dsl_parser.py, libs/mapping.py) ──────────────────────
+python-dateutil==2.9.0
+lxml==5.2.2                # alternativa ao xml.etree para parsing robusto (opcional)
+
+# ── Connectors (libs/connectors.py) ──────────────────────────────────────────
+pyyaml==6.0.2              # YAML connector templates
+
+# ── Stream / ML stubs (para test_features.py com mocks) ──────────────────────
+redis[hiredis]==5.0.4
+aiokafka==0.10.0
+numpy==1.26.4
+pandas==2.2.2
+scikit-learn==1.4.2
+joblib==1.4.2
+
+# ── SQLAlchemy (para seeds e conftest de integração) ─────────────────────────
+sqlalchemy[asyncio]==2.0.29
+asyncpg==0.29.0
+psycopg2-binary==2.9.9

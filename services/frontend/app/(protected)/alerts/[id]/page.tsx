@@ -1,0 +1,278 @@
+'use client';
+import { useState } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { fetchAlert, triageAlert, linkAlertToCase, fetchCases, AlertDetail, Case } from '@/lib/api';
+
+const SEV_BADGE: Record<string, string> = {
+  CRITICAL: 'bg-red-100 text-red-700 border border-red-200',
+  HIGH:     'bg-orange-100 text-orange-700 border border-orange-200',
+  MEDIUM:   'bg-yellow-100 text-yellow-700 border border-yellow-200',
+  LOW:      'bg-green-100 text-green-700 border border-green-200',
+};
+
+const STATUS_BADGE: Record<string, string> = {
+  OPEN:      'bg-blue-100 text-blue-700',
+  IN_REVIEW: 'bg-purple-100 text-purple-700',
+  CLOSED:    'bg-gray-100 text-gray-500',
+};
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-6 rounded-xl border bg-white p-5 shadow-sm">
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">{title}</h2>
+      {children}
+    </div>
+  );
+}
+
+function KV({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-xs text-gray-400">{label}</span>
+      <span className="text-sm font-medium text-gray-800">{value ?? '—'}</span>
+    </div>
+  );
+}
+
+export default function AlertDetailPage() {
+  const { id } = useParams<{ id: string }>();
+  const router  = useRouter();
+  const qc      = useQueryClient();
+
+  const [showTriage, setShowTriage]    = useState(false);
+  const [showLink, setShowLink]        = useState(false);
+  const [disposition, setDisp]         = useState('');
+  const [note, setNote]                = useState('');
+  const [selectedCase, setSelectedCase] = useState('');
+
+  const { data: alert, isLoading, error } = useQuery<AlertDetail>({
+    queryKey: ['alert', id],
+    queryFn:  () => fetchAlert(id),
+    enabled:  !!id,
+  });
+
+  const { data: casesData } = useQuery({
+    queryKey: ['cases'],
+    queryFn:  () => fetchCases(),
+    enabled:  showLink,
+  });
+  const cases: Case[] = (casesData as Case[] | undefined) ?? [];
+
+  const triage = useMutation({
+    mutationFn: () => triageAlert(id, disposition, note),
+    onSuccess:  () => {
+      qc.invalidateQueries({ queryKey: ['alert', id] });
+      qc.invalidateQueries({ queryKey: ['alerts'] });
+      setShowTriage(false);
+    },
+  });
+
+  const link = useMutation({
+    mutationFn: () => linkAlertToCase(id, selectedCase),
+    onSuccess:  () => {
+      qc.invalidateQueries({ queryKey: ['alert', id] });
+      setShowLink(false);
+    },
+  });
+
+  if (isLoading) {
+    return <div className="p-8 text-center text-gray-400">Carregando alerta...</div>;
+  }
+  if (error || !alert) {
+    return (
+      <div className="p-8 text-center">
+        <p className="text-red-600">Alerta não encontrado.</p>
+        <button onClick={() => router.back()} className="mt-3 text-sm text-brand hover:underline">
+          ← Voltar
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-4xl">
+      {/* Header */}
+      <div className="mb-6 flex items-start justify-between">
+        <div>
+          <button onClick={() => router.back()} className="mb-2 text-xs text-gray-400 hover:underline">
+            ← Alertas
+          </button>
+          <h1 className="text-2xl font-bold text-gray-900">{alert.title}</h1>
+          <p className="mt-1 text-sm text-gray-500">#{alert.id.slice(0, 8)}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${SEV_BADGE[alert.severity] ?? 'bg-gray-100'}`}>
+            {alert.severity}
+          </span>
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${STATUS_BADGE[alert.status] ?? 'bg-gray-100'}`}>
+            {alert.status}
+          </span>
+        </div>
+      </div>
+
+      {/* Metadados */}
+      <Section title="Informações do Alerta">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+          <KV label="Tipo" value={alert.alert_type} />
+          <KV label="Criado em" value={new Date(alert.created_at).toLocaleString('pt-BR')} />
+          <KV label="Player ID" value={
+            alert.player_id
+              ? <a href={`/players`} className="text-brand hover:underline font-mono text-xs">{alert.player_id.slice(0, 8)}…</a>
+              : null
+          } />
+          <KV label="Rule ID" value={alert.rule_id ? <span className="font-mono text-xs">{alert.rule_id.slice(0, 8)}…</span> : null} />
+          <KV label="Anomaly Score" value={alert.anomaly_score != null ? alert.anomaly_score.toFixed(4) : null} />
+          <KV label="Composite Score" value={alert.composite_score != null ? alert.composite_score.toFixed(4) : null} />
+          {alert.case_id && (
+            <KV label="Caso vinculado" value={
+              <a href={`/cases/${alert.case_id}`} className="text-brand hover:underline font-mono text-xs">
+                {alert.case_id.slice(0, 8)}…
+              </a>
+            } />
+          )}
+          {alert.triaged_at && (
+            <KV label="Triado em" value={new Date(alert.triaged_at).toLocaleString('pt-BR')} />
+          )}
+          {alert.label && <KV label="Label" value={alert.label} />}
+        </div>
+        {alert.description && (
+          <p className="mt-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-600">{alert.description}</p>
+        )}
+      </Section>
+
+      {/* Evidências */}
+      <Section title="Evidências">
+        {alert.evidence && Object.keys(alert.evidence).length > 0 ? (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {Object.entries(alert.evidence).map(([k, v]) => (
+              <div key={k} className="rounded-lg bg-gray-50 p-3">
+                <div className="mb-0.5 text-xs font-medium text-gray-400">{k}</div>
+                <div className="text-sm font-semibold text-gray-800 break-all">
+                  {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-400">Sem evidências registradas.</p>
+        )}
+      </Section>
+
+      {/* Score Breakdown */}
+      {alert.score_breakdown && Object.keys(alert.score_breakdown).length > 0 && (
+        <Section title="Score Breakdown">
+          <pre className="overflow-x-auto rounded-lg bg-gray-50 p-3 text-xs text-gray-700">
+            {JSON.stringify(alert.score_breakdown, null, 2)}
+          </pre>
+        </Section>
+      )}
+
+      {/* Ações */}
+      <div className="flex flex-wrap gap-3">
+        {alert.status !== 'CLOSED' && (
+          <button
+            onClick={() => setShowTriage(true)}
+            className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand/90"
+          >
+            Triagem
+          </button>
+        )}
+        {!alert.case_id && (
+          <button
+            onClick={() => setShowLink(true)}
+            className="rounded-lg border border-brand px-4 py-2 text-sm font-semibold text-brand hover:bg-brand/5"
+          >
+            Vincular a Caso
+          </button>
+        )}
+        {alert.case_id && (
+          <a
+            href={`/cases/${alert.case_id}`}
+            className="rounded-lg border px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+          >
+            Ver Caso
+          </a>
+        )}
+      </div>
+
+      {/* Modal: Triagem */}
+      {showTriage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <h2 className="mb-4 text-lg font-semibold">Triagem do Alerta</h2>
+
+            <label className="mb-1 block text-sm font-medium">Disposição</label>
+            <select
+              value={disposition}
+              onChange={(e) => setDisp(e.target.value)}
+              className="mb-3 w-full rounded-lg border px-3 py-2 text-sm"
+            >
+              <option value="">Selecione...</option>
+              <option value="FALSE_POSITIVE">False Positive</option>
+              <option value="TRUE_POSITIVE">True Positive</option>
+              <option value="UNDER_REVIEW">Em Análise</option>
+            </select>
+
+            <label className="mb-1 block text-sm font-medium">Observação</label>
+            <textarea
+              rows={3}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              className="mb-4 w-full rounded-lg border px-3 py-2 text-sm"
+              placeholder="Justificativa..."
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => triage.mutate()}
+                disabled={!disposition || triage.isPending}
+                className="flex-1 rounded-lg bg-brand py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {triage.isPending ? 'Salvando...' : 'Confirmar Triagem'}
+              </button>
+              <button onClick={() => setShowTriage(false)} className="flex-1 rounded-lg border py-2 text-sm">
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Vincular a Caso */}
+      {showLink && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <h2 className="mb-4 text-lg font-semibold">Vincular a Caso</h2>
+
+            <label className="mb-1 block text-sm font-medium">Caso</label>
+            <select
+              value={selectedCase}
+              onChange={(e) => setSelectedCase(e.target.value)}
+              className="mb-4 w-full rounded-lg border px-3 py-2 text-sm"
+            >
+              <option value="">Selecione um caso...</option>
+              {cases.filter((c: Case) => c.status !== 'CLOSED').map((c: Case) => (
+                <option key={c.id} value={c.id}>
+                  {c.reference_number ? `[${c.reference_number}] ` : ''}{c.title}
+                </option>
+              ))}
+            </select>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => link.mutate()}
+                disabled={!selectedCase || link.isPending}
+                className="flex-1 rounded-lg bg-brand py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {link.isPending ? 'Vinculando...' : 'Vincular'}
+              </button>
+              <button onClick={() => setShowLink(false)} className="flex-1 rounded-lg border py-2 text-sm">
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

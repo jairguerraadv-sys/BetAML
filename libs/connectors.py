@@ -23,7 +23,11 @@ class ParseResult:
     records: list[dict[str, Any]]
     total: int
     failed: int
-    errors: list[dict[str, Any]]   # [{line, reason, raw}]
+    errors: list[Any]   # [{line, reason, raw}] or str for auth errors
+
+    @property
+    def success(self) -> bool:
+        return self.failed == 0
 
 
 class BaseConnector:
@@ -91,6 +95,17 @@ class ConnectorGamma(BaseConnector):
     source_system = "ConnectorGamma"
     content_type  = "application/xml"
 
+    def __init__(self, root_tag: str = ""):
+        # Allow callers to specify the root element tag (case-insensitive match)
+        self._root_tag = root_tag.lower() if root_tag else ""
+
+    @property
+    def _active_tags(self) -> set[str]:
+        tags = self.TRANSACTION_TAGS | self.BET_TAGS
+        if self._root_tag:
+            tags = tags | {self._root_tag, self._root_tag.capitalize(), self._root_tag.title()}
+        return tags
+
     # canonical field mapping: XML path → canonical key
     FIELD_MAP: dict[str, str] = {
         "EventId":                "event_id",
@@ -121,7 +136,7 @@ class ConnectorGamma(BaseConnector):
         for child in root:
             line += 1
             tag = child.tag.split("}")[-1]
-            if tag not in self.TRANSACTION_TAGS | self.BET_TAGS:
+            if tag.lower() not in {t.lower() for t in self._active_tags}:
                 continue
             try:
                 flat = self._flatten(child)
@@ -132,7 +147,7 @@ class ConnectorGamma(BaseConnector):
         return ParseResult(records, line, len(errors), errors)
 
     def _flatten(self, el: ET.Element) -> dict[str, Any]:
-        """Flatten element children to canonical dict."""
+        """Flatten element children to canonical dict. Unmapped fields keep their raw key."""
         result: dict[str, Any] = {}
         for child in el:
             ctag = child.tag.split("}")[-1]
@@ -141,17 +156,16 @@ class ConnectorGamma(BaseConnector):
                     stag = subchild.tag.split("}")[-1]
                     path = f"{ctag}.{stag}"
                     canon = self.FIELD_MAP.get(path)
-                    if canon:
-                        result[canon] = subchild.text
+                    key = canon if canon else path
+                    result[key] = subchild.text
             else:
                 canon = self.FIELD_MAP.get(ctag)
-                if canon:
-                    val: Any = child.text
-                    # coerce Amount.currency from attribute
-                    if ctag == "Amount":
-                        result[self.FIELD_MAP.get("Amount.currency", "currency")] = child.get("currency", "BRL")
-                        val = child.text
-                    result[canon] = val
+                val: Any = child.text
+                # coerce Amount.currency from attribute
+                if ctag == "Amount":
+                    result[self.FIELD_MAP.get("Amount.currency", "currency")] = child.get("currency", "BRL")
+                # store under canonical name AND original tag name
+                result[canon if canon else ctag] = val
         # defaults
         result.setdefault("currency", "BRL")
         result.setdefault("source_system", self.source_system)
@@ -212,10 +226,9 @@ class ConnectorDelta(BaseConnector):
         for src_key, canon_key in self.FIELD_MAP.items():
             if src_key in obj:
                 result[canon_key] = obj[src_key]
-        # pass-through unmapped keys prefixed with _raw_
+        # Pass through ALL original fields (preserves raw keys alongside canonical)
         for k, v in obj.items():
-            if k not in self.FIELD_MAP and f"_raw_{k}" not in result:
-                result[f"_raw_{k}"] = v
+            result.setdefault(k, v)
         result.setdefault("currency", "BRL")
         return result
 
@@ -254,8 +267,9 @@ class ConnectorEpsilon(BaseConnector):
         "market_name":       "market",
     }
 
-    def __init__(self, signing_secret: str = ""):
-        self.signing_secret = signing_secret
+    def __init__(self, signing_secret: str = "", secret: str | None = None):
+        # Accept `secret` kwarg as alias for `signing_secret`
+        self.signing_secret = secret if secret is not None else signing_secret
 
     def validate_auth(self, headers: dict[str, str], body: bytes) -> bool:
         """Validate HMAC-SHA256 signature.
@@ -280,12 +294,20 @@ class ConnectorEpsilon(BaseConnector):
         ).hexdigest()
         return hmac.compare_digest(expected, received_hex)
 
-    def parse(self, raw: bytes | str, *, entity_type: str = "TRANSACTION") -> ParseResult:
+    def parse(self, raw: bytes | str, *, entity_type: str = "TRANSACTION",
+               headers: dict[str, str] | None = None) -> ParseResult:
+        body = raw if isinstance(raw, bytes) else raw.encode("utf-8", errors="replace")
+
+        # Validate HMAC signature when headers are provided
+        if headers is not None:
+            if not self.validate_auth(headers, body):
+                return ParseResult([], 0, 1, ["Invalid signature"])
+
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8", errors="replace")
 
         records: list[dict] = []
-        errors:  list[dict] = []
+        errors:  list[Any] = []
 
         try:
             payload = json.loads(raw)
@@ -313,6 +335,9 @@ class ConnectorEpsilon(BaseConnector):
         for src_key, canon_key in self.FIELD_MAP.items():
             if src_key in obj:
                 result[canon_key] = obj[src_key]
+        # Pass through ALL original fields (raw keys alongside canonical)
+        for k, v in obj.items():
+            result.setdefault(k, v)
         result.setdefault("currency", "BRL")
         return result
 
@@ -325,6 +350,10 @@ CONNECTOR_REGISTRY: dict[str, type[BaseConnector]] = {
     "ConnectorGamma":   ConnectorGamma,
     "ConnectorDelta":   ConnectorDelta,
     "ConnectorEpsilon": ConnectorEpsilon,
+    # lowercase aliases for convenience
+    "gamma":            ConnectorGamma,
+    "delta":            ConnectorDelta,
+    "epsilon":          ConnectorEpsilon,
 }
 
 

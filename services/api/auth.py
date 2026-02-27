@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 from datetime import datetime, timedelta
 from typing import Any
 
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
@@ -73,21 +75,35 @@ def require_roles(*roles: str):
     return checker
 
 
-# PII Encryption (AES-256-CBC via Fernet-like using base64 XOR for dev;
-# prod: use AWS KMS / Vault)
+# ── PII Encryption (Fernet = AES-128-CBC + HMAC-SHA-256) ─────────────────────
+# A chave Fernet é derivada do PII_ENCRYPTION_KEY via SHA-256 (normaliza para 32 bytes).
+# Em produção, substitua por integração com AWS KMS ou HashiCorp Vault: a chave
+# deve ser recuperada do KMS e nunca armazenada em variável de ambiente.
+_fernet_instance: Fernet | None = None
+
+
+def _get_fernet() -> Fernet:
+    global _fernet_instance
+    if _fernet_instance is None:
+        raw_key = settings.pii_encryption_key.encode("utf-8")
+        # SHA-256 sempre produz 32 bytes, compatível com Fernet (requer 32 bytes URL-safe base64)
+        key_32 = hashlib.sha256(raw_key).digest()
+        fernet_key = base64.urlsafe_b64encode(key_32)
+        _fernet_instance = Fernet(fernet_key)
+    return _fernet_instance
+
+
 def encrypt_pii(plain: str) -> bytes:
-    key = settings.pii_encryption_key.encode()[:32].ljust(32, b"0")
-    data = plain.encode("utf-8")
-    # Simple XOR with key cycling — substitua por Fernet/KMS em prod
-    encrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
-    return base64.b64encode(encrypted)
+    """Cifra dado PII (CPF, nome) com Fernet (AES-128-CBC + HMAC). Retorna bytes."""
+    return _get_fernet().encrypt(plain.encode("utf-8"))
 
 
 def decrypt_pii(ciphertext: bytes) -> str:
-    key = settings.pii_encryption_key.encode()[:32].ljust(32, b"0")
-    data = base64.b64decode(ciphertext)
-    decrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
-    return decrypted.decode("utf-8")
+    """Decifra dado PII. Lânça ValueError em token inválido/corrompido."""
+    try:
+        return _get_fernet().decrypt(ciphertext).decode("utf-8")
+    except InvalidToken as exc:
+        raise ValueError("PII token inválido ou chave incorreta") from exc
 
 
 def mask_cpf(cpf: str) -> str:

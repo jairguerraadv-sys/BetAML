@@ -470,3 +470,84 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Synchronous helper — used by unit tests (no Redis/ClickHouse required)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def compute_features(player_id: str, history: dict) -> dict:
+    """
+    Pure synchronous feature computation from a pre-loaded history dict.
+    Accepts history = {"transactions": [{"amount", "txn_type", "currency",
+    "instrument_id", "created_at", "is_chargeback", "result", ...}]}
+    """
+    from datetime import datetime as _dt, timedelta as _td
+
+    txns_raw = history.get("transactions", [])
+    now = _dt.utcnow()
+    cutoff_24h = now - _td(hours=24)
+    cutoff_7d  = now - _td(days=7)
+    cutoff_30d = now - _td(days=30)
+
+    def _parse_ts(t: dict) -> _dt:
+        ts = t.get("created_at", "")
+        if isinstance(ts, _dt):
+            return ts
+        try:
+            return _dt.fromisoformat(str(ts).replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            return now
+
+    txns = [{"ts": _parse_ts(t), **t} for t in txns_raw]
+
+    def in_win(t: dict, since: _dt) -> bool:
+        return t["ts"] >= since
+
+    deposits_24h = [t for t in txns if t.get("txn_type") == "DEPOSIT" and in_win(t, cutoff_24h)]
+    deposits_30d = [t for t in txns if t.get("txn_type") == "DEPOSIT" and in_win(t, cutoff_30d)]
+    txns_24h     = [t for t in txns if in_win(t, cutoff_24h)]
+    txns_7d      = [t for t in txns if in_win(t, cutoff_7d)]
+    txns_30d     = [t for t in txns if in_win(t, cutoff_30d)]
+
+    # Deposit velocity = deposits per hour in 24h
+    dep_velocity = len(deposits_24h) / 24.0
+
+    # Unique payment instruments in 7d
+    unique_instruments_7d = len({t.get("instrument_id") for t in txns_7d if t.get("instrument_id")})
+
+    # Night activity ratio (22:00–06:00 in 7d)
+    def _is_night(t: dict) -> bool:
+        h = t["ts"].hour
+        return h >= 22 or h < 6
+
+    night_ratio = len([t for t in txns_7d if _is_night(t)]) / max(len(txns_7d), 1)
+
+    # Multi-currency flag
+    currencies = {t.get("currency", "BRL") for t in txns_7d}
+    multi_currency = len(currencies) > 1
+
+    # Win/loss ratio 30d
+    bets_30d   = [t for t in txns_30d if t.get("txn_type") == "BET"]
+    wins_30d   = [b for b in bets_30d if b.get("result") == "WIN"]
+    losses_30d = [b for b in bets_30d if b.get("result") == "LOSS"]
+    win_loss_30d = len(wins_30d) / max(len(losses_30d), 1)
+
+    # Chargeback rate 30d
+    chargebacks_30d  = [t for t in txns_30d if t.get("is_chargeback")]
+    chargeback_rate  = len(chargebacks_30d) / max(len(deposits_30d), 1)
+
+    return {
+        "player_id":             player_id,
+        "feature_version":       2,
+        "computed_at":           now.isoformat(),
+        "deposit_velocity":      float(dep_velocity),
+        "deposit_count_24h":     len(deposits_24h),
+        "deposit_sum_24h":       float(sum(t.get("amount", 0) for t in deposits_24h)),
+        "unique_instruments_7d": unique_instruments_7d,
+        "night_activity_ratio":  float(night_ratio),
+        "multi_currency_flag":   multi_currency,
+        "win_loss_ratio_30d":    float(win_loss_30d),
+        "chargeback_rate_30d":   float(chargeback_rate),
+        "txn_count_24h":         len(txns_24h),
+    }
