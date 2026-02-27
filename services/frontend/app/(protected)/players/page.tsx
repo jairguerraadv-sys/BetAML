@@ -16,12 +16,12 @@ export default function PlayersPage() {
     {
       header: 'Nome',
       accessorKey: 'full_name' as keyof Player,
-      cell: (v: string) => v ?? '—',
+      cell: (v: unknown) => (v as string) ?? '—',
     },
     {
       header: 'PEP',
       accessorKey: 'pep_flag' as keyof Player,
-      cell: (v: boolean) => v
+      cell: (v: unknown) => (v as boolean)
         ? <span className="rounded px-2 py-0.5 text-xs font-semibold bg-red-100 text-red-700">SIM</span>
         : <span className="rounded px-2 py-0.5 text-xs font-semibold bg-gray-100 text-gray-600">NÃO</span>,
     },
@@ -29,10 +29,11 @@ export default function PlayersPage() {
     {
       header: 'Score de Risco',
       accessorKey: 'risk_score' as keyof Player,
-      cell: (v: number | undefined) => {
-        if (v == null) return '—';
-        const color = v >= 0.7 ? 'text-red-600' : v >= 0.4 ? 'text-yellow-600' : 'text-green-600';
-        return <span className={`font-semibold ${color}`}>{(v * 100).toFixed(0)}%</span>;
+      cell: (v: unknown) => {
+        const n = v as number | undefined;
+        if (n == null) return '—';
+        const color = n >= 0.7 ? 'text-red-600' : n >= 0.4 ? 'text-yellow-600' : 'text-green-600';
+        return <span className={`font-semibold ${color}`}>{(n * 100).toFixed(0)}%</span>;
       },
     },
   ];

@@ -15,7 +15,7 @@ export default function CasesPage() {
   const router = useRouter();
   const { data: cases = [], isLoading } = useQuery({
     queryKey: ['cases'],
-    queryFn:  fetchCases,
+    queryFn:  () => fetchCases(),
   });
 
   const columns = [
@@ -25,16 +25,15 @@ export default function CasesPage() {
     {
       header: 'Status',
       accessorKey: 'status' as keyof Case,
-      cell: (v: string) => (
-        <span className={`rounded px-2 py-0.5 text-xs font-semibold ${STATUS_BADGE[v] ?? 'bg-gray-100'}`}>
-          {v}
-        </span>
-      ),
+      cell: (v: unknown) => {
+        const s = v as string;
+        return <span className={`rounded px-2 py-0.5 text-xs font-semibold ${STATUS_BADGE[s] ?? 'bg-gray-100'}`}>{s}</span>;
+      },
     },
     {
       header: 'Criado em',
       accessorKey: 'created_at' as keyof Case,
-      cell: (v: string) => new Date(v).toLocaleString('pt-BR'),
+      cell: (v: unknown) => new Date(v as string).toLocaleString('pt-BR'),
     },
   ];
 

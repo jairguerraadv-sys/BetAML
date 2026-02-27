@@ -54,7 +54,7 @@ export default function MappingsPage() {
     {
       header: 'Ativo',
       accessorKey: 'is_active' as keyof MappingConfig,
-      cell: (v: boolean) => v
+      cell: (v: unknown) => (v as boolean)
         ? <span className="rounded px-2 py-0.5 text-xs bg-green-100 text-green-700">Sim</span>
         : <span className="rounded px-2 py-0.5 text-xs bg-gray-100 text-gray-500">Não</span>,
     },

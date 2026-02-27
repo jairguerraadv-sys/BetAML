@@ -1,0 +1,9 @@
+{
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "pythonVersion": "3.11",
+  "exclude": [
+    "services/frontend",
+    "**/node_modules"
+  ]
+}

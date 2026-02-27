@@ -36,11 +36,14 @@ export default function RulesPage() {
     {
       header: 'Severidade',
       accessorKey: 'severity' as keyof Rule,
-      cell: (v: string) => (
-        <span className={`rounded px-2 py-0.5 text-xs font-semibold ${SEV[v] ?? 'bg-gray-100'}`}>
-          {v}
-        </span>
-      ),
+      cell: (v: unknown) => {
+        const s = v as string;
+        return (
+          <span className={`rounded px-2 py-0.5 text-xs font-semibold ${SEV[s] ?? 'bg-gray-100'}`}>
+            {s}
+          </span>
+        );
+      },
     },
     { header: 'Status',  accessorKey: 'status' as keyof Rule },
     { header: 'Versão',  accessorKey: 'version' as keyof Rule },

@@ -33,18 +33,17 @@ export default function AlertsPage() {
     {
       header: 'Severidade',
       accessorKey: 'severity' as keyof Alert,
-      cell: (v: string) => (
-        <span className={`rounded px-2 py-0.5 text-xs font-semibold ${SEV_BADGE[v] ?? 'bg-gray-100'}`}>
-          {v}
-        </span>
-      ),
+      cell: (v: unknown) => {
+        const s = v as string;
+        return <span className={`rounded px-2 py-0.5 text-xs font-semibold ${SEV_BADGE[s] ?? 'bg-gray-100'}`}>{s}</span>;
+      },
     },
     { header: 'Tipo',    accessorKey: 'alert_type' as keyof Alert },
     { header: 'Status',  accessorKey: 'status' as keyof Alert },
     {
       header: 'Criado em',
       accessorKey: 'created_at' as keyof Alert,
-      cell: (v: string) => new Date(v).toLocaleString('pt-BR'),
+      cell: (v: unknown) => new Date(v as string).toLocaleString('pt-BR'),
     },
   ];
 

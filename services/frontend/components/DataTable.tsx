@@ -3,7 +3,8 @@
 interface Column<T> {
   header: string;
   accessorKey: keyof T;
-  cell?: (value: T[keyof T], row: T) => React.ReactNode;
+  // value typed as unknown so pages with concrete types (string, boolean, number) don't fail
+  cell?: (value: unknown, row: T) => React.ReactNode;
 }
 
 interface DataTableProps<T> {
@@ -13,7 +14,7 @@ interface DataTableProps<T> {
   onRowClick?: (row: T) => void;
 }
 
-export default function DataTable<T extends Record<string, unknown>>({
+export default function DataTable<T extends object>({
   data, columns, loading, onRowClick,
 }: DataTableProps<T>) {
   if (loading) {

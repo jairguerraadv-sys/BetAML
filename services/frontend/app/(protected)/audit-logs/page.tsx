@@ -31,20 +31,20 @@ export default function AuditLogsPage() {
     {
       header: 'Ação',
       accessorKey: 'action' as keyof AuditLog,
-      cell: (v: string) => (
-        <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-mono text-blue-700">{v}</span>
+      cell: (v: unknown) => (
+        <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-mono text-blue-700">{v as string}</span>
       ),
     },
     { header: 'Entidade',   accessorKey: 'entity_type' as keyof AuditLog },
     { header: 'Entity ID',  accessorKey: 'entity_id' as keyof AuditLog,
-      cell: (v: string) => <span className="font-mono text-xs">{(v ?? '').slice(0, 12)}…</span> },
+      cell: (v: unknown) => <span className="font-mono text-xs">{((v as string) ?? '').slice(0, 12)}…</span> },
     { header: 'Ator',       accessorKey: 'actor_id' as keyof AuditLog,
-      cell: (v: string) => <span className="font-mono text-xs">{(v ?? '').slice(0, 12)}…</span> },
+      cell: (v: unknown) => <span className="font-mono text-xs">{((v as string) ?? '').slice(0, 12)}…</span> },
     { header: 'IP',         accessorKey: 'ip_address' as keyof AuditLog },
     {
       header: 'Data',
       accessorKey: 'created_at' as keyof AuditLog,
-      cell: (v: string) => new Date(v).toLocaleString('pt-BR'),
+      cell: (v: unknown) => new Date(v as string).toLocaleString('pt-BR'),
     },
   ];
 
