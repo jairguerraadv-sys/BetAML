@@ -6,11 +6,14 @@ Suporta transforms:
   - normalizeCpf    : remove pontuação, valida dígitos
   - mapEnum         : mapeia valor para enum canônico
   - coerceDecimal   : string/int → Decimal
+  - coerceArray     : string CSV ou já lista → list[str]
   - lowercase       : string para lowercase
   - strip           : remove espaços
   - constant        : valor fixo
-  - copyField       : copia de outro campo
+  - copy / copyField: copia de outro campo
   - conditional     : mapeamento condicional (if/else via dict lookup)
+  - normalize       : alias mapEnum (normaliza texto bruto para enum canônico)
+  - extractXMLAttr  : extrai atributo específico de elemento XML já parseado
 """
 from __future__ import annotations
 
@@ -183,12 +186,15 @@ TRANSFORMS: dict[str, Any] = {
     "parseDate":     lambda v, p: _parse_date(v),
     "normalizeCpf":  lambda v, p: _normalize_cpf(v),
     "coerceDecimal": lambda v, p: _coerce_decimal(v),
+    "coerceArray":   lambda v, p: (v if isinstance(v, list) else [x.strip() for x in str(v).split(",")]) if v is not None else [],
     "lowercase":     lambda v, p: str(v).lower() if v is not None else None,
     "strip":         lambda v, p: str(v).strip() if v is not None else None,
     "constant":      lambda v, p: p.get("value"),
-    "copyField":     lambda v, p: v,  # diferencial: source já foi resolvido antes
+    "copyField":     lambda v, p: v,
     "mapEnum":       lambda v, p: p.get(str(v), p.get("_default", str(v) if v is not None else None)),
+    "normalize":     lambda v, p: p.get(str(v).lower(), p.get("_default", str(v).lower() if v is not None else None)),
     "conditional":   lambda v, p: p.get(str(v), p.get("_default", None)),
+    "extractXMLAttr": lambda v, p: (v or {}).get(p.get("attr", "")) if isinstance(v, dict) else None,
 }
 
 
@@ -252,3 +258,132 @@ class MappingEngine:
 def get_default_mapping(source_system: str, entity_type: str) -> dict[str, Any] | None:
     """Retorna config padrão pré-definida ou None."""
     return BACKOFFICE_CONFIGS.get(f"{source_system}:{entity_type}")
+
+
+# ──────────────────────────────────────────────────
+# New connector configs (Gamma / Delta / Epsilon)
+# ──────────────────────────────────────────────────
+
+CONNECTOR_GAMMA_TRANSACTION: dict[str, Any] = {
+    "version": "2.0",
+    "source_system": "ConnectorGamma",
+    "entity_type": "TRANSACTION",
+    "fields": [
+        {"target": "external_transaction_id", "source": "event_id",          "transform": "copy"},
+        {"target": "player_cpf",              "source": "external_player_id","transform": "copy"},
+        {"target": "type",                    "source": "transaction_type",  "transform": "mapEnum",
+         "params": {"DEPOSIT": "DEPOSIT", "WITHDRAWAL": "WITHDRAWAL", "DEP": "DEPOSIT", "WD": "WITHDRAWAL"}},
+        {"target": "amount",                  "source": "amount",            "transform": "coerceDecimal"},
+        {"target": "currency",                "source": "currency",          "transform": "copy"},
+        {"target": "occurred_at",             "source": "occurred_at",       "transform": "parseDate"},
+        {"target": "device_id",               "source": "device_id",         "transform": "copy"},
+        {"target": "method",                  "source": "instrument_type",   "transform": "copy"},
+        {"target": "status",                  "source": None,                "transform": "constant", "params": {"value": "SETTLED"}},
+    ],
+}
+
+CONNECTOR_DELTA_TRANSACTION: dict[str, Any] = {
+    "version": "2.0",
+    "source_system": "ConnectorDelta",
+    "entity_type": "TRANSACTION",
+    "fields": [
+        {"target": "external_transaction_id", "source": "event_id",          "transform": "copy"},
+        {"target": "player_cpf",              "source": "external_player_id","transform": "copy"},
+        {"target": "type",                    "source": "transaction_type",  "transform": "normalize",
+         "params": {"deposit": "DEPOSIT", "dep": "DEPOSIT", "withdrawal": "WITHDRAWAL", "wd": "WITHDRAWAL", "bet": "BET"}},
+        {"target": "amount",                  "source": "amount",            "transform": "coerceDecimal"},
+        {"target": "currency",                "source": "currency",          "transform": "copy"},
+        {"target": "occurred_at",             "source": "occurred_at",       "transform": "parseDate"},
+        {"target": "device_id",               "source": "device_id",         "transform": "copy"},
+        {"target": "method",                  "source": "instrument_type",   "transform": "copy"},
+        {"target": "ip_address",              "source": "ip_address",        "transform": "copy"},
+        {"target": "session_id",              "source": "session_id",        "transform": "copy"},
+        {"target": "status",                  "source": None,                "transform": "constant", "params": {"value": "SETTLED"}},
+    ],
+}
+
+CONNECTOR_EPSILON_TRANSACTION: dict[str, Any] = {
+    "version": "2.0",
+    "source_system": "ConnectorEpsilon",
+    "entity_type": "TRANSACTION",
+    "fields": [
+        {"target": "external_transaction_id", "source": "event_id",          "transform": "copy"},
+        {"target": "player_cpf",              "source": "external_player_id","transform": "copy"},
+        {"target": "type",                    "source": "transaction_type",  "transform": "mapEnum",
+         "params": {"DEPOSIT": "DEPOSIT", "WITHDRAWAL": "WITHDRAWAL", "BET": "BET"}},
+        {"target": "amount",                  "source": "amount",            "transform": "coerceDecimal"},
+        {"target": "currency",                "source": "currency",          "transform": "copy"},
+        {"target": "occurred_at",             "source": "occurred_at",       "transform": "parseDate"},
+        {"target": "device_id",               "source": "device_id",         "transform": "copy"},
+        {"target": "ip_address",              "source": "ip_address",        "transform": "copy"},
+        {"target": "session_id",              "source": "session_id",        "transform": "copy"},
+        {"target": "status",                  "source": None,                "transform": "constant", "params": {"value": "SETTLED"}},
+    ],
+}
+
+# Extend registry
+BACKOFFICE_CONFIGS["ConnectorGamma:TRANSACTION"]   = CONNECTOR_GAMMA_TRANSACTION
+BACKOFFICE_CONFIGS["ConnectorDelta:TRANSACTION"]   = CONNECTOR_DELTA_TRANSACTION
+BACKOFFICE_CONFIGS["ConnectorEpsilon:TRANSACTION"] = CONNECTOR_EPSILON_TRANSACTION
+
+
+# ──────────────────────────────────────────────────
+# Version management helpers
+# ──────────────────────────────────────────────────
+
+async def activate_mapping_version(
+    db,
+    mapping_config_id: int,
+    version_number: int,
+) -> None:
+    """
+    Ativa uma versão específica de MappingConfig:
+      1. Desmarca is_current de todas as versões do mesmo parent/grupo.
+      2. Marca is_current=True na versão alvo.
+
+    Deve ser chamada dentro de um contexto de sessão SQLAlchemy async.
+    """
+    from sqlalchemy import update, select
+    from libs.models import MappingConfig  # lazy import to avoid circular deps
+
+    async with db.begin():
+        # Find the target row
+        stmt = select(MappingConfig).where(
+            MappingConfig.id == mapping_config_id,
+            MappingConfig.version_number == version_number,
+        )
+        result = await db.execute(stmt)
+        target = result.scalar_one_or_none()
+        if target is None:
+            raise MappingError(f"MappingConfig id={mapping_config_id} version={version_number} not found")
+
+        # Determine group: rows with same source_system+entity_type in same tenant
+        await db.execute(
+            update(MappingConfig)
+            .where(
+                MappingConfig.tenant_id == target.tenant_id,
+                MappingConfig.source_system == target.source_system,
+                MappingConfig.entity_type == target.entity_type,
+            )
+            .values(is_current=False)
+        )
+        await db.execute(
+            update(MappingConfig)
+            .where(MappingConfig.id == mapping_config_id)
+            .values(is_current=True)
+        )
+
+
+def clone_mapping_version(existing_config: dict[str, Any], change_notes: str = "") -> dict[str, Any]:
+    """
+    Clones an existing mapping config dict to create a new draft version.
+    Caller must persist it (version_number incremented, is_current=False).
+    """
+    import copy
+    new_cfg = copy.deepcopy(existing_config)
+    new_cfg.pop("id", None)
+    new_cfg["is_current"] = False
+    new_cfg["change_notes"] = change_notes
+    new_cfg["version"] = str(float(existing_config.get("version", "1.0")) + 0.1)
+    return new_cfg
+

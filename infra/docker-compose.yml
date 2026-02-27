@@ -257,12 +257,46 @@ services:
     command: npm run dev
     networks: [betaml-net]
 
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: betaml-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    networks: [betaml-net]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: betaml-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/betaml-overview.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3001:3000"
+    depends_on: [prometheus]
+    networks: [betaml-net]
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
   minio_data:
   clickhouse_data:
   redpanda_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   betaml-net:

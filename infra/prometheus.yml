@@ -1,0 +1,42 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: "betaml"
+
+rule_files: []
+
+scrape_configs:
+  - job_name: "betaml-api"
+    static_configs:
+      - targets: ["api:8000"]
+    metrics_path: /metrics
+    scheme: http
+
+  - job_name: "betaml-ml-service"
+    static_configs:
+      - targets: ["ml_service:8001"]
+    metrics_path: /metrics
+    scheme: http
+
+  - job_name: "betaml-rules-engine"
+    static_configs:
+      - targets: ["rules_engine:8002"]
+    metrics_path: /metrics
+    scheme: http
+
+  - job_name: "betaml-stream-processor"
+    static_configs:
+      - targets: ["stream_processor:8080"]
+    metrics_path: /metrics
+    scheme: http
+
+  - job_name: "redpanda"
+    static_configs:
+      - targets: ["redpanda:9644"]
+    metrics_path: /metrics
+    scheme: http
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

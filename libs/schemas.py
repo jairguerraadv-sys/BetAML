@@ -12,7 +12,6 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-
 # ──────────────────────────────────────────────────
 # Enums
 # ──────────────────────────────────────────────────
@@ -252,3 +251,268 @@ class AlertMessage(BaseModel):
     rule_id: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     schema_version: int = 1
+
+
+# ──────────────────────────────────────────────────
+# New enterprise schemas
+# ──────────────────────────────────────────────────
+
+class AlertLabel(str, Enum):
+    TRUE_POSITIVE = "TRUE_POSITIVE"
+    FALSE_POSITIVE = "FALSE_POSITIVE"
+    NEED_REVIEW = "NEED_REVIEW"
+
+
+class IngestErrorOut(BaseModel):
+    id: int
+    tenant_id: str
+    ingest_job_id: Optional[int] = None
+    source_system: str
+    raw_record: Optional[str] = None
+    error_type: str
+    error_detail: str
+    resolution_status: str = "open"
+    resolution_note: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    resolved_by: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class IngestErrorResolveIn(BaseModel):
+    resolution_note: str
+
+
+class ApiKeyOut(BaseModel):
+    id: int
+    tenant_id: str
+    name: str
+    key_prefix: str          # first 8 chars only
+    scopes: list[str]
+    is_active: bool
+    last_used_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ApiKeyCreate(BaseModel):
+    name: str
+    scopes: list[str] = Field(default_factory=list)
+    expires_in_days: Optional[int] = None
+
+
+class ApiKeyCreateResponse(ApiKeyOut):
+    raw_key: str             # shown only once on creation
+
+
+class PlayerListOut(BaseModel):
+    id: int
+    tenant_id: str
+    name: str
+    description: Optional[str] = None
+    list_type: str = "MANUAL"
+    entry_count: int = 0
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class PlayerListCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    list_type: str = "MANUAL"
+
+
+class PlayerListEntryBulk(BaseModel):
+    values: list[str]         # CPFs, device IDs, etc.
+    value_type: str = "CPF"
+
+
+class CompoundRuleOut(BaseModel):
+    id: int
+    tenant_id: str
+    name: str
+    logic: str               # DSL expression or JSON  
+    component_rule_ids: list[int]
+    score_weights: dict[str, float] = Field(default_factory=dict)
+    min_score_threshold: Optional[float] = None
+    is_active: bool = True
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CompoundRuleCreate(BaseModel):
+    name: str
+    logic: str
+    component_rule_ids: list[int] = Field(default_factory=list)
+    score_weights: dict[str, float] = Field(default_factory=dict)
+    min_score_threshold: Optional[float] = None
+
+
+class RuleMacroOut(BaseModel):
+    id: int
+    tenant_id: str
+    name: str
+    expression: str
+    description: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RuleMacroCreate(BaseModel):
+    name: str
+    expression: str
+    description: Optional[str] = None
+
+
+class ScoringConfigOut(BaseModel):
+    id: int
+    tenant_id: str
+    rule_weight: float = 0.4
+    ml_weight: float = 0.4
+    network_weight: float = 0.2
+    low_threshold: float = 30.0
+    medium_threshold: float = 60.0
+    high_threshold: float = 80.0
+    critical_threshold: float = 95.0
+    is_active: bool = True
+    sla_low_hours: int = 72
+    sla_medium_hours: int = 48
+    sla_high_hours: int = 24
+    sla_critical_hours: int = 4
+    data_retention_days: int = 365 * 5
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ScoringConfigUpdate(BaseModel):
+    rule_weight: Optional[float] = None
+    ml_weight: Optional[float] = None
+    network_weight: Optional[float] = None
+    low_threshold: Optional[float] = None
+    medium_threshold: Optional[float] = None
+    high_threshold: Optional[float] = None
+    critical_threshold: Optional[float] = None
+    sla_low_hours: Optional[int] = None
+    sla_medium_hours: Optional[int] = None
+    sla_high_hours: Optional[int] = None
+    sla_critical_hours: Optional[int] = None
+    data_retention_days: Optional[int] = None
+
+
+class NotificationOut(BaseModel):
+    id: int
+    tenant_id: str
+    user_id: str
+    type: str
+    title: str
+    body: str
+    reference_type: Optional[str] = None
+    reference_id: Optional[str] = None
+    is_read: bool = False
+    created_at: datetime
+    read_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class NotificationCreate(BaseModel):
+    user_id: str
+    type: str
+    title: str
+    body: str
+    reference_type: Optional[str] = None
+    reference_id: Optional[str] = None
+
+
+class FeatureSnapshotOut(BaseModel):
+    id: int
+    tenant_id: str
+    player_id: str
+    snapshot_date: str        # YYYY-MM-DD
+    features: dict[str, Any]
+    feature_version: int = 1
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class SystemFlagOut(BaseModel):
+    id: int
+    tenant_id: str
+    flag_name: str
+    flag_value: str
+    description: Optional[str] = None
+    updated_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class SystemFlagUpdate(BaseModel):
+    flag_value: str
+
+
+class ReprocessJobIn(BaseModel):
+    reason: str = "manual_reprocess"
+
+
+class MappingVersionOut(BaseModel):
+    id: int
+    tenant_id: str
+    source_system: str
+    entity_type: str
+    version_number: int
+    is_current: bool
+    change_notes: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AlertLabelIn(BaseModel):
+    label: AlertLabel
+    label_note: Optional[str] = None
+
+
+class MonthlyReportIn(BaseModel):
+    year: int
+    month: int        # 1-12
+    include_pdf: bool = True
+
+
+# ──────────────────────────────────────────────────
+# Extended PlayerFeatures with M2 features
+# ──────────────────────────────────────────────────
+
+class PlayerFeaturesV2(PlayerFeatures):
+    """PlayerFeatures v2 with 11 new enterprise features."""
+    feature_version: int = 2
+
+    # M2 new features
+    deposit_velocity: Decimal = Decimal("0")          # deposits per hour (24h)
+    unique_instruments_7d: int = 0
+    night_activity_ratio: Decimal = Decimal("0")      # txns 22h-6h / total
+    weekend_activity_ratio: Decimal = Decimal("0")
+    avg_odds_bet_7d: Optional[Decimal] = None
+    win_loss_ratio_30d: Optional[Decimal] = None
+    avg_deposit_to_withdrawal_hours: Optional[Decimal] = None  # avg hours
+    multi_currency_flag: bool = False
+    chargeback_rate_30d: Decimal = Decimal("0")       # chargebacks / deposits
+    bonus_to_real_ratio_30d: Decimal = Decimal("0")   # bonus_credited / deposits
+    cashout_ratio_7d: Decimal = Decimal("0")          # withdrawals / deposits
+
+    # Network features (graph)
+    cluster_id: Optional[str] = None
+    cluster_size: int = 0
+    shared_instrument_score: Decimal = Decimal("0")   # 0-1 risk score
+
+    def to_redis_dict(self) -> dict[str, str]:
+        return {k: str(v) for k, v in self.model_dump().items()}

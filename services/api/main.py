@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import structlog
+from prometheus_fastapi_instrumentator import Instrumentator
 from fastapi import (
     BackgroundTasks,
     Depends,
@@ -77,7 +78,7 @@ logger = structlog.get_logger()
 app = FastAPI(
     title="BetAML API",
     description="PLD/FT Platform para Operadores de Apostas",
-    version="1.0.0",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -89,6 +90,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ─── Enterprise routes ────────────────────────────
+try:
+    from routes_enterprise import enterprise_router
+    app.include_router(enterprise_router)
+except ImportError:
+    pass  # graceful degradation if file not yet in image
+
+# ─── Prometheus metrics ───────────────────────────
+Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    should_group_untemplated=True,
+    excluded_handlers=["/metrics", "/health", "/docs", "/redoc", "/openapi.json"],
+).instrument(app).expose(app, include_in_schema=False, tags=["observability"])
 
 # ─── Producer global ──────────────────────────────
 _producer = None

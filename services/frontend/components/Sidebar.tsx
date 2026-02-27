@@ -5,16 +5,28 @@ import { clsx } from 'clsx';
 import {
   LayoutDashboard, AlertTriangle, FolderOpen,
   BookOpen, Users, LogOut, Plug, ScrollText,
+  Shield, List, BrainCircuit, Database,
+  FileBarChart2, Bell, Settings, GitBranch,
 } from 'lucide-react';
 
 const NAV = [
-  { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard },
-  { href: '/alerts',     label: 'Alertas',     icon: AlertTriangle },
-  { href: '/cases',      label: 'Casos',       icon: FolderOpen },
-  { href: '/rules',      label: 'Regras DSL',  icon: BookOpen },
-  { href: '/players',    label: 'Jogadores',   icon: Users },
-  { href: '/mappings',   label: 'Conectores',  icon: Plug },
-  { href: '/audit-logs', label: 'Auditoria',   icon: ScrollText },
+  // ── Core ──────────────────────────────────
+  { href: '/dashboard',      label: 'Dashboard',       icon: LayoutDashboard },
+  { href: '/alerts',         label: 'Alertas',         icon: AlertTriangle },
+  { href: '/cases',          label: 'Casos',           icon: FolderOpen },
+  { href: '/rules',          label: 'Regras DSL',      icon: BookOpen },
+  { href: '/rules/compound', label: 'Regras Compostas',icon: GitBranch },
+  { href: '/players',        label: 'Jogadores',       icon: Users },
+  { href: '/mappings',       label: 'Conectores',      icon: Plug },
+  { href: '/audit-logs',     label: 'Auditoria',       icon: ScrollText },
+  // ── Enterprise ────────────────────────────
+  { href: '/player-lists',   label: 'Listas',          icon: List },
+  { href: '/model-registry', label: 'Modelos ML',      icon: BrainCircuit },
+  { href: '/feature-store',  label: 'Feature Store',   icon: Database },
+  { href: '/reports',        label: 'Relatórios',      icon: FileBarChart2 },
+  { href: '/notifications',  label: 'Notificações',    icon: Bell },
+  { href: '/settings',       label: 'Configurações',   icon: Settings },
+  { href: '/admin',          label: 'Admin',           icon: Shield },
 ];
 
 export default function Sidebar() {

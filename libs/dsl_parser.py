@@ -9,23 +9,35 @@ Gramática suportada:
   compare_expr := call_expr (OP call_expr)?
   OP := '>' | '<' | '>=' | '<=' | '==' | '!=' | 'in' | 'contains'
   call_expr := FUNC '(' args ')' | atom
-  FUNC := 'sum' | 'count' | 'zscore' | 'ratio' | 'abs'
   atom := NUMBER | STRING | BOOL | field_access | '(' expr ')'
   field_access := IDENT ('.' IDENT)*
 
 Acesso a campos:
-  transaction.amount         → event payload
+  transaction.amount           → event payload
   bet.stakeAmount
   features.deposit_sum_24h
   player.pepFlag
-  params.threshold           → params do RuleDefinition
+  params.threshold             → params do RuleDefinition
 
-Funções:
-  zscore(value, mean, stddev)       → (value - mean) / stddev
-  ratio(a, b)                       → a / b (safe: retorna 0 se b=0)
-  abs(x)                            → |x|
-  sum(field, window)                → usa features pré-computadas
-  count(field, window)              → usa features pré-computadas
+Funções disponíveis:
+  zscore(value, mean, stddev)               → (v-m)/s
+  zscore(feature_name, baseline_window)     → usa features pré-computadas
+  ratio(a, b)                               → a / b (safe: 0 se b=0)
+  abs(x)                                    → |x|
+  sum(field, window)                        → features pré-computadas
+  count(field, window)                      → features pré-computadas
+  window_sum(field, window)                 → alias explícito sum com window
+  window_count(field, window)               → alias explícito count com window
+  iff(cond, then_value, else_value)         → condicional ternário
+  is_in_list(field, listName)               → verdadeiro se field ∈ PlayerList listName
+  shared_device_count()                     → de features.shared_device_count
+  cluster_size()                            → de features.cluster_size
+  is_in_cluster(cluster_id)                 → features.cluster_id == cluster_id
+  percentile_rank(feature, segment)         → 0-100 rank dentro do segmento
+  min(a, b) / max(a, b)                     → mínimo / máximo
+
+Macro expansion:
+  expand_macros(expression, macros_dict) → substitui %macro_name% por expressão
 """
 from __future__ import annotations
 
@@ -59,7 +71,14 @@ _MASTER_RE = re.compile(
 )
 
 KEYWORDS = {"and", "or", "not", "in", "contains", "true", "false", "True", "False"}
-FUNCTIONS = {"sum", "count", "zscore", "ratio", "abs"}
+FUNCTIONS = {
+    "sum", "count", "zscore", "ratio", "abs",
+    "window_sum", "window_count",
+    "iff", "is_in_list",
+    "shared_device_count", "cluster_size", "is_in_cluster",
+    "percentile_rank",
+    "min", "max",
+}
 
 
 class Token:
@@ -327,13 +346,19 @@ def evaluate(node: ASTNode, context: dict[str, Any]) -> Any:
 def _eval_func(node: FuncCallNode, context: dict[str, Any]) -> Any:
     args = [evaluate(a, context) for a in node.args]
 
+    # ── numeric helpers ──────────────────────────────────────────────────────
     if node.name == "zscore":
-        if len(args) != 3:
-            raise DSLEvaluationError("zscore(value, mean, stddev) requer 3 args")
-        v, mean, std = (_to_decimal(a) for a in args)
-        if std == 0:
-            return Decimal("0")
-        return (v - mean) / std
+        if len(args) == 3:
+            v, mean, std = (_to_decimal(a) for a in args)
+            return (v - mean) / std if std != 0 else Decimal("0")
+        if len(args) == 2:
+            # zscore(feature_name_string, window) — fetch from features
+            feat_val = context.get("features", {}).get(str(args[0]), 0)
+            mean     = context.get("feature_stats", {}).get(f"{args[0]}_mean", 0)
+            std      = context.get("feature_stats", {}).get(f"{args[0]}_std", 1)
+            v, m, s = _to_decimal(feat_val), _to_decimal(mean), _to_decimal(std)
+            return (v - m) / s if s != 0 else Decimal("0")
+        raise DSLEvaluationError("zscore requer 2 ou 3 args")
 
     if node.name == "ratio":
         if len(args) != 2:
@@ -346,14 +371,72 @@ def _eval_func(node: FuncCallNode, context: dict[str, Any]) -> Any:
             raise DSLEvaluationError("abs(x) requer 1 arg")
         return abs(_to_decimal(args[0]))
 
-    if node.name in ("sum", "count"):
-        # sum/count são resolvidos via features pré-computadas
-        # Retorna o valor do contexto de features diretamente
-        if len(args) >= 1:
+    if node.name == "min":
+        if len(args) != 2:
+            raise DSLEvaluationError("min(a, b) requer 2 args")
+        a, b = _to_decimal(args[0]), _to_decimal(args[1])
+        return a if a <= b else b
+
+    if node.name == "max":
+        if len(args) != 2:
+            raise DSLEvaluationError("max(a, b) requer 2 args")
+        a, b = _to_decimal(args[0]), _to_decimal(args[1])
+        return a if a >= b else b
+
+    # ── feature window lookups ───────────────────────────────────────────────
+    if node.name in ("sum", "window_sum"):
+        # sum(feature_field, window) or sum(literal_value)
+        if args:
             raw = args[0]
             if raw is not None:
                 return _to_decimal(raw)
         return Decimal("0")
+
+    if node.name in ("count", "window_count"):
+        if args:
+            raw = args[0]
+            if raw is not None:
+                return _to_decimal(raw)
+        return Decimal("0")
+
+    # ── conditional iff(cond, then, else) ────────────────────────────────────
+    if node.name == "iff":
+        if len(args) != 3:
+            raise DSLEvaluationError("iff(cond, then_value, else_value) requer 3 args")
+        cond, then_val, else_val = args
+        return then_val if bool(cond) else else_val
+
+    # ── list membership ──────────────────────────────────────────────────────
+    if node.name == "is_in_list":
+        if len(args) != 2:
+            raise DSLEvaluationError("is_in_list(field_value, list_name) requer 2 args")
+        field_val, list_name = args
+        # context["player_lists"] = {"high_risk_cpfs": {"111": True, ...}}
+        player_lists: dict[str, set | dict] = context.get("player_lists", {})
+        the_list = player_lists.get(str(list_name), set())
+        return str(field_val) in the_list
+
+    # ── network features ─────────────────────────────────────────────────────
+    if node.name == "shared_device_count":
+        return _to_decimal(context.get("features", {}).get("shared_device_count", 0))
+
+    if node.name == "cluster_size":
+        return _to_decimal(context.get("features", {}).get("cluster_size", 0))
+
+    if node.name == "is_in_cluster":
+        if len(args) != 1:
+            raise DSLEvaluationError("is_in_cluster(cluster_id) requer 1 arg")
+        current_cluster = context.get("features", {}).get("cluster_id")
+        return str(current_cluster) == str(args[0]) if current_cluster is not None else False
+
+    # ── statistical rank ─────────────────────────────────────────────────────
+    if node.name == "percentile_rank":
+        if len(args) < 1:
+            raise DSLEvaluationError("percentile_rank(feature, [segment]) requer 1+ args")
+        feat_name = str(args[0])
+        rank_key  = f"{feat_name}_percentile_rank"
+        val = context.get("feature_stats", {}).get(rank_key, 50)
+        return _to_decimal(val)
 
     raise DSLEvaluationError(f"Função desconhecida: {node.name!r}")
 
@@ -399,20 +482,83 @@ def _eval_binop(node: BinOpNode, context: dict[str, Any]) -> Any:
 
 
 # ──────────────────────────────────────────────────
+# Macro expansion
+# ──────────────────────────────────────────────────
+
+_MACRO_RE = re.compile(r"%([A-Za-z_][A-Za-z0-9_]*)%")
+
+
+def expand_macros(expression: str, macros: dict[str, str], max_depth: int = 10) -> str:
+    """
+    Substitui referências de macro na forma %macro_name% pela expressão correspondente.
+
+    Args:
+        expression: expressão DSL com possíveis referências a macros.
+        macros: dict de {nome: expressão_dsl}.
+        max_depth: limite de expansão recursiva para evitar ciclos.
+
+    Returns:
+        Expressão DSL com todas as macros expandidas.
+
+    Raises:
+        DSLSyntaxError: se uma macro não existe ou há ciclo de expansão.
+    """
+    for _ in range(max_depth):
+        def replace(m: re.Match) -> str:
+            name = m.group(1)
+            if name not in macros:
+                raise DSLSyntaxError(f"Macro não definida: %{name}%")
+            return f"({macros[name]})"
+
+        new_expr = _MACRO_RE.sub(replace, expression)
+        if new_expr == expression:
+            return new_expr
+        expression = new_expr
+
+    raise DSLSyntaxError("Excedido limite de expansão recursiva de macros (ciclo detectado?)")
+
+
+# ──────────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────────
 
-def eval_dsl(expression: str, context: dict[str, Any]) -> bool:
+def eval_dsl(
+    expression: str,
+    context: dict[str, Any],
+    *,
+    macros: dict[str, str] | None = None,
+) -> bool:
     """
     Avalia uma expressão DSL e retorna True/False.
-    context exemplo:
+
+    Args:
+        expression: expressão DSL.
+        context: dicionário de contexto com chaves:
+            - "transaction" / "bet": payload do evento
+            - "features": features do player (pré-computadas)
+            - "feature_stats": médias/desvios/percentis para zscore e percentile_rank
+            - "player": dados do player
+            - "pa
+    expression: str,
+    macros: dict[str, str] | None = None,
+) -> tuple[bool, str]:
+    """Valida sintaxe da expressão DSL sem avaliar. Retorna (ok, mensagem)."""
+    try:
+        if macros:
+            expression = expand_macros(expression, macros)macros: dict opcional de macros a expandir antes do parse.
+
+    Exemplo de contexto:
       {
-        "transaction": {"amount": 10000, "type": "DEPOSIT", ...},
-        "features": {"deposit_sum_24h": 9000, ...},
-        "player": {"pepFlag": False, ...},
+        "transaction": {"amount": 10000, "type": "DEPOSIT"},
+        "features": {"deposit_sum_24h": 9000, "shared_device_count": 3},
+        "feature_stats": {"deposit_sum_24h_mean": 500, "deposit_sum_24h_std": 200},
+        "player": {"pepFlag": False},
         "params": {"threshold": 5000},
+        "player_lists": {"high_risk_cpfs": {"12345678901"}},
       }
     """
+    if macros:
+        expression = expand_macros(expression, macros)
     ast = parse_dsl(expression)
     result = evaluate(ast, context)
     return bool(result)

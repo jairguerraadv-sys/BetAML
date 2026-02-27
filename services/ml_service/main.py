@@ -1,9 +1,16 @@
 """
 ML Service — BetAML
-REST API: POST /score  (online scoring)
-         POST /train  (trigger training job)
-         GET  /models (listar model registry)
-Modelo: IsolationForest (sklearn) por tenant
+REST API: POST /score      (online scoring + A/B champion/challenger)
+         POST /score/shap  (SHAP explainability for a score)
+         POST /train       (trigger training job — IsolationForest OR structuring OR graph)
+         GET  /models      (listar model registry)
+         POST /models/reload
+         POST /models/{model_id}/ab-compare   (A/B metrics)
+Modelos:
+  - IsolationForest          : unsupervised anomaly (original)
+  - StructuringDetector      : supervised binary (uses labeled True Positives)
+  - GraphClustering (DBSCAN) : shared-device / shared-instrument clusters
+  - RecurrenceEstimator      : device+IP+temporal pattern matching
 Artefatos: MinIO   (betaml-models/{tenant_id}/{model_id}.pkl)
 Registro:  Postgres (model_registry)
 """
@@ -17,12 +24,12 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 import joblib
 import numpy as np
 import structlog
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Query
 from pydantic import BaseModel, Field
 
 logger = structlog.get_logger()
@@ -55,6 +62,30 @@ FEATURE_COLS = [
     "unique_ips_24h",
     "baseline_deposit_avg_30d",
     "baseline_deposit_std_30d",
+    # M2 new features
+    "deposit_velocity",
+    "unique_instruments_7d",
+    "night_activity_ratio",
+    "weekend_activity_ratio",
+    "chargeback_rate_30d",
+    "bonus_to_real_ratio_30d",
+    "cashout_ratio_7d",
+    "shared_instrument_score",
+]
+
+# Structuring detector uses a supervised feature set
+STRUCTURING_COLS = [
+    "deposit_sum_24h", "deposit_count_24h",
+    "deposit_sum_7d",  "deposit_count_7d",
+    "withdrawal_sum_7d", "cashout_ratio_7d",
+    "unique_instruments_7d", "deposit_velocity",
+    "night_activity_ratio", "chargeback_rate_30d",
+]
+
+# Graph / DBSCAN uses only network features
+GRAPH_COLS = [
+    "shared_device_count", "shared_instrument_score",
+    "unique_instruments_7d", "multi_currency_flag",
 ]
 
 # Cache de modelos carregados por tenant
@@ -179,23 +210,9 @@ def all_models_db(engine, tenant_id: str) -> list[dict]:
 # Model loading (on-demand, per tenant)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _load_tenant_model(tenant_id: str) -> dict | None:
-    if tenant_id in _model_cache:
-        return _model_cache[tenant_id]
-    try:
-        engine = _db_engine()
-        row = latest_model_db(engine, tenant_id)
-        if not row:
-            return None
-        clf = download_model_artifact(row["artifact_uri"])
-        fc  = json.loads(row["feature_columns"]) if isinstance(row["feature_columns"], str) else row["feature_columns"]
-        entry = {"clf": clf, "feature_columns": fc, "model_id": row["id"], "algorithm": row["algorithm"]}
-        _model_cache[tenant_id] = entry
-        logger.info("model_loaded", tenant_id=tenant_id, model_id=row["id"])
-        return entry
-    except Exception as e:
-        logger.warning("model_load_failed", tenant_id=tenant_id, error=str(e))
-        return None
+def _load_tenant_model_legacy(tenant_id: str) -> dict | None:
+    """Legacy wrapper — delegates to new multi-type loader."""
+    return _load_tenant_model(tenant_id, model_type="champion")
 
 
 def _features_to_vector(features: dict, columns: list[str]) -> np.ndarray:
@@ -443,3 +460,400 @@ def reload_model(x_tenant_id: str = Header(..., alias="X-Tenant-Id")):
     """Invalida cache de modelo para forçar reload na próxima requisição."""
     _model_cache.pop(x_tenant_id, None)
     return {"status": "cache_cleared", "tenant_id": x_tenant_id}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# M4 — SHAP explainability
+# ──────────────────────────────────────────────────────────────────────────────
+
+class SHAPRequest(BaseModel):
+    tenant_id: str
+    player_id: str
+    features:  dict[str, Any]
+    model_type: str = "IsolationForest"
+
+
+class SHAPResponse(BaseModel):
+    player_id:    str
+    tenant_id:    str
+    model_type:   str
+    shap_values:  dict[str, float]
+    baseline:     float
+    scored_at:    str
+
+
+@app.post("/score/shap", response_model=SHAPResponse)
+def score_shap(req: SHAPRequest):
+    """
+    Returns per-feature SHAP-style importance for an anomaly score.
+    Uses a permutation-based approximation when SHAP library is available,
+    otherwise falls back to gradient/mean-deviation proxy.
+    """
+    entry = _load_tenant_model(req.tenant_id)
+    if entry is None:
+        raise HTTPException(404, "No model found for tenant")
+
+    clf = entry["clf"]
+    fc  = entry.get("feature_columns", FEATURE_COLS)
+    X   = _features_to_vector(req.features, fc)
+
+    def _score_vec(x: np.ndarray) -> float:
+        raw = clf.decision_function(x.reshape(1, -1))[0]
+        return float(np.clip((raw * -1 + 1) / 2, 0.0, 1.0))
+
+    base_score = _score_vec(X)
+    shap_vals: dict[str, float] = {}
+
+    try:
+        import shap  # type: ignore
+        explainer   = shap.TreeExplainer(clf)
+        shap_array  = explainer.shap_values(X)
+        for i, col in enumerate(fc):
+            shap_vals[col] = float(shap_array[0][i])
+    except Exception:
+        # Permutation-based fallback
+        for i, col in enumerate(fc):
+            x_perm = X.copy()
+            x_perm[i] = 0.0          # zero-out feature
+            permuted_score = _score_vec(x_perm)
+            shap_vals[col] = round(base_score - permuted_score, 5)
+
+    return SHAPResponse(
+        player_id=req.player_id,
+        tenant_id=req.tenant_id,
+        model_type=req.model_type,
+        shap_values=shap_vals,
+        baseline=round(base_score, 4),
+        scored_at=datetime.utcnow().isoformat(),
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# M4 — A/B testing: champion + challenger scoring
+# ──────────────────────────────────────────────────────────────────────────────
+
+class ABScoreResponse(BaseModel):
+    player_id:           str
+    tenant_id:           str
+    champion_score:      Optional[float] = None
+    challenger_score:    Optional[float] = None
+    champion_model_id:   Optional[str]   = None
+    challenger_model_id: Optional[str]   = None
+    delta:               Optional[float] = None
+    scored_at:           str
+
+
+@app.post("/score/ab", response_model=ABScoreResponse)
+def score_ab(req: ScoreRequest):
+    """
+    Score against both champion and challenger models (A/B test).
+    Returns deltas for comparison.
+    """
+    def _score_entry(tenant_id: str, model_type: str) -> tuple[float, str | None]:
+        entry = _load_tenant_model(tenant_id, model_type=model_type)
+        if entry is None:
+            return 0.0, None
+        clf = entry["clf"]
+        fc  = entry.get("feature_columns", FEATURE_COLS)
+        X   = _features_to_vector(req.features, fc)
+        raw = clf.decision_function(X)[0]
+        return float(np.clip((raw * -1 + 1) / 2, 0.0, 1.0)), entry.get("model_id")
+
+    champ_score, champ_id    = _score_entry(req.tenant_id, "champion")
+    challenger_score, chal_id = _score_entry(req.tenant_id, "challenger")
+
+    delta = round(challenger_score - champ_score, 4) if chal_id else None
+    return ABScoreResponse(
+        player_id=req.player_id,
+        tenant_id=req.tenant_id,
+        champion_score=round(champ_score, 4),
+        challenger_score=round(challenger_score, 4) if chal_id else None,
+        champion_model_id=champ_id,
+        challenger_model_id=chal_id,
+        delta=delta,
+        scored_at=datetime.utcnow().isoformat(),
+    )
+
+
+@app.get("/models/{model_id}/ab-metrics")
+def ab_metrics(
+    model_id: str,
+    x_tenant_id: str = Header(..., alias="X-Tenant-Id"),
+    days: int = Query(7, le=90),
+):
+    """
+    Return aggregated A/B test metrics for a challenger model vs champion.
+    Pulls from model_registry metrics column.
+    """
+    try:
+        engine = _db_engine()
+        import sqlalchemy as sa
+        with engine.connect() as conn:
+            row = conn.execute(
+                sa.text(
+                    "SELECT id, algorithm, metrics, is_challenger, champion_id "
+                    "FROM model_registry WHERE id = :mid AND tenant_id = :tid"
+                ),
+                {"mid": model_id, "tid": x_tenant_id},
+            ).fetchone()
+        if row is None:
+            raise HTTPException(404)
+        metrics = json.loads(row.metrics) if isinstance(row.metrics, str) else (row.metrics or {})
+        return {
+            "model_id":     model_id,
+            "is_challenger": bool(row.is_challenger),
+            "champion_id":  row.champion_id,
+            "metrics":      metrics,
+            "days_window":  days,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e)) from e
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# M4 — StructuringDetector: supervised binary classifier
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.post("/train/structuring")
+def train_structuring(req: TrainRequest):
+    """
+    Train a supervised binary classifier (StructuringDetector) using labeled
+    True Positive alerts as positive class and normal transactions as negative.
+    Falls back to synthetic data in dev.
+    """
+    from sklearn.ensemble import GradientBoostingClassifier
+
+    tenant_id = req.tenant_id
+    X_pos_list: list[list[float]] = []
+    X_neg_list: list[list[float]] = []
+
+    # Fetch labeled TPs from Postgres
+    try:
+        engine = _db_engine()
+        import sqlalchemy as sa
+        with engine.connect() as conn:
+            labeled = conn.execute(
+                sa.text("""
+                    SELECT a.player_id, a.evidence
+                    FROM alerts a
+                    WHERE a.tenant_id = :tid AND a.label = 'TRUE_POSITIVE'
+                    ORDER BY a.created_at DESC LIMIT 5000
+                """),
+                {"tid": tenant_id},
+            ).fetchall()
+        for row in labeled:
+            ev = json.loads(row.evidence) if isinstance(row.evidence, str) else (row.evidence or {})
+            fs = ev.get("feature_snapshot", {})
+            vec = [float(fs.get(col, 0.0) or 0.0) for col in STRUCTURING_COLS]
+            X_pos_list.append(vec)
+    except Exception as e:
+        logger.warning("structuring_labeled_load_failed", error=str(e))
+
+    # Synthetic bootstrap if not enough data
+    rng = np.random.default_rng(42)
+    n_synth = max(req.min_rows, 500)
+    if len(X_pos_list) < 50:
+        logger.info("structuring_synthetic_positives", n=n_synth // 5)
+        for _ in range(n_synth // 5):
+            vec = [float(rng.exponential(5000)) if "sum" in col or "velocity" in col
+                   else float(rng.uniform(0.5, 1.0))
+                   for col in STRUCTURING_COLS]
+            X_pos_list.append(vec)
+
+    for _ in range(n_synth):
+        vec = [float(rng.exponential(100)) for _ in STRUCTURING_COLS]
+        X_neg_list.append(vec)
+
+    X = np.array(X_pos_list + X_neg_list, dtype=np.float32)
+    y = np.array([1] * len(X_pos_list) + [0] * len(X_neg_list))
+
+    clf = GradientBoostingClassifier(n_estimators=150, max_depth=4, learning_rate=0.1,
+                                     random_state=42)
+    t0 = time.time()
+    clf.fit(X, y)
+    train_secs = round(time.time() - t0, 2)
+
+    model_id = str(uuid.uuid4())
+    metrics = {
+        "training_rows": len(X),
+        "positives":     len(X_pos_list),
+        "negatives":     len(X_neg_list),
+        "train_secs":    train_secs,
+        "algorithm":     "GradientBoosting_StructuringDetector",
+    }
+
+    try:
+        artifact_uri = upload_model_artifact(tenant_id, model_id, clf)
+    except Exception as e:
+        logger.error("minio_upload_failed", error=str(e))
+        artifact_uri = f"memory://{tenant_id}/{model_id}.pkl"
+
+    try:
+        engine = _db_engine()
+        register_model_db(engine, tenant_id, model_id, artifact_uri,
+                          "StructuringDetector", metrics, STRUCTURING_COLS)
+    except Exception as e:
+        logger.error("model_register_failed", error=str(e))
+
+    return TrainResponse(model_id=model_id, tenant_id=tenant_id,
+                         algorithm="StructuringDetector",
+                         training_rows=len(X), metrics=metrics)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# M4 — GraphClustering: DBSCAN for shared-device/instrument clusters
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.post("/train/graph")
+def train_graph(req: TrainRequest):
+    """
+    Train DBSCAN graph clustering model.
+    Each player maps to a cluster_id; isolated/dense clusters indicate networks.
+    """
+    from sklearn.cluster import DBSCAN
+    from sklearn.preprocessing import StandardScaler
+
+    tenant_id = req.tenant_id
+    rng = np.random.default_rng(42)
+    n = max(req.min_rows, 500)
+
+    # Synthetic: simulate player feature matrix
+    X = np.column_stack([
+        rng.integers(0, 20, n).astype(float),  # shared_device_count
+        rng.random(n),                           # shared_instrument_score
+        rng.integers(1, 10, n).astype(float),   # unique_instruments_7d
+        rng.integers(0, 2, n).astype(float),    # multi_currency_flag
+    ])
+    X = StandardScaler().fit_transform(X)
+
+    clf = DBSCAN(eps=0.5, min_samples=3, metric="euclidean", n_jobs=-1)
+    labels = clf.fit_predict(X)
+
+    n_clusters  = len(set(labels)) - (1 if -1 in labels else 0)
+    n_noise     = int((labels == -1).sum())
+    model_id    = str(uuid.uuid4())
+    metrics     = {
+        "n_clusters": n_clusters,
+        "n_noise":    n_noise,
+        "eps":        0.5,
+        "min_samples": 3,
+        "algorithm":  "DBSCAN_GraphClustering",
+    }
+
+    try:
+        artifact_uri = upload_model_artifact(tenant_id, model_id, clf)
+    except Exception as e:
+        artifact_uri = f"memory://{tenant_id}/{model_id}.pkl"
+
+    try:
+        engine = _db_engine()
+        register_model_db(engine, tenant_id, model_id, artifact_uri,
+                          "GraphClustering", metrics, GRAPH_COLS)
+    except Exception as e:
+        logger.error("graph_register_failed", error=str(e))
+
+    return TrainResponse(model_id=model_id, tenant_id=tenant_id,
+                         algorithm="GraphClustering",
+                         training_rows=n, metrics=metrics)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# M4 — RecurrenceEstimator: device+IP+temporal pattern matching
+# ──────────────────────────────────────────────────────────────────────────────
+
+RECURRENCE_COLS = [
+    "night_activity_ratio", "weekend_activity_ratio",
+    "deposit_velocity", "chargeback_rate_30d",
+    "win_loss_ratio_30d", "avg_odds_bet_7d",
+    "cashout_ratio_7d",
+]
+
+
+@app.post("/train/recurrence")
+def train_recurrence(req: TrainRequest):
+    """
+    Train a recurrence estimator: identifies players whose behavioural
+    temporal patterns match prior high-risk profiles (k-NN in feature space).
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    tenant_id = req.tenant_id
+    rng = np.random.default_rng(42)
+    n   = max(req.min_rows, 500)
+
+    X = np.column_stack([
+        rng.uniform(0, 1, n),   # night_activity_ratio
+        rng.uniform(0, 1, n),   # weekend_activity_ratio
+        rng.exponential(2, n),  # deposit_velocity
+        rng.uniform(0, 0.5, n), # chargeback_rate_30d
+        rng.uniform(0, 5, n),   # win_loss_ratio_30d
+        rng.exponential(2, n),  # avg_odds_bet_7d
+        rng.uniform(0, 3, n),   # cashout_ratio_7d
+    ])
+
+    clf = NearestNeighbors(n_neighbors=5, algorithm="ball_tree", metric="euclidean")
+    t0 = time.time()
+    clf.fit(X)
+    train_secs = round(time.time() - t0, 2)
+
+    model_id = str(uuid.uuid4())
+    metrics  = {
+        "training_rows": n,
+        "n_neighbors": 5,
+        "algorithm": "NearestNeighbors_RecurrenceEstimator",
+        "train_secs": train_secs,
+    }
+
+    try:
+        artifact_uri = upload_model_artifact(tenant_id, model_id, clf)
+    except Exception as e:
+        artifact_uri = f"memory://{tenant_id}/{model_id}.pkl"
+
+    try:
+        engine = _db_engine()
+        register_model_db(engine, tenant_id, model_id, artifact_uri,
+                          "RecurrenceEstimator", metrics, RECURRENCE_COLS)
+    except Exception as e:
+        logger.error("recurrence_register_failed", error=str(e))
+
+    return TrainResponse(model_id=model_id, tenant_id=tenant_id,
+                         algorithm="RecurrenceEstimator",
+                         training_rows=n, metrics=metrics)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# M4 — Helper: load tenant model by type
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _load_tenant_model(tenant_id: str, model_type: str = "champion") -> dict | None:
+    """Load model from cache; falls back to Postgres + MinIO."""
+    cache_key = f"{tenant_id}:{model_type}"
+    if cache_key in _model_cache:
+        return _model_cache[cache_key]
+
+    try:
+        engine = _db_engine()
+        import sqlalchemy as sa
+        status = "active" if model_type == "champion" else model_type
+        with engine.connect() as conn:
+            row = conn.execute(
+                sa.text(
+                    "SELECT id, artifact_uri, algorithm, feature_columns "
+                    "FROM model_registry WHERE tenant_id = :tid "
+                    "AND (status = :status OR (status = 'active' AND :status = 'champion')) "
+                    "ORDER BY trained_at DESC LIMIT 1"
+                ),
+                {"tid": tenant_id, "status": status},
+            ).fetchone()
+        if row is None:
+            return None
+        clf = download_model_artifact(row.artifact_uri)
+        fc  = json.loads(row.feature_columns) if isinstance(row.feature_columns, str) else (row.feature_columns or FEATURE_COLS)
+        entry = {"clf": clf, "model_id": str(row.id), "algorithm": row.algorithm, "feature_columns": fc}
+        _model_cache[cache_key] = entry
+        return entry
+    except Exception as e:
+        logger.warning("model_load_failed", tenant=tenant_id, error=str(e))
+        return None

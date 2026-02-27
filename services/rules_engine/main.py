@@ -74,7 +74,7 @@ async def load_rules(tenant_id: str) -> list[dict]:
         with engine.connect() as conn:
             result = conn.execute(
                 sa.text(
-                    "SELECT id, name, condition_dsl, params, severity, scope, version "
+                    "SELECT id, name, condition_dsl, params, severity, scope, version, weight "
                     "FROM rule_definitions WHERE tenant_id = :tid AND status = 'ACTIVE'"
                 ),
                 {"tid": tenant_id},
@@ -87,6 +87,94 @@ async def load_rules(tenant_id: str) -> list[dict]:
     except Exception as e:
         logger.error("rules_load_failed", tenant_id=tenant_id, error=str(e))
         return _rule_cache.get(tenant_id, [])
+
+
+async def load_macros(tenant_id: str) -> dict[str, str]:
+    """Load rule macros (name → DSL expression) from Postgres with cache."""
+    cache_key = f"macros:{tenant_id}"
+    now = time.time()
+    if cache_key in _rule_cache and (now - _rule_cache_ts.get(cache_key, 0)) < RULE_CACHE_TTL:
+        return _rule_cache[cache_key]
+
+    try:
+        engine = await asyncio.to_thread(_get_sync_db)
+        if not engine:
+            return {}
+        import sqlalchemy as sa
+        with engine.connect() as conn:
+            rows = conn.execute(
+                sa.text("SELECT name, expression FROM rule_macros WHERE tenant_id = :tid"),
+                {"tid": tenant_id},
+            )
+            macros = {r.name: r.expression for r in rows}
+        _rule_cache[cache_key] = macros
+        _rule_cache_ts[cache_key] = now
+        return macros
+    except Exception as e:
+        logger.warning("macros_load_failed", error=str(e))
+        return {}
+
+
+async def load_player_lists(tenant_id: str) -> dict[str, set]:
+    """Load PlayerList entries keyed by list name → set of values."""
+    cache_key = f"player_lists:{tenant_id}"
+    now = time.time()
+    if cache_key in _rule_cache and (now - _rule_cache_ts.get(cache_key, 0)) < RULE_CACHE_TTL:
+        return _rule_cache[cache_key]
+
+    try:
+        engine = await asyncio.to_thread(_get_sync_db)
+        if not engine:
+            return {}
+        import sqlalchemy as sa
+        with engine.connect() as conn:
+            rows = conn.execute(
+                sa.text("""
+                    SELECT pl.name, ple.value
+                    FROM player_lists pl
+                    JOIN player_list_entries ple ON ple.player_list_id = pl.id
+                    WHERE pl.tenant_id = :tid
+                """),
+                {"tid": tenant_id},
+            )
+            lists: dict[str, set] = {}
+            for row in rows:
+                lists.setdefault(row.name, set()).add(row.value)
+        _rule_cache[cache_key] = lists
+        _rule_cache_ts[cache_key] = now
+        return lists
+    except Exception as e:
+        logger.warning("player_lists_load_failed", error=str(e))
+        return {}
+
+
+async def load_compound_rules(tenant_id: str) -> list[dict]:
+    """Load compound rules for the tenant."""
+    cache_key = f"compound:{tenant_id}"
+    now = time.time()
+    if cache_key in _rule_cache and (now - _rule_cache_ts.get(cache_key, 0)) < RULE_CACHE_TTL:
+        return _rule_cache[cache_key]
+
+    try:
+        engine = await asyncio.to_thread(_get_sync_db)
+        if not engine:
+            return []
+        import sqlalchemy as sa
+        with engine.connect() as conn:
+            rows = conn.execute(
+                sa.text(
+                    "SELECT id, name, logic, component_rule_ids, score_weights, min_score_threshold "
+                    "FROM compound_rules WHERE tenant_id = :tid AND is_active = true"
+                ),
+                {"tid": tenant_id},
+            )
+            compound = [dict(r._mapping) for r in rows]
+        _rule_cache[cache_key] = compound
+        _rule_cache_ts[cache_key] = now
+        return compound
+    except Exception as e:
+        logger.warning("compound_rules_load_failed", error=str(e))
+        return []
 
 
 async def load_features(tenant_id: str, player_id: str, redis_client) -> dict:
@@ -112,78 +200,132 @@ async def evaluate_rules(
     envelope: dict[str, Any],
     features: dict[str, Any],
     rules: list[dict],
+    macros: dict[str, str] | None = None,
+    player_lists: dict[str, set] | None = None,
+    compound_rules: list[dict] | None = None,
 ) -> list[dict]:
     """Avalia todas as regras ativas e retorna lista de matches."""
-    from libs.dsl_parser import eval_dsl, DSLSyntaxError, DSLEvaluationError
+    from libs.dsl_parser import eval_dsl, DSLSyntaxError, DSLEvaluationError, expand_macros
 
     payload = envelope.get("payload", {})
     entity_type = envelope.get("entity_type", "").upper()
 
-    # Normalização dos nomes de campo para acesso uniforme no DSL
     ctx_transaction: dict = {}
     ctx_bet: dict = {}
     ctx_player: dict = {}
 
     if entity_type == "TRANSACTION":
         ctx_transaction = {
-            "amount":  float(payload.get("amount", 0)),
-            "type":    payload.get("type", ""),
-            "method":  payload.get("method", ""),
-            "status":  payload.get("status", ""),
+            "amount":   float(payload.get("amount", 0)),
+            "type":     payload.get("type", ""),
+            "method":   payload.get("method", ""),
+            "status":   payload.get("status", ""),
             "currency": payload.get("currency", "BRL"),
         }
         player_id = payload.get("player_id", "")
     elif entity_type == "BET":
         ctx_bet = {
-            "stakeAmount":     float(payload.get("stake_amount", 0)),
-            "odds":            float(payload.get("odds") or 0),
-            "channel":         payload.get("channel", ""),
+            "stakeAmount": float(payload.get("stake_amount", 0)),
+            "odds":        float(payload.get("odds") or 0),
+            "channel":     payload.get("channel", ""),
         }
-        ctx_transaction = {}
         player_id = payload.get("player_id", "")
     else:
         return []
 
-    # Player basic info from features payload (prefetch from seeds context)
     ctx_player = {
-        "pepFlag":              features.get("pep_flag", False),
+        "pepFlag":               features.get("pep_flag", False),
         "declaredIncomeMonthly": features.get("declared_income_monthly", 0),
     }
 
     scope_map = {"TRANSACTION": "TRANSACTION", "BET": "BET"}
     event_scope = scope_map.get(entity_type, entity_type)
 
-    matches = []
+    matches: list[dict] = []
+    rule_scores: dict[int, float] = {}  # rule_id → 0.0 or 1.0 (matched)
+
     for rule in rules:
         if rule["scope"] not in (event_scope, "PLAYER"):
             continue
 
         ctx = {
-            "transaction": ctx_transaction,
-            "bet":         ctx_bet,
-            "player":      ctx_player,
-            "features":    features,
-            "params":      rule.get("params") or {},
+            "transaction":  ctx_transaction,
+            "bet":          ctx_bet,
+            "player":       ctx_player,
+            "features":     features,
+            "params":       rule.get("params") or {},
+            "player_lists": player_lists or {},
         }
+
+        # Expand macros in DSL expression
+        dsl_expr = rule["condition_dsl"]
+        if macros:
+            try:
+                dsl_expr = expand_macros(dsl_expr, macros)
+            except DSLSyntaxError as e:
+                logger.warning("macro_expansion_failed", rule_id=str(rule["id"]), error=str(e))
 
         start = time.monotonic()
         try:
-            matched = eval_dsl(rule["condition_dsl"], ctx)
+            matched = eval_dsl(dsl_expr, ctx)
             eval_ms = int((time.monotonic() - start) * 1000)
         except (DSLSyntaxError, DSLEvaluationError) as e:
             logger.warning("dsl_eval_error", rule_id=str(rule["id"]), error=str(e))
             matched = False
             eval_ms = 0
 
+        rule_weight = float(rule.get("weight") or 1.0)
+        rule_scores[rule["id"]] = rule_weight if matched else 0.0
+
         if matched:
             matches.append({
-                "rule": rule,
-                "eval_ms": eval_ms,
-                "context_snapshot": {k: v for k, v in ctx.items() if k != "features"},
+                "rule":             rule,
+                "eval_ms":          eval_ms,
+                "rule_weight":      rule_weight,
+                "context_snapshot": {k: v for k, v in ctx.items()
+                                     if k not in ("features", "player_lists")},
                 "features_snapshot": {k: features.get(k) for k in [
-                    "deposit_sum_24h", "deposit_sum_7d", "zscore_current_deposit_vs_baseline",
-                    "deposit_count_24h", "new_payment_instrument_flag", "shared_device_count",
+                    "deposit_sum_24h", "deposit_sum_7d",
+                    "zscore_current_deposit_vs_baseline",
+                    "deposit_count_24h", "new_payment_instrument_flag",
+                    "shared_device_count", "deposit_velocity",
+                    "night_activity_ratio", "chargeback_rate_30d",
                 ]},
+            })
+
+    # ── Compound rule evaluation ─────────────────────────────────────────────
+    for crule in (compound_rules or []):
+        component_ids = crule.get("component_rule_ids") or []
+        score_weights = crule.get("score_weights") or {}
+        min_threshold = crule.get("min_score_threshold") or 0.5
+
+        # Compute weighted composite score from component rules
+        total_weight = 0.0
+        weighted_score = 0.0
+        for rid in component_ids:
+            w = float(score_weights.get(str(rid), 1.0))
+            total_weight += w
+            weighted_score += rule_scores.get(rid, 0.0) * w
+
+        composite = weighted_score / max(total_weight, 1e-9)
+
+        if composite >= min_threshold:
+            matches.append({
+                "rule": {
+                    "id":            crule["id"],
+                    "name":          crule["name"],
+                    "condition_dsl": crule["logic"],
+                    "severity":      "HIGH",
+                    "scope":         event_scope,
+                    "version":       1,
+                    "weight":        1.0,
+                    "is_compound":   True,
+                },
+                "eval_ms":           0,
+                "rule_weight":       1.0,
+                "composite_score":   composite,
+                "context_snapshot":  {},
+                "features_snapshot": {},
             })
 
     return matches
@@ -348,9 +490,17 @@ async def main():
                 if not tenant_id:
                     continue
 
-                rules    = await load_rules(tenant_id)
-                features = await load_features(tenant_id, player_id, redis_client)
-                matches  = await evaluate_rules(value, features, rules)
+                rules          = await load_rules(tenant_id)
+                features       = await load_features(tenant_id, player_id, redis_client)
+                macros         = await load_macros(tenant_id)
+                player_lists   = await load_player_lists(tenant_id)
+                compound_rules = await load_compound_rules(tenant_id)
+                matches        = await evaluate_rules(
+                    value, features, rules,
+                    macros=macros,
+                    player_lists=player_lists,
+                    compound_rules=compound_rules,
+                )
 
                 for match in matches:
                     await publish_alert(value, match, producer, db_queue)
