@@ -29,7 +29,7 @@ export default function NotificationsPage() {
   const readOne  = useMutation({ mutationFn: markRead,    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }) });
   const readAll  = useMutation({ mutationFn: markAllRead, onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }) });
 
-  const unread = items.filter((n) => !n.is_read).length;
+  const unread = items.filter((n: Notification) => !n.is_read).length;
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
@@ -62,7 +62,7 @@ export default function NotificationsPage() {
       )}
 
       <ul className="space-y-2">
-        {items.map((n) => (
+        {items.map((n: Notification) => (
           <li
             key={n.id}
             className={`rounded-xl border px-4 py-3 transition-colors ${

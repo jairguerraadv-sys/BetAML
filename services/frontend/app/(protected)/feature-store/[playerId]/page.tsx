@@ -161,7 +161,7 @@ export default function FeatureDetailPage({ params }: Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {history.slice(0, 30).map((h, i) => (
+              {history.slice(0, 30).map((h: FeatureSnapshot, i: number) => (
                 <tr key={i} className="hover:bg-gray-50/50">
                   <td className="px-4 py-2 text-gray-500">{new Date(h.computed_at).toLocaleString('pt-BR')}</td>
                   <td className="px-4 py-2 text-right">{h.txn_count_24h}</td>

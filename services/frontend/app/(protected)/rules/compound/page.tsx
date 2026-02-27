@@ -160,7 +160,7 @@ export default function CompoundRulesPage() {
             {!isLoading && rules.length === 0 && (
               <tr><td colSpan={6} className="py-8 text-center text-gray-400">Nenhuma regra composta</td></tr>
             )}
-            {rules.map((r) => (
+            {rules.map((r: CompoundRule) => (
               <tr key={r.id} className="hover:bg-gray-50/50">
                 <td className="px-4 py-3 font-medium">{r.name}</td>
                 <td className="px-4 py-3">{r.min_score_threshold}</td>

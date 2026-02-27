@@ -144,7 +144,7 @@ export default function PlayerListsPage() {
             {!isLoading && lists.length === 0 && (
               <tr><td colSpan={6} className="py-8 text-center text-gray-400">Nenhuma lista cadastrada</td></tr>
             )}
-            {lists.map((l) => (
+            {lists.map((l: PlayerList) => (
               <tr key={l.id} className="hover:bg-gray-50/50">
                 <td className="px-4 py-3 font-medium">{l.name}</td>
                 <td className="px-4 py-3">

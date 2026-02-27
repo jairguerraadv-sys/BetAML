@@ -40,7 +40,7 @@ TOPICS = [
 # ──────────────────────────────────────────────────
 # Rule cache (tenant_id → [(rule_id, rule_name, dsl, params, severity, scope, version)])
 # ──────────────────────────────────────────────────
-_rule_cache: dict[str, list] = {}
+_rule_cache: dict[str, Any] = {}
 _rule_cache_ts: dict[str, float] = {}
 
 _db_engine = None

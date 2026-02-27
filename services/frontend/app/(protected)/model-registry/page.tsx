@@ -40,7 +40,7 @@ export default function ModelRegistryPage() {
   });
 
   // Group by model_type
-  const byType = models.reduce<Record<string, ModelEntry[]>>((acc, m) => {
+  const byType = models.reduce<Record<string, ModelEntry[]>>((acc: Record<string, ModelEntry[]>, m: ModelEntry) => {
     (acc[m.model_type] ??= []).push(m);
     return acc;
   }, {});
@@ -54,7 +54,7 @@ export default function ModelRegistryPage() {
 
       {isLoading && <p className="text-sm text-gray-500">Carregando…</p>}
 
-      {Object.entries(byType).map(([type, entries]) => (
+      {(Object.entries(byType) as [string, ModelEntry[]][]).map(([type, entries]) => (
         <section key={type} className="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
           <div className="flex items-center gap-2 border-b border-gray-100 bg-gray-50 px-4 py-2.5">
             <BarChart2 size={15} className="text-gray-500" />
@@ -73,7 +73,7 @@ export default function ModelRegistryPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {entries.map((m) => (
+              {(entries as ModelEntry[]).map((m: ModelEntry) => (
                 <tr key={m.id} className={`hover:bg-gray-50/50 ${m.status === 'champion' ? 'bg-yellow-50/30' : ''}`}>
                   <td className="px-4 py-2.5 font-medium">{m.version}</td>
                   <td className="px-4 py-2.5">
