@@ -1,6 +1,9 @@
 import axios from 'axios';
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+// Sempre usa o proxy local — o servidor Next.js encaminha para a API.
+// Isso garante que localhost:8000 nunca é chamado direto do browser,
+// resolvendo ERR_CONNECTION_REFUSED em Codespaces/devcontainer.
+const BASE = '/api-proxy';
 
 export const api = axios.create({ baseURL: BASE });
 
