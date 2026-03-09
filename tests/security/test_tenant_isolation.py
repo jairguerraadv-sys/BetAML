@@ -80,6 +80,21 @@ def _first_id(client: httpx.Client, endpoint: str) -> str | None:
     return None
 
 
+def _create_ingest_file_job(client: httpx.Client) -> str | None:
+    csv_payload = (
+        "event_id,external_player_id,transaction_type,amount,occurred_at,currency\n"
+        f"evt-{uuid.uuid4().hex[:8]},ply-{uuid.uuid4().hex[:6]},DEPOSIT,100.0,2026-03-09T10:00:00Z,BRL\n"
+    ).encode("utf-8")
+    resp = client.post(
+        "/ingest/file",
+        data={"source_system": "BackofficeAlpha", "entity_type": "transaction"},
+        files={"file": ("tenant-test.csv", csv_payload, "text/csv")},
+    )
+    if resp.status_code != 202:
+        return None
+    return resp.json().get("job_id")
+
+
 # ── Unauthenticated access ────────────────────────────────────────────────────
 
 @skip_unless_stack
@@ -148,6 +163,43 @@ def test_tenant_a_cannot_access_tenant_b_alert(client_a, client_b):
         pytest.skip("No alerts for tenant B")
     resp = client_a.get(f"/alerts/{alert_id}")
     assert resp.status_code in (403, 404)
+
+
+@skip_unless_stack
+def test_tenant_b_cannot_access_tenant_a_ingest_job(client_a, client_b):
+    job_id = _create_ingest_file_job(client_a)
+    if not job_id:
+        pytest.skip("Falha ao criar ingest job para tenant A")
+    resp = client_b.get(f"/ingest/jobs/{job_id}")
+    assert resp.status_code in (403, 404)
+
+
+@skip_unless_stack
+def test_tenant_b_cannot_access_tenant_a_ingest_errors(client_a, client_b):
+    job_id = _create_ingest_file_job(client_a)
+    if not job_id:
+        pytest.skip("Falha ao criar ingest job para tenant A")
+
+    errors_a = client_a.get(f"/ingest/errors?job_id={job_id}&limit=5")
+    if errors_a.status_code != 200:
+        pytest.skip("Não foi possível listar erros de ingest do tenant A")
+    items = errors_a.json()
+    if not items:
+        pytest.skip("Sem erros de ingest para validar isolamento")
+
+    error_id = items[0].get("id")
+    if not error_id:
+        pytest.skip("Erro de ingest sem id")
+
+    resp_list = client_b.get(f"/ingest/errors?job_id={job_id}&limit=5")
+    assert resp_list.status_code == 200
+    assert resp_list.json() == []
+
+    resp_resolve = client_b.post(
+        f"/ingest/errors/{error_id}/resolve",
+        json={"note": "cross-tenant resolve attempt"},
+    )
+    assert resp_resolve.status_code in (403, 404)
 
 
 @skip_unless_stack
