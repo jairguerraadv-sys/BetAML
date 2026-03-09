@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import DataTable from '@/components/DataTable';
 import {
@@ -41,6 +41,62 @@ function prettyJson(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+function highlightLine(line: string, format: EditorFormat): ReactNode {
+  const jsonKeyMatch = line.match(/^(\s*)"([^"]+)"\s*:(.*)$/);
+  const yamlKeyMatch = line.match(/^(\s*)([A-Za-z_][\w-]*)\s*:(.*)$/);
+
+  if (format === 'json' && jsonKeyMatch) {
+    const [, indent, key, rest] = jsonKeyMatch;
+    return (
+      <>
+        <span className="text-slate-500">{indent}</span>
+        <span className="text-cyan-300">"{key}"</span>
+        <span className="text-slate-300">:{rest}</span>
+      </>
+    );
+  }
+
+  if (format === 'yaml' && yamlKeyMatch) {
+    const [, indent, key, rest] = yamlKeyMatch;
+    return (
+      <>
+        <span className="text-slate-500">{indent}</span>
+        <span className="text-cyan-300">{key}</span>
+        <span className="text-slate-300">:{rest}</span>
+      </>
+    );
+  }
+
+  return <span className="text-slate-300">{line}</span>;
+}
+
+function HighlightedEditor({
+  value,
+  onChange,
+  format,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  format: EditorFormat;
+}) {
+  const lines = value.split('\n');
+  return (
+    <div className="relative h-96 w-full overflow-hidden rounded-xl border border-slate-800 bg-gray-950">
+      <pre className="pointer-events-none absolute inset-0 overflow-auto p-3 font-mono text-xs leading-5">
+        {lines.map((line, idx) => (
+          <div key={idx}>{highlightLine(line, format)}</div>
+        ))}
+      </pre>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="relative z-10 h-full w-full resize-none bg-transparent p-3 font-mono text-xs leading-5 text-transparent caret-emerald-200 focus:outline-none"
+        spellCheck={false}
+      />
+    </div>
+  );
 }
 
 export default function MappingsPage() {
@@ -324,12 +380,7 @@ export default function MappingsPage() {
             </div>
           </div>
 
-          <textarea
-            value={editorText}
-            onChange={(e) => setEditorText(e.target.value)}
-            className="h-96 w-full rounded-xl border bg-gray-950 p-3 font-mono text-xs text-emerald-200"
-            spellCheck={false}
-          />
+          <HighlightedEditor value={editorText} onChange={setEditorText} format={editorFormat} />
 
           <div className="rounded-lg border px-3 py-2 text-sm">
             <span className={`font-semibold ${validationOk === true ? 'text-emerald-600' : validationOk === false ? 'text-red-600' : 'text-gray-500'}`}>

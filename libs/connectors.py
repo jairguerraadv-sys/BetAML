@@ -10,8 +10,11 @@ import io
 import json
 import re
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Any, Iterator
+
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -40,6 +43,61 @@ class BaseConnector:
     def validate_auth(self, headers: dict[str, str], body: bytes) -> bool:
         """Return True if auth credentials are valid. Override per connector."""
         return True
+
+
+class _ConnectorRecordSchema(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    event_id: str
+    external_player_id: str
+    transaction_type: str
+    amount: float
+    occurred_at: str
+    currency: str = "BRL"
+
+    @field_validator("event_id", "external_player_id", "transaction_type", "occurred_at")
+    @classmethod
+    def _must_not_be_empty(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("campo obrigatório vazio")
+        return value
+
+    @field_validator("amount")
+    @classmethod
+    def _amount_must_be_non_negative(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("amount não pode ser negativo")
+        return value
+
+    @field_validator("occurred_at")
+    @classmethod
+    def _occurred_at_must_be_iso(cls, value: str) -> str:
+        v = value.replace("Z", "+00:00")
+        datetime.fromisoformat(v)
+        return value
+
+
+def _canonicalize_record(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize variant connector keys into canonical keys before validation."""
+    mapped = dict(data)
+
+    def _first(*keys: str) -> Any:
+        for key in keys:
+            if key in data and data[key] not in (None, ""):
+                return data[key]
+        return None
+
+    mapped.setdefault("event_id", _first("event_id", "id", "EventId", "external_event_id"))
+    mapped.setdefault(
+        "external_player_id",
+        _first("external_player_id", "player_id", "PlayerId", "uid", "playerId"),
+    )
+    mapped.setdefault("transaction_type", _first("transaction_type", "type", "Type", "evt_type", "event_type"))
+    mapped.setdefault("amount", _first("amount", "Amount", "val", "gross_amount", "txnAmount"))
+    mapped.setdefault("occurred_at", _first("occurred_at", "Timestamp", "timestamp", "ts", "event_time", "txnTimestamp"))
+    mapped.setdefault("currency", _first("currency", "Amount.currency", "ccy", "currency_code") or "BRL")
+    return mapped
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -140,7 +198,9 @@ class ConnectorGamma(BaseConnector):
                 continue
             try:
                 flat = self._flatten(child)
-                records.append(flat)
+                normalized = _canonicalize_record(flat)
+                schema = _ConnectorRecordSchema.model_validate(normalized)
+                records.append({**flat, **schema.model_dump()})
             except Exception as exc:  # noqa: BLE001
                 errors.append({"line": line, "reason": str(exc), "raw": ET.tostring(child, encoding="unicode")[:300]})
 
@@ -215,7 +275,10 @@ class ConnectorDelta(BaseConnector):
                 continue
             try:
                 obj = json.loads(line)
-                records.append(self._map(obj))
+                mapped = self._map(obj)
+                normalized = _canonicalize_record(mapped)
+                schema = _ConnectorRecordSchema.model_validate(normalized)
+                records.append({**mapped, **schema.model_dump()})
             except (json.JSONDecodeError, Exception) as exc:  # noqa: BLE001
                 errors.append({"line": line_num, "reason": str(exc), "raw": line[:300]})
 
@@ -324,7 +387,10 @@ class ConnectorEpsilon(BaseConnector):
 
         for i, evt in enumerate(events):
             try:
-                records.append(self._map(evt))
+                mapped = self._map(evt)
+                normalized = _canonicalize_record(mapped)
+                schema = _ConnectorRecordSchema.model_validate(normalized)
+                records.append({**mapped, **schema.model_dump()})
             except Exception as exc:  # noqa: BLE001
                 errors.append({"line": i + 1, "reason": str(exc), "raw": json.dumps(evt)[:300]})
 
