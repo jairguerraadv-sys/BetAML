@@ -125,6 +125,13 @@ def test_unauthenticated_audit_logs_blocked():
         assert r.status_code in (401, 403)
 
 
+@skip_unless_stack
+def test_unauthenticated_legacy_audit_log_blocked():
+    with httpx.Client(base_url=BASE_URL, timeout=10) as c:
+        r = c.get("/audit-log")
+        assert r.status_code in (401, 403)
+
+
 # ── Cross-tenant resource access ──────────────────────────────────────────────
 
 @skip_unless_stack
@@ -200,6 +207,19 @@ def test_tenant_b_cannot_access_tenant_a_ingest_errors(client_a, client_b):
         json={"note": "cross-tenant resolve attempt"},
     )
     assert resp_resolve.status_code in (403, 404)
+
+
+@skip_unless_stack
+def test_tenant_b_cannot_reprocess_tenant_a_job(client_a, client_b):
+    job_id = _create_ingest_file_job(client_a)
+    if not job_id:
+        pytest.skip("Falha ao criar ingest job para tenant A")
+
+    resp = client_b.post(
+        f"/ingest/jobs/{job_id}/reprocess",
+        json={"reason": "cross-tenant reprocess attempt"},
+    )
+    assert resp.status_code in (403, 404)
 
 
 @skip_unless_stack
