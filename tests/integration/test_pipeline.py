@@ -966,6 +966,15 @@ def test_ingest_jobs_list_rejects_cross_tenant_filter(headers_a):
     assert resp.status_code == 403
 
 
+@skip_unless_stack
+def test_feature_store_history_rejects_invalid_range(headers_a):
+    resp = api(
+        f"/feature-store/players/{uuid.uuid4()}/history?from=2026-03-10T00:00:00Z&to=2026-03-09T00:00:00Z",
+        headers=headers_a,
+    )
+    assert resp.status_code in (400, 404)
+
+
 # ── ReportPackage COAF ────────────────────────────────────────────────────────
 
 @skip_unless_stack

@@ -104,6 +104,10 @@ REQUIRED_KEYS = {
     "deposit_velocity",
     "night_activity_ratio", "weekend_activity_ratio",
     "shared_device_count",
+    "shared_device_score",
+    "shared_instrument_score",
+    "cluster_id",
+    "cluster_size",
     "chargeback_count_30d",
 }
 

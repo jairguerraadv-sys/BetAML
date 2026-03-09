@@ -159,6 +159,24 @@ def test_feature_version_is_2():
     assert feats["feature_version"] == 2
 
 
+def test_feature_aliases_present_for_module_2_contract():
+    feats = compute_features("P1", _history([_make_txn(), _make_txn(instrument="card_B")]))
+    assert "unique_instruments_used_7d" in feats
+    assert feats["unique_instruments_used_7d"] == feats["unique_instruments_7d"]
+    assert "bonus_to_real_money_ratio_30d" in feats
+    assert "avg_time_between_deposit_and_withdrawal_7d" in feats
+
+
+def test_cluster_metadata_present():
+    txns = [
+        _make_txn(device_id="dev_1", bank_id="bank_A"),
+        _make_txn(device_id="dev_2", bank_id="bank_A", hours_ago=2),
+    ]
+    feats = compute_features("P1", _history(txns))
+    assert feats["cluster_id"].startswith("cluster:")
+    assert feats["cluster_size"] >= 1
+
+
 # ── Empty history ─────────────────────────────────────────────────────────────
 
 def test_empty_history_no_crash():

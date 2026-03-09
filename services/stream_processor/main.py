@@ -1,13 +1,14 @@
 """
 Stream Processor — BetAML
 Consome canonical.transactions / canonical.bets / canonical.device_events
-Calcula features em janelas (24h/7d/30d), baseline incremental,
+Calcula features em janelas (1h/24h/7d/30d/90d), baseline incremental,
 correlações (device/shared), e grava no Redis (online) + ClickHouse (Gold).
 Também publicas features.player_daily e scoring.alerts (candidatos).
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -42,10 +43,10 @@ TOPICS = [
 # Key: betaml:{tenant_id}:txn:{player_id}
 # Score: timestamp Unix epoch (float)
 # Value: JSON da entrada
-# TTL: 30 dias (2 592 000 s)
+# TTL: 90 dias (7 776 000 s)
 # ──────────────────────────────────────────────────
 
-WINDOW_TTL_SECONDS = 30 * 24 * 3600  # 30 dias
+WINDOW_TTL_SECONDS = 90 * 24 * 3600  # 90 dias
 
 
 async def _zadd_entry(redis_client, key: str, ts: datetime, entry: dict) -> None:
@@ -77,16 +78,18 @@ async def compute_features(
     ch_client,
 ) -> dict:
     now = datetime.utcnow()
+    cutoff_1h = now - timedelta(hours=1)
     cutoff_24h = now - timedelta(hours=24)
     cutoff_7d  = now - timedelta(days=7)
     cutoff_30d = now - timedelta(days=30)
+    cutoff_90d = now - timedelta(days=90)
 
     # Read from Redis Sorted Sets (distributed, survives restarts)
     txn_key = redis_client.txn_window_key(tenant_id, player_id)
     bet_key = redis_client.bet_window_key(tenant_id, player_id)
 
-    txns = await _zread_window(redis_client, txn_key, cutoff_30d)
-    bets = await _zread_window(redis_client, bet_key, cutoff_7d)
+    txns = await _zread_window(redis_client, txn_key, cutoff_90d)
+    bets = await _zread_window(redis_client, bet_key, cutoff_90d)
 
     def filter_type(events, type_, since):
         return [e for e in events if e.get("type") == type_ and e["ts"] >= since]
@@ -94,18 +97,24 @@ async def compute_features(
     deposits_24h    = filter_type(txns, "DEPOSIT",    cutoff_24h)
     deposits_7d     = filter_type(txns, "DEPOSIT",    cutoff_7d)
     deposits_30d    = filter_type(txns, "DEPOSIT",    cutoff_30d)
+    deposits_90d    = filter_type(txns, "DEPOSIT",    cutoff_90d)
     withdrawal_24h  = filter_type(txns, "WITHDRAWAL", cutoff_24h)
     withdrawal_7d   = filter_type(txns, "WITHDRAWAL", cutoff_7d)
+    withdrawal_90d  = filter_type(txns, "WITHDRAWAL", cutoff_90d)
     failed_24h      = [e for e in txns if e.get("status") == "FAILED" and e["ts"] >= cutoff_24h]
     chargebacks_30d = filter_type(txns, "CHARGEBACK", cutoff_30d)
     bets_24h        = [b for b in bets if b["ts"] >= cutoff_24h]
-    bets_7d         = bets  # already trimmed to 7d
+    bets_7d         = [b for b in bets if b["ts"] >= cutoff_7d]
+    bets_30d        = [b for b in bets if b["ts"] >= cutoff_30d]
+    deposits_1h     = filter_type(txns, "DEPOSIT", cutoff_1h)
 
     dep_sum_24h  = sum(e["amount"] for e in deposits_24h)
     dep_sum_7d   = sum(e["amount"] for e in deposits_7d)
     dep_sum_30d  = sum(e["amount"] for e in deposits_30d)
+    dep_sum_90d  = sum(e["amount"] for e in deposits_90d)
     with_sum_24h = sum(e["amount"] for e in withdrawal_24h)
     with_sum_7d  = sum(e["amount"] for e in withdrawal_7d)
+    with_sum_90d = sum(e["amount"] for e in withdrawal_90d)
     bet_sum_24h  = sum(b["amount"] for b in bets_24h)
     bet_sum_7d   = sum(b["amount"] for b in bets)
 
@@ -154,8 +163,8 @@ async def compute_features(
     avg_odds_7d = (sum(odds_vals) / len(odds_vals)) if odds_vals else None
 
     # 6. Win/loss ratio (30d bets)
-    wins_30d  = [b for b in bets if b.get("outcome") == "WIN"]
-    losses_30d = [b for b in bets if b.get("outcome") == "LOSS"]
+    wins_30d  = [b for b in bets_30d if b.get("outcome") == "WIN"]
+    losses_30d = [b for b in bets_30d if b.get("outcome") == "LOSS"]
     win_loss_30d = (len(wins_30d) / max(len(losses_30d), 1)) if losses_30d else None
 
     # 7. Average time (hours) between deposit and withdrawal (7d)
@@ -207,9 +216,19 @@ async def compute_features(
         bank_counts.append(c)
     shared_bank_count = max(bank_counts, default=1) - 1  # exclude self
 
+    shared_device_score = min(max(shared_device_count, 0) / 10.0, 1.0)
+
     # Shared instrument score: weighted combination
     shared_instrument_score = min(
         (shared_device_count * 0.4 + shared_bank_count * 0.6) / 10.0, 1.0
+    )
+
+    cluster_size = max(max(dev_counts, default=1), max(bank_counts, default=1))
+    cluster_seed = sorted(str(v) for v in player_devs.union(player_banks))
+    cluster_id = (
+        f"cluster:{hashlib.sha1('|'.join(cluster_seed).encode()).hexdigest()[:12]}"
+        if cluster_seed
+        else f"solo:{player_id}"
     )
 
     features = {
@@ -222,10 +241,14 @@ async def compute_features(
         "deposit_sum_24h":                      float(dep_sum_24h),
         "deposit_sum_7d":                       float(dep_sum_7d),
         "deposit_sum_30d":                      float(dep_sum_30d),
+        "deposit_sum_90d":                      float(dep_sum_90d),
+        "deposit_count_1h":                     len(deposits_1h),
         "deposit_count_24h":                    len(deposits_24h),
         "deposit_count_7d":                     len(deposits_7d),
+        "deposit_count_90d":                    len(deposits_90d),
         "withdrawal_sum_24h":                   float(with_sum_24h),
         "withdrawal_sum_7d":                    float(with_sum_7d),
+        "withdrawal_sum_90d":                   float(with_sum_90d),
         "withdrawal_count_24h":                 len(withdrawal_24h),
         "bet_stake_sum_24h":                    float(bet_sum_24h),
         "bet_stake_sum_7d":                     float(bet_sum_7d),
@@ -243,18 +266,24 @@ async def compute_features(
         # v2 new features
         "deposit_velocity":                     float(dep_velocity),
         "unique_instruments_7d":                unique_instruments_7d,
+        "unique_instruments_used_7d":           unique_instruments_7d,
         "night_activity_ratio":                 float(night_ratio),
         "weekend_activity_ratio":               float(weekend_ratio),
         "avg_odds_bet_7d":                      float(avg_odds_7d) if avg_odds_7d is not None else None,
         "win_loss_ratio_30d":                   float(win_loss_30d) if win_loss_30d is not None else None,
         "avg_deposit_to_withdrawal_hours":      float(avg_dep_to_wdraw_h) if avg_dep_to_wdraw_h is not None else None,
+        "avg_time_between_deposit_and_withdrawal_7d": float(avg_dep_to_wdraw_h) if avg_dep_to_wdraw_h is not None else None,
         "multi_currency_flag":                  multi_currency,
         "chargeback_rate_30d":                  float(chargeback_rate_30d),
         "bonus_to_real_ratio_30d":              float(bonus_ratio_30d),
+        "bonus_to_real_money_ratio_30d":        float(bonus_ratio_30d),
         "cashout_ratio_7d":                     float(cashout_ratio_7d),
 
         # network
+        "shared_device_score":                  float(shared_device_score),
         "shared_instrument_score":              float(shared_instrument_score),
+        "cluster_id":                           cluster_id,
+        "cluster_size":                         int(cluster_size),
     }
 
     # Persist to Redis (online store, TTL 4h)
@@ -841,6 +870,7 @@ def compute_features_offline(player_id: str, history: dict) -> dict:
     cutoff_24h = now - _td(hours=24)
     cutoff_7d  = now - _td(days=7)
     cutoff_30d = now - _td(days=30)
+    cutoff_90d = now - _td(days=90)
 
     def _parse_ts(t: dict) -> _dt:
         ts = t.get("created_at", "")
@@ -858,9 +888,11 @@ def compute_features_offline(player_id: str, history: dict) -> dict:
 
     deposits_24h = [t for t in txns if t.get("txn_type") == "DEPOSIT" and in_win(t, cutoff_24h)]
     deposits_30d = [t for t in txns if t.get("txn_type") == "DEPOSIT" and in_win(t, cutoff_30d)]
+    deposits_90d = [t for t in txns if t.get("txn_type") == "DEPOSIT" and in_win(t, cutoff_90d)]
     txns_24h     = [t for t in txns if in_win(t, cutoff_24h)]
     txns_7d      = [t for t in txns if in_win(t, cutoff_7d)]
     txns_30d     = [t for t in txns if in_win(t, cutoff_30d)]
+    txns_90d     = [t for t in txns if in_win(t, cutoff_90d)]
 
     # Deposit velocity = deposits per hour in 24h
     dep_velocity = len(deposits_24h) / 24.0
@@ -889,17 +921,35 @@ def compute_features_offline(player_id: str, history: dict) -> dict:
     chargebacks_30d  = [t for t in txns_30d if t.get("is_chargeback")]
     chargeback_rate  = len(chargebacks_30d) / max(len(deposits_30d), 1)
 
+    devices = sorted({t.get("device_id") for t in txns_90d if t.get("device_id")})
+    banks = sorted({t.get("bank_id") for t in txns_90d if t.get("bank_id")})
+    cluster_seed = devices + banks
+    cluster_id = (
+        f"cluster:{hashlib.sha1('|'.join(cluster_seed).encode()).hexdigest()[:12]}"
+        if cluster_seed
+        else f"solo:{player_id}"
+    )
+
     return {
         "player_id":             player_id,
         "feature_version":       2,
         "computed_at":           now.isoformat(),
         "deposit_velocity":      float(dep_velocity),
+        "deposit_count_1h":      len([t for t in txns if t.get("txn_type") == "DEPOSIT" and in_win(t, now - _td(hours=1))]),
         "deposit_count_24h":     len(deposits_24h),
         "deposit_sum_24h":       float(sum(t.get("amount", 0) for t in deposits_24h)),
+        "deposit_sum_90d":       float(sum(t.get("amount", 0) for t in deposits_90d)),
         "unique_instruments_7d": unique_instruments_7d,
+        "unique_instruments_used_7d": unique_instruments_7d,
         "night_activity_ratio":  float(night_ratio),
         "multi_currency_flag":   multi_currency,
         "win_loss_ratio_30d":    float(win_loss_30d),
         "chargeback_rate_30d":   float(chargeback_rate),
+        "avg_time_between_deposit_and_withdrawal_7d": None,
+        "bonus_to_real_money_ratio_30d": 0.0,
+        "shared_device_score":   0.0,
+        "shared_instrument_score": 0.0,
+        "cluster_id":            cluster_id,
+        "cluster_size":          max(len(devices), len(banks), 1),
         "txn_count_24h":         len(txns_24h),
     }

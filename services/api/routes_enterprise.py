@@ -991,6 +991,52 @@ async def get_player_features_history(
         return []
 
 
+@enterprise_router.get("/feature-store/players/{player_id}/history", tags=["feature-store"])
+async def get_feature_store_player_history(
+    player_id: str,
+    from_date: Optional[datetime] = Query(None, alias="from"),
+    to_date: Optional[datetime] = Query(None, alias="to"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Canonical feature-store history endpoint backed by Gold snapshots."""
+    player = await db.get(Player, player_id)
+    if not player or player.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Player não encontrado")
+
+    if from_date and to_date and from_date > to_date:
+        raise HTTPException(400, "Parâmetro 'from' não pode ser maior que 'to'")
+
+    stmt = select(FeatureSnapshot).where(
+        FeatureSnapshot.player_id == player_id,
+        _tenant_filter(FeatureSnapshot, current_user.tenant_id),
+    )
+    if from_date:
+        stmt = stmt.where(FeatureSnapshot.created_at >= from_date)
+    if to_date:
+        stmt = stmt.where(FeatureSnapshot.created_at <= to_date)
+    stmt = stmt.order_by(FeatureSnapshot.snapshot_date.desc())
+
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    return {
+        "player_id": player_id,
+        "from": from_date.isoformat() if from_date else None,
+        "to": to_date.isoformat() if to_date else None,
+        "count": len(rows),
+        "items": [
+            {
+                "id": row.id,
+                "snapshot_date": str(row.feature_date),
+                "created_at": row.created_at,
+                "features": row.features,
+                "drift_score": row.drift_score,
+            }
+            for row in rows
+        ],
+    }
+
+
 @enterprise_router.get("/players/{player_id}/features/current", tags=["players"])
 async def get_player_features_current(
     player_id: str,
