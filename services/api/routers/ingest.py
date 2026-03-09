@@ -646,6 +646,12 @@ async def reprocess_job(
         if not mc or mc.tenant_id != current_user.tenant_id:
             raise HTTPException(404, "mapping_version_id inválido para este tenant")
 
+    producer = await get_producer()
+    if not producer:
+        raise HTTPException(503, "Kafka indisponível para reprocessamento")
+    if not job.file_path:
+        raise HTTPException(409, "Job original sem arquivo Bronze para reprocessamento")
+
     new_job = IngestJob(
         tenant_id=job.tenant_id,
         source_system=job.source_system,
@@ -664,30 +670,29 @@ async def reprocess_job(
     await db.commit()
     await db.refresh(new_job)
 
-    producer = await get_producer()
-    if producer and job.file_path:
-        msg = {
-            "job_id": new_job.id,
-            "tenant_id": current_user.tenant_id,
-            "source_system": new_job.source_system,
-            "mapping_config_id": new_job.mapping_config_id,
-            "mapping_version_id": new_job.mapping_version_id,
-            "file_name": new_job.file_name,
-            "file_path": new_job.file_path,
-        }
-        ok = await _publish_with_retries(
-            producer=producer,
-            topic="ingest.jobs",
-            payload=msg,
-            key=new_job.id,
-            tenant_id=current_user.tenant_id,
-            source_system=new_job.source_system,
-            context={"endpoint": "/ingest/jobs/{job_id}/reprocess", "job_id": new_job.id},
-        )
-        if not ok:
-            raise HTTPException(503, "Falha ao enfileirar reprocessamento após retries; enviado para DLQ")
-    elif producer and not job.file_path:
-        raise HTTPException(409, "Job original sem arquivo Bronze para reprocessamento")
+    msg = {
+        "job_id": new_job.id,
+        "tenant_id": current_user.tenant_id,
+        "source_system": new_job.source_system,
+        "mapping_config_id": new_job.mapping_config_id,
+        "mapping_version_id": new_job.mapping_version_id,
+        "file_name": new_job.file_name,
+        "file_path": new_job.file_path,
+    }
+    ok = await _publish_with_retries(
+        producer=producer,
+        topic="ingest.jobs",
+        payload=msg,
+        key=new_job.id,
+        tenant_id=current_user.tenant_id,
+        source_system=new_job.source_system,
+        context={"endpoint": "/ingest/jobs/{job_id}/reprocess", "job_id": new_job.id},
+    )
+    if not ok:
+        new_job.status = "FAILED"
+        new_job.error_message = "enqueue_failed_after_retries"
+        await db.commit()
+        raise HTTPException(503, "Falha ao enfileirar reprocessamento após retries; enviado para DLQ")
 
     return {"job_id": new_job.id, "status": "QUEUED"}
 
