@@ -63,6 +63,7 @@ class Player(Base):
     status                  = Column(String(20), nullable=False, default="ACTIVE")
     registered_since        = Column(Date)
     risk_score              = Column(Numeric(5, 4), nullable=False, default=0.0)
+    risk_band               = Column(String(10), nullable=False, default="LOW")  # LOW / MEDIUM / HIGH
     last_scored_at          = Column(DateTime(timezone=True))
     created_at              = Column(DateTime(timezone=True), server_default=func.now())
     updated_at              = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -178,21 +179,28 @@ class RuleDefinition(Base):
 class CompoundRule(Base):
     __tablename__ = "compound_rules"
 
-    id             = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    tenant_id      = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    name           = Column(Text, nullable=False)
-    description    = Column(Text)
-    status         = Column(String(20), nullable=False, default="ACTIVE")
-    operator       = Column(String(10), nullable=False, default="AND")
-    n_threshold    = Column(Integer)
-    child_rule_ids = Column(JSONB, nullable=False, default=[])
-    severity_mode  = Column(String(10), nullable=False, default="MAX")
-    fixed_severity = Column(String(10))
-    version        = Column(Integer, nullable=False, default=1)
-    created_by     = Column(UUID(as_uuid=False), ForeignKey("users.id"))
-    updated_by     = Column(UUID(as_uuid=False), ForeignKey("users.id"))
-    created_at     = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at     = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    id                   = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id            = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    name                 = Column(Text, nullable=False)
+    description          = Column(Text)
+    status               = Column(String(20), nullable=False, default="ACTIVE")
+    # Modelo canônico unificado (garante compatibilidade com rules_engine)
+    operator             = Column(String(10), nullable=False, default="AND")     # AND / OR / N_OF_M
+    n_threshold          = Column(Integer)                                        # para N_OF_M
+    child_rule_ids       = Column(JSONB, nullable=False, default=[])              # alias legado
+    severity_mode        = Column(String(10), nullable=False, default="MAX")     # MAX / FIXED / WEIGHTED
+    fixed_severity       = Column(String(10))
+    # Campos usados pelo rules_engine via SQL
+    logic                = Column(String(10))                                     # AND / OR / N_OF_M (sinônimo de operator)
+    component_rule_ids   = Column(JSONB, default=[])                              # lista de rule_definition IDs
+    score_weights        = Column(JSONB, default={})                              # {rule_id: weight}
+    min_score_threshold  = Column(Numeric(5, 4))
+    is_active            = Column(Boolean, nullable=False, default=True)
+    version              = Column(Integer, nullable=False, default=1)
+    created_by           = Column(UUID(as_uuid=False), ForeignKey("users.id"))
+    updated_by           = Column(UUID(as_uuid=False), ForeignKey("users.id"))
+    created_at           = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at           = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class RuleMacro(Base):
@@ -231,10 +239,14 @@ class PlayerListEntry(Base):
 
     id                 = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
     list_id            = Column(UUID(as_uuid=False), ForeignKey("player_lists.id", ondelete="CASCADE"), nullable=False)
+    player_list_id     = Column(UUID(as_uuid=False), ForeignKey("player_lists.id", ondelete="CASCADE"))  # alias para compatibilidade
     tenant_id          = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     player_id          = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="SET NULL"))
     external_player_id = Column(Text)
     cpf_hash           = Column(Text)
+    # `value` é o campo usado pelo rules_engine para is_in_list(); pode ser CPF hash, external_id, etc.
+    value              = Column(Text)
+    value_type         = Column(Text)  # CPF_HASH / EXTERNAL_ID / CUSTOM
     notes              = Column(Text)
     added_by           = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     added_at           = Column(DateTime(timezone=True), server_default=func.now())
@@ -286,12 +298,15 @@ class Case(Base):
     severity         = Column(String(20), nullable=False, default="HIGH")
     priority         = Column(String(20), nullable=False, default="MEDIUM")
     sla_due_at       = Column(DateTime(timezone=True))
-    assigned_to      = Column(UUID(as_uuid=False), ForeignKey("users.id"))
-    created_by       = Column(UUID(as_uuid=False), ForeignKey("users.id"))
-    closed_by        = Column(UUID(as_uuid=False), ForeignKey("users.id"))
-    closed_at        = Column(DateTime(timezone=True))
-    created_at       = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at       = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    assigned_to          = Column(UUID(as_uuid=False), ForeignKey("users.id"))
+    created_by           = Column(UUID(as_uuid=False), ForeignKey("users.id"))
+    closed_by            = Column(UUID(as_uuid=False), ForeignKey("users.id"))
+    closed_at            = Column(DateTime(timezone=True))
+    auto_created         = Column(Boolean, nullable=False, default=False)  # criado automaticamente pelo sistema
+    auto_created_reason  = Column(Text)   # ex: 'scoring.alerts: score=0.92, severity=CRITICAL'
+    source_alert_id      = Column(UUID(as_uuid=False), ForeignKey("alerts.id", use_alter=True, name="fk_cases_source_alert"))
+    created_at           = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at           = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class CaseEvent(Base):
@@ -366,18 +381,24 @@ class ModelRegistry(Base):
     model_type           = Column(String(20), nullable=False, default="ANOMALY")
     model_version        = Column(Text, nullable=False)
     algorithm            = Column(Text, nullable=False)
-    artifact_path        = Column(Text, nullable=False)
+    # artifact_path = nome canônico no ORM; artifact_uri = alias usado pelo ml_service (ambos mapeiam para a mesma coluna via migration)
+    artifact_path        = Column(Text)       # caminho/URI do artefato (pode ser MinIO path)
+    artifact_uri         = Column(Text)       # alias usado pelo ml_service (mesmo dado)
     dataset_window_start = Column(DateTime(timezone=True))
     dataset_window_end   = Column(DateTime(timezone=True))
     dataset_window_days  = Column(Integer)
-    sample_count         = Column(Integer)
+    sample_count         = Column(Integer)    # alias legado
+    training_rows        = Column(Integer)    # usado pelo ml_service
+    feature_columns      = Column(JSONB, default=[])   # lista de features usadas no treino
     metrics              = Column(JSONB, nullable=False, default={})
-    active               = Column(Boolean, nullable=False, default=False)
+    active               = Column(Boolean, nullable=False, default=False)   # alias legado
+    is_active            = Column(Boolean, nullable=False, default=False)   # usado pelo ml_service
     status               = Column(String(20), nullable=False, default="STAGING")
     is_challenger        = Column(Boolean, nullable=False, default=False)
     champion_id          = Column(UUID(as_uuid=False), ForeignKey("model_registry.id"))
     promoted_by          = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     promoted_at          = Column(DateTime(timezone=True))
+    trained_by           = Column(Text)   # usuário/serviço que treinou
     trained_at           = Column(DateTime(timezone=True), server_default=func.now())
     created_at           = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -404,15 +425,27 @@ class ScoringConfig(Base):
     rule_weight                 = Column(Numeric(4, 3), nullable=False, default=0.4)
     ml_weight                   = Column(Numeric(4, 3), nullable=False, default=0.4)
     network_weight              = Column(Numeric(4, 3), nullable=False, default=0.2)
-    auto_case_threshold         = Column(Numeric(5, 4), nullable=False, default=0.75)
-    sla_critical_hours          = Column(Integer, nullable=False, default=4)
-    sla_high_hours              = Column(Integer, nullable=False, default=24)
-    sla_medium_hours            = Column(Integer, nullable=False, default=72)
-    sla_low_hours               = Column(Integer, nullable=False, default=168)
-    ingest_rate_limit_tpm       = Column(Integer, nullable=False, default=1000)
-    data_retention_raw_years    = Column(Integer, nullable=False, default=5)
-    data_retention_silver_years = Column(Integer, nullable=False, default=5)
-    data_retention_gold_years   = Column(Integer, nullable=False, default=3)
+    auto_case_threshold             = Column(Numeric(5, 4), nullable=False, default=0.75)
+    # Thresholds de banda de risco (configuráveis por tenant)
+    risk_band_low_threshold         = Column(Numeric(5, 4), nullable=False, default=0.35)  # abaixo disso → LOW
+    risk_band_high_threshold        = Column(Numeric(5, 4), nullable=False, default=0.70)  # acima disso → HIGH
+    # Compatibilidade renda/volume
+    income_volume_ratio_threshold   = Column(Numeric(5, 2), nullable=False, default=1.5)   # ex: 1.5x renda mensal
+    sla_critical_hours              = Column(Integer, nullable=False, default=4)
+    sla_high_hours                  = Column(Integer, nullable=False, default=24)
+    sla_medium_hours                = Column(Integer, nullable=False, default=72)
+    sla_low_hours                   = Column(Integer, nullable=False, default=168)
+    ingest_rate_limit_tpm           = Column(Integer, nullable=False, default=1000)
+    data_retention_raw_years        = Column(Integer, nullable=False, default=5)
+    data_retention_silver_years     = Column(Integer, nullable=False, default=5)
+    data_retention_gold_years       = Column(Integer, nullable=False, default=3)
+    # Alert severity thresholds (score 0-100)
+    low_threshold               = Column(Numeric(5, 2), nullable=False, default=30.0)
+    medium_threshold            = Column(Numeric(5, 2), nullable=False, default=60.0)
+    high_threshold              = Column(Numeric(5, 2), nullable=False, default=80.0)
+    critical_threshold          = Column(Numeric(5, 2), nullable=False, default=95.0)
+    is_active                   = Column(Boolean, nullable=False, default=True)
+    data_retention_days         = Column(Integer, nullable=False, default=1825)
     updated_by                  = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     created_at                  = Column(DateTime(timezone=True), server_default=func.now())
     updated_at                  = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

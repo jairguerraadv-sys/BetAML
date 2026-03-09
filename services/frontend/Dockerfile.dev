@@ -1,0 +1,13 @@
+FROM node:20-alpine
+WORKDIR /app
+
+# Instala dependências primeiro (cache layer)
+COPY package.json package-lock.json* ./
+RUN npm install
+
+# Source será montado via volume pelo docker-compose
+EXPOSE 3000
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=development
+
+CMD ["npm", "run", "dev"]

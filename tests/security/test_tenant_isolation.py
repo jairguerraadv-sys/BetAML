@@ -22,14 +22,21 @@ import httpx
 
 BASE_URL = os.getenv("BETAML_API_URL", "http://localhost:8000")
 
+RUN_INTEGRATION = os.getenv("TEST_STACK_UP", "0") == "1"
+skip_unless_stack = pytest.mark.skipif(
+    not RUN_INTEGRATION,
+    reason="Stack não disponível. Use TEST_STACK_UP=1 para rodar testes de segurança.",
+)
+
 # Credentials — override via environment for CI
+# Nomes de usuário gerados pelo seeds.py:  analyst_a / analyst_b
 TENANT_A = {
-    "username": os.getenv("TENANT_A_EMAIL", "analyst@betaml.io"),
+    "username": os.getenv("TENANT_A_USER", "analyst_a"),
     "password": os.getenv("TENANT_A_PASS", "analyst123"),
 }
 TENANT_B = {
-    "username": os.getenv("TENANT_B_EMAIL", "analyst2@betaml2.io"),
-    "password": os.getenv("TENANT_B_PASS", "analyst456"),
+    "username": os.getenv("TENANT_B_USER", "analyst_b"),
+    "password": os.getenv("TENANT_B_PASS", "analyst123"),
 }
 
 
@@ -37,11 +44,12 @@ TENANT_B = {
 
 @pytest.fixture(scope="module")
 def client_a():
+    if not RUN_INTEGRATION:
+        pytest.skip("Stack não disponível")
     with httpx.Client(base_url=BASE_URL, timeout=10) as c:
-        r = c.post("/auth/login", data=TENANT_A,
-                   headers={"Content-Type": "application/x-www-form-urlencoded"})
+        r = c.post("/auth/login", json=TENANT_A)
         if r.status_code != 200:
-            pytest.skip(f"Tenant A login failed: {r.status_code}")
+            pytest.skip(f"Tenant A login failed: {r.status_code} — {r.text}")
         token = r.json()["access_token"]
         c.headers["Authorization"] = f"Bearer {token}"
         yield c
@@ -49,11 +57,12 @@ def client_a():
 
 @pytest.fixture(scope="module")
 def client_b():
+    if not RUN_INTEGRATION:
+        pytest.skip("Stack não disponível")
     with httpx.Client(base_url=BASE_URL, timeout=10) as c:
-        r = c.post("/auth/login", data=TENANT_B,
-                   headers={"Content-Type": "application/x-www-form-urlencoded"})
+        r = c.post("/auth/login", json=TENANT_B)
         if r.status_code != 200:
-            pytest.skip(f"Tenant B login failed: {r.status_code}")
+            pytest.skip(f"Tenant B login failed: {r.status_code} — {r.text}")
         token = r.json()["access_token"]
         c.headers["Authorization"] = f"Bearer {token}"
         yield c
@@ -73,24 +82,28 @@ def _first_id(client: httpx.Client, endpoint: str) -> str | None:
 
 # ── Unauthenticated access ────────────────────────────────────────────────────
 
+@skip_unless_stack
 def test_unauthenticated_alerts_blocked():
     with httpx.Client(base_url=BASE_URL, timeout=10) as c:
         r = c.get("/alerts")
         assert r.status_code in (401, 403), f"Expected 401/403, got {r.status_code}"
 
 
+@skip_unless_stack
 def test_unauthenticated_cases_blocked():
     with httpx.Client(base_url=BASE_URL, timeout=10) as c:
         r = c.get("/cases")
         assert r.status_code in (401, 403)
 
 
+@skip_unless_stack
 def test_unauthenticated_players_blocked():
     with httpx.Client(base_url=BASE_URL, timeout=10) as c:
         r = c.get("/players")
         assert r.status_code in (401, 403)
 
 
+@skip_unless_stack
 def test_unauthenticated_audit_logs_blocked():
     with httpx.Client(base_url=BASE_URL, timeout=10) as c:
         r = c.get("/audit-logs")
@@ -99,6 +112,7 @@ def test_unauthenticated_audit_logs_blocked():
 
 # ── Cross-tenant resource access ──────────────────────────────────────────────
 
+@skip_unless_stack
 def test_tenant_b_cannot_access_tenant_a_alert(client_a, client_b):
     alert_id = _first_id(client_a, "/alerts")
     if not alert_id:
@@ -109,6 +123,7 @@ def test_tenant_b_cannot_access_tenant_a_alert(client_a, client_b):
     )
 
 
+@skip_unless_stack
 def test_tenant_b_cannot_access_tenant_a_case(client_a, client_b):
     case_id = _first_id(client_a, "/cases")
     if not case_id:
@@ -117,6 +132,7 @@ def test_tenant_b_cannot_access_tenant_a_case(client_a, client_b):
     assert resp.status_code in (403, 404)
 
 
+@skip_unless_stack
 def test_tenant_b_cannot_access_tenant_a_player(client_a, client_b):
     player_id = _first_id(client_a, "/players")
     if not player_id:
@@ -125,6 +141,7 @@ def test_tenant_b_cannot_access_tenant_a_player(client_a, client_b):
     assert resp.status_code in (403, 404)
 
 
+@skip_unless_stack
 def test_tenant_a_cannot_access_tenant_b_alert(client_a, client_b):
     alert_id = _first_id(client_b, "/alerts")
     if not alert_id:
@@ -133,6 +150,7 @@ def test_tenant_a_cannot_access_tenant_b_alert(client_a, client_b):
     assert resp.status_code in (403, 404)
 
 
+@skip_unless_stack
 def test_tenant_b_cannot_list_tenant_a_api_keys(client_b):
     """Admin endpoints must return only the caller's tenant keys."""
     resp_b = client_b.get("/admin/api-keys")
@@ -146,6 +164,7 @@ def test_tenant_b_cannot_list_tenant_a_api_keys(client_b):
 
 # ── IDOR via predictable UUIDs ────────────────────────────────────────────────
 
+@skip_unless_stack
 def test_random_uuid_alert_returns_404_not_403(client_a):
     """A non-existent resource should return 404, not 500."""
     fake_id = str(uuid.uuid4())
@@ -153,6 +172,7 @@ def test_random_uuid_alert_returns_404_not_403(client_a):
     assert resp.status_code in (404, 403), f"Unexpected {resp.status_code}"
 
 
+@skip_unless_stack
 def test_random_uuid_case_returns_404(client_a):
     fake_id = str(uuid.uuid4())
     resp = client_a.get(f"/cases/{fake_id}")

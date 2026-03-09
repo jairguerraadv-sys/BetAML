@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # ─── DATABASES ────────────────────────────────────
   postgres:
@@ -15,6 +13,9 @@ services:
       - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
       - ./migration_v2.sql:/docker-entrypoint-initdb.d/02-migration.sql
       - ./migration_v3.sql:/docker-entrypoint-initdb.d/03-migration.sql
+      - ./migration_v4.sql:/docker-entrypoint-initdb.d/04-migration.sql
+      - ./migration_v5.sql:/docker-entrypoint-initdb.d/05-migration.sql
+      - ./migration_v6.sql:/docker-entrypoint-initdb.d/06-migration.sql
     ports:
       - "5432:5432"
     healthcheck:
@@ -71,7 +72,7 @@ services:
       - "8123:8123"
       - "9900:9000"   # porta host diferente para evitar conflito com MinIO
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -162,19 +163,23 @@ services:
       CLICKHOUSE_HOST:         clickhouse
       CLICKHOUSE_PORT:         "9000"
       CLICKHOUSE_DB:           betaml
+      # PII encryption key — ALTERE em staging/prod con chave gerada com:
+      # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      PII_ENCRYPTION_KEY:      ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5
       ENVIRONMENT:             development
     ports:
       - "8000:8000"
     volumes:
       - ../services/api:/app
+      - ../libs:/app/libs
     command: >
       bash -c "python seeds.py && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     networks: [betaml-net]
 
   stream-processor:
     build:
-      context: ../services/stream_processor
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/stream_processor/Dockerfile
     container_name: betaml-stream-processor
     depends_on:
       redpanda: {condition: service_healthy}
@@ -199,8 +204,8 @@ services:
 
   rules-engine:
     build:
-      context: ../services/rules_engine
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/rules_engine/Dockerfile
     container_name: betaml-rules-engine
     depends_on:
       redpanda: {condition: service_healthy}
@@ -219,8 +224,8 @@ services:
 
   ml-service:
     build:
-      context: ../services/ml_service
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/ml_service/Dockerfile
     container_name: betaml-ml-service
     depends_on:
       postgres: {condition: service_healthy}
@@ -244,9 +249,8 @@ services:
   frontend:
     build:
       context: ../services/frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: betaml-frontend
-
     depends_on: [api]
     environment:
       NEXT_PUBLIC_API_URL:     http://localhost:8000
@@ -257,7 +261,6 @@ services:
       - ../services/frontend:/app
       - /app/node_modules
       - /app/.next
-    command: npm run dev
     networks: [betaml-net]
 
   prometheus:

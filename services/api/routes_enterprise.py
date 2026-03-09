@@ -32,6 +32,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select, update, func, and_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
 
 # local imports (same package as main.py)
 from database import get_db               # async session factory
@@ -54,11 +55,14 @@ from libs.schemas import (
     PlayerListCreate,
     PlayerListEntryBulk,
     PlayerListOut,
+    PreviewBandCount,
     ReprocessJobIn,
     RuleMacroCreate,
     RuleMacroOut,
     ScoringConfigOut,
     ScoringConfigUpdate,
+    ScoringPreviewIn,
+    ScoringPreviewOut,
     SystemFlagOut,
     SystemFlagUpdate,
 )
@@ -89,6 +93,7 @@ from libs.mapping import activate_mapping_version
 enterprise_router = APIRouter(tags=["enterprise"])
 
 UTC = timezone.utc
+logger = structlog.get_logger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -102,20 +107,21 @@ def _tenant_filter(model, tenant_id: str):
 async def _write_audit(
     db: AsyncSession,
     tenant_id: str,
-    actor: str,
+    actor: str,          # user_id (UUID string) do usu\u00e1rio que realizou a a\u00e7\u00e3o
     action: str,
     resource_type: str,
     resource_id: str | None,
     details: dict | None = None,
-):
+) -> None:
+    """Grava entrada de audit log usando o schema can\u00f4nico (user_id/entity_type/entity_id/after)."""
     db.add(
         AuditLog(
             tenant_id=tenant_id,
-            actor=actor,
+            user_id=actor,                                         # actor \u2192 user_id
             action=action,
-            resource_type=resource_type,
-            resource_id=str(resource_id) if resource_id else None,
-            details=details or {},
+            entity_type=resource_type,                             # resource_type \u2192 entity_type
+            entity_id=str(resource_id) if resource_id else None,  # resource_id \u2192 entity_id
+            after=details or {},                                   # details \u2192 after
         )
     )
 
@@ -126,7 +132,7 @@ async def _write_audit(
 
 @enterprise_router.get("/ingest/jobs/{job_id}", tags=["ingest"])
 async def get_ingest_job(
-    job_id: int,
+    job_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -154,7 +160,7 @@ async def get_ingest_job(
 
 @enterprise_router.post("/ingest/jobs/{job_id}/reprocess", status_code=202, tags=["ingest"])
 async def reprocess_ingest_job(
-    job_id: int,
+    job_id: str,
     body: ReprocessJobIn,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
@@ -182,7 +188,7 @@ async def reprocess_ingest_job(
     )
     db.add(new_job)
     await db.flush()
-    await _write_audit(db, current_user.tenant_id, current_user.username, "REPROCESS_JOB",
+    await _write_audit(db, current_user.tenant_id, current_user.id, "REPROCESS_JOB",
                        "IngestJob", job_id, {"reason": body.reason, "new_job_id": new_job.id})
     await db.commit()
     return {"new_job_id": new_job.id, "queued_at": datetime.now(UTC).isoformat()}
@@ -229,7 +235,7 @@ async def resolve_ingest_error(
     err.resolution_status = "resolved"
     err.resolution_note   = body.resolution_note
     err.resolved_at       = datetime.now(UTC)
-    err.resolved_by       = current_user.username
+    err.resolved_by       = current_user.id
     await db.commit()
     return {"status": "resolved"}
 
@@ -315,7 +321,7 @@ async def rollback_mapping(
         raise HTTPException(404, "Mapping version not found")
 
     await activate_mapping_version(db, mapping_id, version_number)
-    await _write_audit(db, current_user.tenant_id, current_user.username,
+    await _write_audit(db, current_user.tenant_id, current_user.id,
                        "ROLLBACK_MAPPING", "MappingConfig", mapping_id,
                        {"version_number": version_number})
     await db.commit()
@@ -344,13 +350,13 @@ async def set_maintenance_mode(
             tenant_id=current_user.tenant_id,
             flag_name="maintenance_mode",
             flag_value=val,
-            updated_by=current_user.username,
+            updated_by=current_user.id,
         ))
     else:
         flag.flag_value = val
-        flag.updated_by = current_user.username
+        flag.updated_by = current_user.id
         flag.updated_at = datetime.now(UTC)
-    await _write_audit(db, current_user.tenant_id, current_user.username,
+    await _write_audit(db, current_user.tenant_id, current_user.id,
                        "SET_MAINTENANCE_MODE", "SystemFlag", None, {"enabled": enabled})
     await db.commit()
     return {"maintenance_mode": enabled}
@@ -390,7 +396,7 @@ async def create_api_key(
     )
     db.add(key)
     await db.flush()
-    await _write_audit(db, current_user.tenant_id, current_user.username,
+    await _write_audit(db, current_user.tenant_id, current_user.id,
                        "CREATE_API_KEY", "ApiKey", key.id, {"name": body.name})
     await db.commit()
     return {
@@ -412,7 +418,7 @@ async def revoke_api_key(
     if row is None:
         raise HTTPException(404)
     row.is_active = False
-    await _write_audit(db, current_user.tenant_id, current_user.username,
+    await _write_audit(db, current_user.tenant_id, current_user.id,
                        "REVOKE_API_KEY", "ApiKey", key_id)
     await db.commit()
 
@@ -456,7 +462,7 @@ async def create_player_list(
     )
     db.add(pl)
     await db.flush()
-    await _write_audit(db, current_user.tenant_id, current_user.username,
+    await _write_audit(db, current_user.tenant_id, current_user.id,
                        "CREATE_PLAYER_LIST", "PlayerList", pl.id, {"name": body.name})
     await db.commit()
     return {"id": pl.id, "name": pl.name}
@@ -562,7 +568,7 @@ async def create_compound_rule(
     )
     db.add(rule)
     await db.flush()
-    await _write_audit(db, current_user.tenant_id, current_user.username,
+    await _write_audit(db, current_user.tenant_id, current_user.id,
                        "CREATE_COMPOUND_RULE", "CompoundRule", rule.id)
     await db.commit()
     return rule
@@ -617,7 +623,7 @@ async def create_macro(
     )
     db.add(macro)
     await db.flush()
-    await _write_audit(db, current_user.tenant_id, current_user.username,
+    await _write_audit(db, current_user.tenant_id, current_user.id,
                        "CREATE_MACRO", "RuleMacro", macro.id)
     await db.commit()
     return macro
@@ -651,11 +657,10 @@ async def get_scoring_config(
     row = (await db.execute(
         select(ScoringConfig).where(
             ScoringConfig.tenant_id == current_user.tenant_id,
-            ScoringConfig.is_active == True,
         )
     )).scalar_one_or_none()
     if row is None:
-        raise HTTPException(404, "No active ScoringConfig found. Run migration_v2 seed.")
+        raise HTTPException(404, "No ScoringConfig found. Run seeds.")
     return row
 
 
@@ -668,7 +673,6 @@ async def update_scoring_config(
     row = (await db.execute(
         select(ScoringConfig).where(
             ScoringConfig.tenant_id == current_user.tenant_id,
-            ScoringConfig.is_active == True,
         )
     )).scalar_one_or_none()
     if row is None:
@@ -676,11 +680,80 @@ async def update_scoring_config(
     for field, val in body.model_dump(exclude_none=True).items():
         setattr(row, field, val)
     row.updated_at = datetime.now(UTC)
-    await _write_audit(db, current_user.tenant_id, current_user.username,
+    await _write_audit(db, current_user.tenant_id, current_user.id,
                        "UPDATE_SCORING_CONFIG", "ScoringConfig", row.id,
                        body.model_dump(exclude_none=True))
     await db.commit()
     return row
+
+
+@enterprise_router.post("/scoring-config/preview", response_model=ScoringPreviewOut, tags=["admin"])
+async def preview_scoring_config(
+    body: ScoringPreviewIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Simulate how many alerts would be generated with the proposed config (last 30d)."""
+    from datetime import timedelta
+
+    # Load current config as baseline
+    current_cfg = (await db.execute(
+        select(ScoringConfig).where(
+            ScoringConfig.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if current_cfg is None:
+        raise HTTPException(404, "No ScoringConfig found")
+
+    # Proposed thresholds (fall back to current if not provided)
+    proposed = ScoringPreviewIn(
+        low_threshold=body.low_threshold       if body.low_threshold       is not None else current_cfg.low_threshold,
+        medium_threshold=body.medium_threshold if body.medium_threshold    is not None else current_cfg.medium_threshold,
+        high_threshold=body.high_threshold     if body.high_threshold      is not None else current_cfg.high_threshold,
+        critical_threshold=body.critical_threshold if body.critical_threshold is not None else current_cfg.critical_threshold,
+    )
+
+    since = datetime.now(UTC) - timedelta(days=30)
+
+    # Fetch recent alerts with anomaly scores for this tenant
+    result = await db.execute(
+        select(Alert.anomaly_score, Alert.severity).where(
+            Alert.tenant_id == current_user.tenant_id,
+            Alert.created_at >= since,
+            Alert.anomaly_score != None,
+        ).limit(5000)
+    )
+    rows = result.all()
+    total = len(rows)
+
+    def _bucket(score: float, cfg: ScoringPreviewIn) -> str | None:
+        s = score * 100
+        if s >= (cfg.critical_threshold or 95):  return "critical"
+        if s >= (cfg.high_threshold or 80):      return "high"
+        if s >= (cfg.medium_threshold or 60):    return "medium"
+        if s >= (cfg.low_threshold or 30):       return "low"
+        return None
+
+    cur = PreviewBandCount()
+    prop = PreviewBandCount()
+    for row_score, row_sev in rows:
+        fs = float(row_score) if row_score is not None else None
+        if fs is None:
+            continue
+        # Current distribution (use existing severity label as proxy)
+        sev = (row_sev or "").upper()
+        if sev == "CRITICAL":  cur.critical += 1
+        elif sev == "HIGH":    cur.high += 1
+        elif sev == "MEDIUM":  cur.medium += 1
+        elif sev == "LOW":     cur.low += 1
+        # Proposed distribution (recalculate)
+        b = _bucket(fs, proposed)
+        if b == "critical":  prop.critical += 1
+        elif b == "high":    prop.high += 1
+        elif b == "medium":  prop.medium += 1
+        elif b == "low":     prop.low += 1
+
+    return ScoringPreviewOut(current=cur, proposed=prop, total_alerts_30d=total)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -703,9 +776,9 @@ async def label_alert(
     if alert is None:
         raise HTTPException(404)
     alert.label        = body.label
-    alert.labeled_by   = current_user.username
+    alert.labeled_by   = current_user.id
     alert.labeled_at   = datetime.now(UTC)
-    await _write_audit(db, current_user.tenant_id, current_user.username,
+    await _write_audit(db, current_user.tenant_id, current_user.id,
                        "LABEL_ALERT", "Alert", alert_id, {"label": body.label})
     await db.commit()
     # Trigger async feedback loop (Kafka topic or background task)
@@ -819,7 +892,7 @@ async def right_to_erasure(
     player.status     = "ERASED"
 
     await _write_audit(
-        db, current_user.tenant_id, current_user.username,
+        db, current_user.tenant_id, current_user.id,
         "LGPD_ERASURE", "Player", player_id,
         {"reason": "right_to_erasure", "anon_suffix": anon_suffix},
     )
@@ -840,7 +913,7 @@ async def list_notifications(
 ):
     stmt = select(Notification).where(
         _tenant_filter(Notification, current_user.tenant_id),
-        Notification.user_id == current_user.username,
+        Notification.user_id == current_user.id,
     )
     if unread_only:
         stmt = stmt.where(Notification.is_read == False)
@@ -859,7 +932,7 @@ async def mark_notification_read(
         select(Notification).where(
             Notification.id == notif_id,
             _tenant_filter(Notification, current_user.tenant_id),
-            Notification.user_id == current_user.username,
+            Notification.user_id == current_user.id,
         )
     )).scalar_one_or_none()
     if n is None:
@@ -878,7 +951,7 @@ async def mark_all_read(
     await db.execute(
         update(Notification).where(
             _tenant_filter(Notification, current_user.tenant_id),
-            Notification.user_id == current_user.username,
+            Notification.user_id == current_user.id,
             Notification.is_read == False,
         ).values(is_read=True, read_at=datetime.now(UTC))
     )
@@ -898,29 +971,50 @@ async def get_player_features_history(
     current_user: User = Depends(get_current_user),
 ):
     """Return daily feature snapshots for a player (Gold layer)."""
+    # Tenant ownership check first
+    player = await db.get(Player, player_id)
+    if not player or player.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Player não encontrado")
+
     from_dt = datetime.now(UTC) - timedelta(days=days)
-    result = await db.execute(
-        select(FeatureSnapshot).where(
-            FeatureSnapshot.player_id == player_id,
-            _tenant_filter(FeatureSnapshot, current_user.tenant_id),
-            FeatureSnapshot.created_at >= from_dt,
-        ).order_by(FeatureSnapshot.snapshot_date)
-    )
-    return result.scalars().all()
+    try:
+        result = await db.execute(
+            select(FeatureSnapshot).where(
+                FeatureSnapshot.player_id == player_id,
+                _tenant_filter(FeatureSnapshot, current_user.tenant_id),
+                FeatureSnapshot.created_at >= from_dt,
+            ).order_by(FeatureSnapshot.snapshot_date)
+        )
+        return result.scalars().all()
+    except Exception as exc:
+        logger.warning("feature_snapshot_query_error", error=str(exc), player_id=player_id)
+        return []
 
 
 @enterprise_router.get("/players/{player_id}/features/current", tags=["players"])
 async def get_player_features_current(
     player_id: str,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Return current online features from Redis."""
-    from libs.clients import get_redis_client
-    redis = await get_redis_client()
-    key = f"betaml:{current_user.tenant_id}:features:{player_id}"
-    data = await redis.hgetall(key)
+    # Tenant isolation: verify player belongs to caller's tenant
+    player = await db.get(Player, player_id)
+    if not player or player.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Player não encontrado")
+
+    try:
+        import redis.asyncio as aioredis
+        from config import settings as _settings
+        _redis = aioredis.from_url(_settings.redis_url, decode_responses=True)
+        key = f"betaml:{current_user.tenant_id}:features:{player_id}"
+        data = await _redis.hgetall(key)
+        await _redis.aclose()
+    except Exception:
+        raise HTTPException(404, "Nenhuma feature encontrada para este player. Pode ainda não ter transacionado.")
+
     if not data:
-        raise HTTPException(404, "No cached features found for player. May not have transacted yet.")
+        raise HTTPException(404, "Nenhuma feature encontrada para este player. Pode ainda não ter transacionado.")
     return {"player_id": player_id, "features": data, "source": "redis"}
 
 
@@ -972,9 +1066,9 @@ async def promote_model(
     )
     model.status        = "champion"
     model.is_challenger = False
-    model.promoted_by   = current_user.username
+    model.promoted_by   = current_user.id
     model.promoted_at   = datetime.now(UTC)
-    await _write_audit(db, current_user.tenant_id, current_user.username,
+    await _write_audit(db, current_user.tenant_id, current_user.id,
                        "PROMOTE_MODEL", "ModelRegistry", model_id,
                        {"model_type": model.model_type})
     await db.commit()
@@ -1013,7 +1107,7 @@ async def upsert_system_flag(
         flag = SystemFlag(tenant_id=current_user.tenant_id, flag_name=flag_name)
         db.add(flag)
     flag.flag_value = body.flag_value
-    flag.updated_by = current_user.username
+    flag.updated_by = current_user.id
     flag.updated_at = datetime.now(UTC)
     await db.commit()
     return flag

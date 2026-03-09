@@ -13,3 +13,4 @@ redis[hiredis]==5.0.4
 minio==7.2.7
 cryptography>=42.0.0
 structlog==24.1.0
+apscheduler==3.10.4

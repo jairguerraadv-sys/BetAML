@@ -233,7 +233,62 @@ def _features_to_vector(features: dict, columns: list[str]) -> np.ndarray:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("ml_service_starting")
+
+    # ── APScheduler: re-training automático diário ────────────────────────────
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
+    from apscheduler.triggers.cron import CronTrigger  # type: ignore
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy import text as _text
+
+    _sched_url = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
+    _sched_engine = create_async_engine(_sched_url, echo=False, pool_size=2, max_overflow=0)
+    _sched_session = async_sessionmaker(_sched_engine, expire_on_commit=False)
+
+    async def _auto_retrain():
+        """
+        Dispara re-training de IsolationForest para todos os tenants ativos.
+        Executado diariamente às 03:00 UTC (hora de baixo tráfego).
+        Ignora tenants com < min_rows amostras (padrão 500).
+        """
+        import asyncio as _asyncio
+        logger.info("scheduler_retrain_start")
+        try:
+            async with _sched_session() as db:
+                rows = await db.execute(_text("SELECT id FROM tenants WHERE active = true"))
+                tenant_ids = [str(r[0]) for r in rows.fetchall()]
+
+            loop = _asyncio.get_event_loop()
+            for tid in tenant_ids:
+                try:
+                    req = TrainRequest(tenant_id=tid, min_rows=500)
+                    # train() é síncrono (CPU-bound) — rodar em thread pool
+                    result = await loop.run_in_executor(None, train, req)
+                    logger.info(
+                        "scheduler_retrain_ok",
+                        tenant_id=tid,
+                        model_id=getattr(result, "model_id", None),
+                        rows=getattr(result, "training_rows", None),
+                    )
+                except Exception as exc:
+                    logger.warning("scheduler_retrain_tenant_failed", tenant_id=tid, error=str(exc))
+        except Exception as exc:
+            logger.error("scheduler_retrain_failed", error=str(exc))
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        _auto_retrain,
+        trigger=CronTrigger(hour=3, minute=0),   # 03:00 UTC diário
+        id="daily_retrain",
+        replace_existing=True,
+        misfire_grace_time=3600,                  # tolera 1h de atraso
+    )
+    scheduler.start()
+    logger.info("scheduler_started", job="daily_retrain", cron="0 3 * * *")
+
     yield
+
+    scheduler.shutdown(wait=False)
+    await _sched_engine.dispose()
     logger.info("ml_service_stopped")
 
 

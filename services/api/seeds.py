@@ -15,7 +15,6 @@ import uuid
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(__file__))
-sys.path.insert(0, "/app/libs")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from sqlalchemy import text
@@ -24,8 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from config import settings
 from auth import hash_password, encrypt_pii
 from models import (
-    Alert, AuditLog, Base, Case, CaseEvent,
-    MappingConfig, Player, RuleDefinition, Tenant, User,
+    Alert, AuditLog, Base, Case, CaseEvent, CompoundRule,
+    MappingConfig, Player, PlayerList, PlayerListEntry, RuleDefinition,
+    ScoringConfig, Tenant, User,
 )
 
 # ──────────────────────────────────────────────────
@@ -243,6 +243,7 @@ async def seed(db: AsyncSession):
                 declared_income_monthly=random.choice([2000, 5000, 10000, 20000, None]),
                 profession=random.choice(["Engineer", "Trader", "Teacher", None]),
                 risk_score=round(random.uniform(0.01, 0.3), 4),
+                risk_band="LOW",
             )
             db.add(player)
             players_list.append(player)
@@ -351,6 +352,9 @@ async def seed(db: AsyncSession):
             description="Caso auto-criado por detecção de padrão de round-tripping",
             severity="CRITICAL",
             status="OPEN",
+            auto_created=True,
+            auto_created_reason="scoring.alerts: anomaly_score=0.91, severity=CRITICAL",
+            source_alert_id=alert4.id,
             created_by=admin_user.id,
         )
         db.add(case)
@@ -365,7 +369,111 @@ async def seed(db: AsyncSession):
             created_by=admin_user.id,
         )
         db.add(evt)
-        print(f"    4 alertas suspeitos + 1 case criado")
+
+        # ScoringConfig por tenant (thresholds configuráveis)
+        scoring_cfg = ScoringConfig(
+            tenant_id=tenant.id,
+            rule_weight=0.4,
+            ml_weight=0.4,
+            network_weight=0.2,
+            auto_case_threshold=0.75,
+            risk_band_low_threshold=0.35,
+            risk_band_high_threshold=0.70,
+            income_volume_ratio_threshold=1.5,
+            sla_critical_hours=4,
+            sla_high_hours=24,
+            sla_medium_hours=72,
+            sla_low_hours=168,
+            updated_by=admin_user.id,
+        )
+        db.add(scoring_cfg)
+
+        # PlayerLists: watchlist PEP e lista interna de suspeitos
+        wl_pep = PlayerList(
+            tenant_id=tenant.id,
+            name="pep_watchlist",
+            list_type="WATCHLIST",
+            description="Jogadores identificados como PEP ou conexão com PEP",
+            active=True,
+            source="MANUAL",
+            created_by=admin_user.id,
+        )
+        wl_susp = PlayerList(
+            tenant_id=tenant.id,
+            name="internal_suspects",
+            list_type="SUSPECT",
+            description="Lista interna de suspeitos identificados em investigações anteriores",
+            active=True,
+            source="MANUAL",
+            created_by=admin_user.id,
+        )
+        db.add(wl_pep)
+        db.add(wl_susp)
+        await db.flush()
+
+        # Adicionar jogadores PEP à watchlist
+        for p_pep in players_list[:3]:
+            entry = PlayerListEntry(
+                list_id=wl_pep.id,
+                player_list_id=wl_pep.id,
+                tenant_id=tenant.id,
+                player_id=p_pep.id,
+                external_player_id=p_pep.external_player_id,
+                value=p_pep.external_player_id,
+                value_type="EXTERNAL_ID",
+                added_by=admin_user.id,
+            )
+            db.add(entry)
+
+        # CompoundRule: combina structuring + spike (detecta padrão combinado)
+        await db.flush()
+        rule_ids_result = await db.execute(
+            text("SELECT id, name FROM rule_definitions WHERE tenant_id = :tid"),
+            {"tid": tenant.id}
+        )
+        rule_id_map = {r.name: str(r.id) for r in rule_ids_result.fetchall()}
+
+        structuring_id = rule_id_map.get("Structuring (Muitos depósitos pequenos 24h)")
+        spike_id = rule_id_map.get("Spike vs Baseline (Z-Score)")
+        roundtrip_id = rule_id_map.get("Round-tripping (depósito → aposta mínima → saque)")
+
+        if structuring_id and spike_id:
+            compound = CompoundRule(
+                tenant_id=tenant.id,
+                name="Structuring + Spike Combinado",
+                description="Dispara quando structuring E spike de depósito ocorrem simultaneamente",
+                operator="AND",
+                logic="AND",
+                component_rule_ids=[structuring_id, spike_id],
+                child_rule_ids=[structuring_id, spike_id],
+                score_weights={structuring_id: 0.6, spike_id: 0.4},
+                min_score_threshold=0.70,
+                severity_mode="MAX",
+                is_active=True,
+                created_by=admin_user.id,
+            )
+            db.add(compound)
+
+        if roundtrip_id:
+            compound2 = CompoundRule(
+                tenant_id=tenant.id,
+                name="Round-trip HIGH Confidence",
+                description="Round-tripping com alto score composto (regra + ML)",
+                operator="OR",
+                logic="OR",
+                component_rule_ids=[roundtrip_id],
+                child_rule_ids=[roundtrip_id],
+                score_weights={roundtrip_id: 1.0},
+                min_score_threshold=0.80,
+                severity_mode="FIXED",
+                fixed_severity="CRITICAL",
+                is_active=True,
+                created_by=admin_user.id,
+            )
+            db.add(compound2)
+
+        print(f"    4 alertas suspeitos + 1 case auto-criado")
+        print(f"    ScoringConfig, 2 PlayerLists, CompoundRules criadas")
 
     await db.commit()
     print("\nSeeds aplicados com sucesso!")

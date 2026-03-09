@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -24,6 +25,33 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 ROLES = {"ADMIN", "AML_ANALYST", "AUDITOR"}
 
+# ── Redis client para blacklist de JWT ────────────────────────────────────────
+_auth_redis: Any = None
+
+
+async def _get_auth_redis():
+    """Retorna conexão Redis (singleton lazy) para verificação de blacklist."""
+    global _auth_redis
+    if _auth_redis is None:
+        try:
+            import redis.asyncio as aioredis  # type: ignore
+            _auth_redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+            await _auth_redis.ping()
+        except Exception:
+            _auth_redis = None
+    return _auth_redis
+
+
+async def revoke_token(jti: str, exp: int) -> None:
+    """Adiciona o jti à blacklist do Redis com TTL = tempo restante do token."""
+    try:
+        r = await _get_auth_redis()
+        if r:
+            ttl = max(int(exp - datetime.utcnow().timestamp()), 1)
+            await r.set(f"betaml:revoked:jti:{jti}", "1", ex=ttl)
+    except Exception:
+        pass  # não bloquear logout por falha de Redis
+
 
 def hash_password(plain: str) -> str:
     return pwd_context.hash(plain)
@@ -36,7 +64,8 @@ def verify_password(plain: str, hashed: str) -> bool:
 def create_access_token(data: dict[str, Any], expires_delta: timedelta | None = None) -> str:
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.access_token_expire_min))
-    to_encode.update({"exp": expire})
+    # jti (JWT ID) único por token – usado para revogação/blacklist
+    to_encode.update({"exp": expire, "jti": str(uuid.uuid4())})
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -56,6 +85,22 @@ async def get_current_user(
             raise credentials_exception
     except JWTError:
         raise credentials_exception
+
+    # Verificar blacklist — token revogado via logout
+    jti = payload.get("jti")
+    if jti:
+        try:
+            r = await _get_auth_redis()
+            if r and await r.exists(f"betaml:revoked:jti:{jti}"):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token revogado",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # falha de Redis não bloqueia autenticação
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()

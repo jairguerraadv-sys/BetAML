@@ -2,36 +2,89 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { clsx } from 'clsx';
+import { useState, useEffect } from 'react';
 import {
   LayoutDashboard, AlertTriangle, FolderOpen,
-  BookOpen, Users, LogOut, Plug, ScrollText,
-  Shield, List, BrainCircuit, Database,
-  FileBarChart2, Bell, Settings, GitBranch,
+  FileBarChart2, Bell, LogOut, SlidersHorizontal,
+  ChevronDown, BookOpen, Users, Plug, ScrollText,
+  Shield, List, BrainCircuit, Database, GitBranch, Wand2,
+  Settings, HelpCircle,
 } from 'lucide-react';
 
-const NAV = [
-  // ── Core ──────────────────────────────────
-  { href: '/dashboard',      label: 'Dashboard',       icon: LayoutDashboard },
-  { href: '/alerts',         label: 'Alertas',         icon: AlertTriangle },
-  { href: '/cases',          label: 'Casos',           icon: FolderOpen },
-  { href: '/rules',          label: 'Regras DSL',      icon: BookOpen },
-  { href: '/rules/compound', label: 'Regras Compostas',icon: GitBranch },
-  { href: '/players',        label: 'Jogadores',       icon: Users },
-  { href: '/mappings',       label: 'Conectores',      icon: Plug },
-  { href: '/audit-logs',     label: 'Auditoria',       icon: ScrollText },
-  // ── Enterprise ────────────────────────────
-  { href: '/player-lists',   label: 'Listas',          icon: List },
-  { href: '/model-registry', label: 'Modelos ML',      icon: BrainCircuit },
-  { href: '/feature-store',  label: 'Feature Store',   icon: Database },
-  { href: '/reports',        label: 'Relatórios',      icon: FileBarChart2 },
-  { href: '/notifications',  label: 'Notificações',    icon: Bell },
-  { href: '/settings',       label: 'Configurações',   icon: Settings },
-  { href: '/admin',          label: 'Admin',           icon: Shield },
+// ── Jornadas principais do analista ──────────────────────────────────────────
+const MAIN_NAV = [
+  { href: '/dashboard',   label: 'Painel Diário',          icon: LayoutDashboard, tooltip: 'Resumo do dia: alertas, casos pendentes e KPIs' },
+  { href: '/alerts',      label: 'Monitor de Alertas',     icon: AlertTriangle,   tooltip: 'Fila de alertas por prioridade para triagem' },
+  { href: '/cases',       label: 'Casos em Investigação',  icon: FolderOpen,      tooltip: 'Gerencie investigações em andamento' },
+  { href: '/sensitivity', label: 'Ajustes de Sensibilidade', icon: SlidersHorizontal, tooltip: 'Calibre o volume e precisão dos alertas' },
+  { href: '/reports',     label: 'Relatórios Reguladores', icon: FileBarChart2,   tooltip: 'Gere dossiês e relatórios para COAF/BACEN' },
+  { href: '/notifications', label: 'Notificações',         icon: Bell,            tooltip: 'Alertas enviados para você' },
 ];
+
+// ── Configurações avançadas — visíveis só para senior/admin ──────────────────
+const ADV_NAV = [
+  { href: '/rules/builder',  label: 'Construtor de Regras',   icon: Wand2 },
+  { href: '/rules',          label: 'Condições de Risco',     icon: BookOpen },
+  { href: '/rules/compound', label: 'Regras Compostas',       icon: GitBranch },
+  { href: '/players',        label: 'Perfis de Clientes',     icon: Users },
+  { href: '/player-lists',   label: 'Listas de Monitoramento',icon: List },
+  { href: '/model-registry', label: 'Modelos Analíticos',     icon: BrainCircuit },
+  { href: '/feature-store',  label: 'Base de Indicadores',    icon: Database },
+  { href: '/mappings',       label: 'Conectores',             icon: Plug },
+  { href: '/audit-logs',     label: 'Log de Auditoria',       icon: ScrollText },
+  { href: '/settings',       label: 'Parâmetros de Sistema',  icon: Settings },
+  { href: '/admin',          label: 'Administração',          icon: Shield },
+];
+
+// Roles que veem o menu avançado
+const ADVANCED_ROLES = ['admin', 'senior_analyst', 'sysadmin'];
+
+function NavItem({ href, label, icon: Icon, tooltip, active }: {
+  href: string; label: string; icon: React.ElementType;
+  tooltip?: string; active: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      title={tooltip}
+      className={clsx(
+        'group flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+        active ? 'bg-brand text-white' : 'text-gray-600 hover:bg-gray-100',
+      )}
+    >
+      <Icon size={15} />
+      <span className="flex-1 truncate">{label}</span>
+      {tooltip && (
+        <HelpCircle
+          size={12}
+          className={clsx('shrink-0 opacity-0 group-hover:opacity-60 transition-opacity', active && 'text-white')}
+        />
+      )}
+    </Link>
+  );
+}
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router   = useRouter();
+  const [role, setRole]         = useState<string>('analyst');
+  const [userName, setUserName] = useState<string>('');
+  const [advOpen, setAdvOpen]   = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('betaml_user');
+      if (raw) {
+        const u = JSON.parse(raw);
+        setRole(u.role ?? 'analyst');
+        setUserName(u.username ?? u.email ?? '');
+      }
+    } catch {}
+    // Auto-open advanced if on an advanced route
+    if (ADV_NAV.some((n) => pathname.startsWith(n.href))) setAdvOpen(true);
+  }, [pathname]);
+
+  const canSeeAdvanced = ADVANCED_ROLES.includes(role);
 
   function logout() {
     localStorage.removeItem('betaml_token');
@@ -40,40 +93,68 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="flex h-screen w-56 flex-col border-r border-gray-200 bg-white">
-      {/* Logo */}
-      <div className="px-5 py-5">
-        <span className="text-xl font-extrabold text-brand">BetAML</span>
+    <aside className="flex h-screen w-60 flex-col border-r border-gray-200 bg-white">
+      {/* Logo + usuário */}
+      <div className="px-4 py-4 border-b border-gray-100">
+        <span className="text-lg font-extrabold text-brand">BetAML</span>
         <p className="text-[10px] font-medium uppercase tracking-widest text-gray-400">PLD/FT Intelligence</p>
+        {userName && (
+          <p className="mt-1.5 text-[11px] text-gray-500 truncate">
+            👤 {userName} · <span className="capitalize">{role.replace('_', ' ')}</span>
+          </p>
+        )}
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 space-y-0.5 px-3">
-        {NAV.map(({ href, label, icon: Icon }) => (
-          <Link
-            key={href}
-            href={href}
-            className={clsx(
-              'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-              pathname.startsWith(href)
-                ? 'bg-brand text-white'
-                : 'text-gray-600 hover:bg-gray-100',
-            )}
-          >
-            <Icon size={16} />
-            {label}
-          </Link>
+      {/* Jornadas principais */}
+      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5">
+        <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+          Meu Trabalho
+        </p>
+        {MAIN_NAV.map((item) => (
+          <NavItem
+            key={item.href}
+            {...item}
+            active={pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href))}
+          />
         ))}
+
+        {/* Configurações avançadas — colapsável */}
+        {canSeeAdvanced && (
+          <div className="mt-4">
+            <button
+              onClick={() => setAdvOpen((v) => !v)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <span className="flex-1 text-left">Configurações Avançadas</span>
+              <ChevronDown
+                size={13}
+                className={clsx('transition-transform', advOpen && 'rotate-180')}
+              />
+            </button>
+
+            {advOpen && (
+              <div className="mt-0.5 space-y-0.5">
+                {ADV_NAV.map((item) => (
+                  <NavItem
+                    key={item.href}
+                    {...item}
+                    active={pathname === item.href || (item.href !== '/settings' && pathname.startsWith(item.href))}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </nav>
 
       {/* Sign out */}
-      <div className="border-t border-gray-100 px-3 py-3">
+      <div className="border-t border-gray-100 px-2 py-3">
         <button
           onClick={logout}
-          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-gray-100"
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 transition-colors"
         >
-          <LogOut size={16} />
-          Sair
+          <LogOut size={15} />
+          Sair da conta
         </button>
       </div>
     </aside>

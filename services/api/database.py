@@ -12,7 +12,11 @@ from config import settings
 # asyncpg driver → substitui postgresql:// por postgresql+asyncpg://
 _url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
 
-engine = create_async_engine(_url, pool_size=10, max_overflow=20, echo=False)
+# SQLite (testes unitários) não suporta pool_size/max_overflow
+_is_sqlite = _url.startswith("sqlite")
+_engine_kwargs: dict = {} if _is_sqlite else {"pool_size": 10, "max_overflow": 20}
+
+engine = create_async_engine(_url, echo=False, **_engine_kwargs)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 

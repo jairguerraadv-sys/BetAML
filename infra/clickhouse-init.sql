@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS betaml.scoring_alerts (
 )
 ENGINE = MergeTree()
 PARTITION BY (tenant_id, toYYYYMM(alert_date))
-ORDER BY (tenant_id, created_at DESC, alert_id)
+ORDER BY (tenant_id, created_at, alert_id)
 TTL created_at + INTERVAL 90 DAY;
 
 -- ──────────────────────────────────────────────────

@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY services/api /app
 COPY libs /app/libs
+RUN pip install --no-cache-dir /app/libs
 
 ENV PYTHONPATH=/app
 

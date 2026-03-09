@@ -2,6 +2,8 @@
 
 **Multi-tenant SaaS para detecção de lavagem de dinheiro e financiamento ao terrorismo em operadoras de apostas fixas brasileiras.**
 
+Versão: **2.1.0** · Compatível com: COAF Res. 36/2021 · LGPD Lei 13.709/2018 · Bacen Circular 3.978/2020
+
 ---
 
 ## Visão Geral da Arquitetura
@@ -19,12 +21,14 @@
          │     Redpanda (Kafka)  :9092    │
          │     raw.* → canonical.*        │
          │     → features.* → scoring.*  │
+         │     ingest.jobs (CSV pipeline) │
          └──────────┬─────────────────────┘
                     │
     ┌───────────────┼───────────────────────┐
     ▼               ▼                       ▼
 PostgreSQL 16    ClickHouse 24         Redis 7
-(OLTP :5432)    (OLAP :9900)       (Feature Store :6379)
+(OLTP :5432)    (OLAP :9900)    (Feature Store + JWT Blacklist)
+  RLS ativo                           :6379
 
                     ▼
              MinIO (S3 :9001)
@@ -38,30 +42,35 @@ BetAML/
 ├── libs/                   # Bibliotecas compartilhadas Python
 │   ├── schemas.py          # Pydantic v2: CanonicalEvent, PlayerFeatures, AlertMessage
 │   ├── dsl_parser.py       # DSL tokenizer + parser + evaluator
-│   ├── clients.py          # Kafka, Redis, ClickHouse clients (async)
+│   ├── clients.py          # Kafka, Redis, ClickHouse clients (async) + Sorted Set helpers
 │   └── mapping.py          # MappingEngine + conectores BackofficeAlpha/Beta
 │
 ├── infra/
 │   ├── docker-compose.yml  # Stack completa (13 serviços)
-│   ├── init-db.sql         # Schema PostgreSQL (15 tabelas)
+│   ├── init-db.sql         # Schema PostgreSQL base (tabelas core)
+│   ├── migration_v2.sql    # Colunas adicionais (pdf_path, etc.)
+│   ├── migration_v3.sql    # RLS + políticas de isolamento v3
+│   ├── migration_v4.sql    # ★ RLS completo + todas as tabelas enterprise
+│   ├── migration_v5.sql    # Tabelas enterprise adicionais (CompoundRule, PlayerList, etc.)
+│   ├── migration_v6.sql    # scoring_configs: low/medium/high/critical_threshold + is_active
 │   ├── clickhouse-init.sql # Schema ClickHouse (6 tabelas)
 │   └── configs/
 │       └── redpanda-console.yaml
 │
 ├── services/
-│   ├── api/                # FastAPI — REST, Auth, RBAC, Seeds
-│   ├── stream_processor/   # Kafka consumer → features → Redis + ClickHouse
+│   ├── api/                # FastAPI — REST, Auth JWT+Blacklist, RBAC, Seeds
+│   ├── stream_processor/   # Kafka consumer → features Redis Sorted Sets + ingest.jobs
 │   ├── rules_engine/       # DSL evaluation → scoring.alerts
 │   ├── ml_service/         # IsolationForest scoring + training (FastAPI :8001)
 │   └── frontend/           # Next.js 14 (App Router + Tailwind)
 │
 └── tests/
-    ├── conftest.py
     ├── unit/
-    │   ├── test_dsl.py      # 12 regras seed + todos operadores/funções
-    │   └── test_mapping.py  # BackofficeAlpha/Beta transform types
+    │   ├── test_api_auth.py  # JWT jti, PII Fernet, RBAC, DSL, MappingEngine, Features
+    │   ├── test_dsl.py       # 12 regras seed + todos operadores/funções DSL
+    │   └── test_mapping.py   # BackofficeAlpha/Beta transform types
     └── integration/
-        └── test_pipeline.py # Smoke tests E2E (requer stack)
+        └── test_pipeline.py  # Smoke tests E2E + File Ingest + COAF + Logout/Blacklist
 ```
 
 ---
@@ -79,6 +88,14 @@ BetAML/
 docker compose -f infra/docker-compose.yml up -d
 ```
 
+> **Nota:** As migrações SQL são executadas automaticamente na inicialização do container
+> PostgreSQL na ordem: `init-db.sql` → `migration_v2.sql` → `migration_v3.sql` → `migration_v4.sql`
+> → `migration_v5.sql` → `migration_v6.sql`.
+> O `migration_v4.sql` ativa as políticas **RLS** em todas as tabelas sensíveis.
+> O `migration_v6.sql` adiciona colunas de threshold (`low_threshold`, `medium_threshold`, etc.)
+> à tabela `scoring_configs`. **Se o volume PostgreSQL já existia sem esta migração**, execute
+> manualmente: `docker exec betaml-postgres psql -U betaml -d betaml_dev -f /docker-entrypoint-initdb.d/06-migration.sql`
+
 ### 2. Verificar saúde (aguardar ~20s)
 
 ```bash
@@ -86,14 +103,79 @@ curl http://localhost:8000/health
 # { "status": "ok", ... }
 ```
 
-### 3. Login
+### 3. Login (JSON — não form-urlencoded)
 
+Login básico:
 ```bash
-curl -X POST http://localhost:8000/auth/login \
-  -d "username=admin_a&password=admin123"
+curl -s -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin_a", "password": "admin123"}' | jq .
 ```
 
-### 4. URLs dos serviços
+Login com `tenant_slug` explícito (recomendado em produção para garantir isolamento):
+```bash
+curl -s -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin_a", "password": "admin123", "tenant_slug": "operadora-a"}' | jq .
+```
+
+### 4. Autenticação e logout
+
+O token JWT inclui um campo `jti` único. O logout revoga o token na blacklist Redis
+(TTL = tempo restante do token), impedindo seu reuso mesmo que não tenha expirado:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin_a", "password": "admin123"}' | jq -r .access_token)
+
+# Usar o token
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/me
+
+# Logout real (invalida o token no Redis)
+curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:8000/auth/logout
+
+# Token agora retorna 401
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/me
+```
+
+### 5. Ingestão de arquivo CSV (pipeline completo)
+
+```bash
+# Upload de CSV de transações
+curl -s -X POST http://localhost:8000/ingest/file \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@transactions.csv;type=text/csv" \
+  -F "source_system=BackofficeAlpha" \
+  -F "entity_type=transaction" | jq .
+
+# Verificar status do job
+JOB_ID=<job_id retornado acima>
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/ingest/jobs/$JOB_ID | jq .
+```
+
+### 6. Gerar ReportPackage COAF
+
+```bash
+CASE_ID=<id do caso>
+
+# Relatório DRAFT (decisão pendente)
+curl -s -X POST http://localhost:8000/cases/$CASE_ID/report-package \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{}' | jq .
+
+# Comunicação ao COAF (FILE_SAR — requer analyst_narrative obrigatório)
+curl -s -X POST http://localhost:8000/cases/$CASE_ID/report-package \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "analyst_narrative": "Padrão de depósitos fracionados abaixo do limite de comunicação automática (Structuring, COAF/FATF ML-01). Recomenda-se comunicação imediata ao COAF.",
+    "decision": "FILE_SAR"
+  }' | jq .
+```
+
+### 7. URLs dos serviços
 
 | Serviço              | URL                                            |
 |----------------------|------------------------------------------------|
@@ -105,18 +187,27 @@ curl -X POST http://localhost:8000/auth/login \
 
 ---
 
-## Testes Unitários (sem Docker)
+## Testes
+
+### Unitários (sem Docker, rápido)
 
 ```bash
-pip install pytest pydantic python-dateutil structlog
+pip install -r requirements-dev.txt
 pytest tests/unit/ -v
 ```
 
-### Testes de integração (requerem stack rodando)
+Cobrem: JWT (`jti`, expiração, isolamento), PII Fernet (encrypt/decrypt/mask), RBAC,
+validação DSL (12 regras seed), MappingEngine, compute_features (estrutura, velocidade, moeda).
+
+### Integração (requerem stack rodando)
 
 ```bash
-TEST_STACK_UP=1 pytest tests/integration/ -v
+docker compose -f infra/docker-compose.yml up -d
+TEST_STACK_UP=1 pytest tests/integration/ -v --tb=short
 ```
+
+Cobrem: ingestão de eventos/CSV, polling de job status, isolamento multi-tenant (RLS),
+geração de ReportPackage COAF, logout/blacklist JWT, audit log.
 
 ---
 
@@ -129,7 +220,7 @@ transaction.amount > 9000 and transaction.amount < 10000 and transaction.type ==
 # Anomalia estatística
 zscore(features.deposit_sum_24h, features.baseline_deposit_avg_30d, features.baseline_deposit_std_30d) > 3
 
-# Round-trip mismo dia
+# Round-trip mesmo dia
 ratio(features.withdraw_sum_24h, features.deposit_sum_24h) > 0.95
 
 # PEP com volume atípico
@@ -139,24 +230,45 @@ player.pepFlag == true and features.deposit_sum_7d > 50000
 bet.stakeAmount > player.declaredIncomeMonthly * 2
 ```
 
-Funções: `zscore(value, mean, std)`, `ratio(a, b)`, `abs(v)`, `sum(a, b, ...)`
+Funções disponíveis: `zscore(value, mean, std)`, `ratio(a, b)`, `abs(v)`, `sum(a, b, ...)`
 
 ---
 
 ## Tenants Seed
 
-| Tenant    | Usuário   | Senha      |
-|-----------|-----------|------------|
-| OperadorA | `admin_a` | `admin123` |
-| OperadorB | `admin_b` | `admin123` |
+| Tenant    | Usuário   | Senha      | Slug          |
+|-----------|-----------|------------|---------------|
+| OperadorA | `admin_a` | `admin123` | `operadora-a` |
+| OperadorB | `admin_b` | `admin123` | `operadora-b` |
 
 Cada tenant possui: 1 ADMIN + 1 AML_ANALYST + 1 AUDITOR + 50 jogadores + 12 regras DSL ativas.
 
 ---
 
-## Compliance & LGPD
+## Segurança & Compliance
 
-- CPF e PII criptografados em repouso (XOR para dev → usar KMS em prod)
-- Mascaramento de CPF nas respostas (apenas 2 últimos dígitos visíveis)
-- `audit_logs` rastreia todas as ações com `actor_id`, IP e `before/after_state`
-- RBAC: `ADMIN` · `AML_ANALYST` · `AUDITOR`
+### Isolamento multi-tenant
+- **Row Level Security (RLS)** ativo em todas as tabelas sensíveis via `migration_v4.sql`
+- Variável `app.current_tenant` injetada por middleware RLS no início de cada request
+- Vazamento entre tenants resulta em 404 (não-existência opaca)
+
+### Autenticação & Sessão
+- JWT assimétrico com campo `jti` único por token
+- Logout revoga o `jti` no Redis com TTL = tempo restante do token (blacklist real)
+- Roles: `ADMIN` · `AML_ANALYST` · `AUDITOR`
+
+### PII & LGPD (Lei 13.709/2018)
+- CPF e dados pessoais cifrados em repouso com **Fernet AES-128 + HMAC-SHA256** (IV aleatório por registro)
+- Mascaramento nas respostas: `***.***.***.09` (apenas os 2 últimos dígitos)
+- Nunca expor CPF completo em logs, payloads de relatório ou respostas de API
+
+### Relatórios COAF (Res. 36/2021)
+- `POST /cases/{id}/report-package` gera estrutura JSON mínima compatível com COAF
+- Campo `decision`: `FILE_SAR` | `NO_ACTION` | `PENDING`
+- `FILE_SAR` exige `analyst_narrative` (Art. 9 Res. 36/2021) — validado pelo backend
+- Todos os reports persistidos com `created_by` (UUID do analista), nunca username/email
+
+### Auditoria
+- `audit_logs` registra todas as ações mutantes com `user_id`, `entity_type`, `entity_id`,
+  `before`, `after`, `ip_address` e `created_at` (schema canônico, sem campo `actor`)
+

@@ -5,28 +5,36 @@ import { Settings, Save } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 interface ScoringConfig {
-  id: string;
-  isolation_forest_weight: number;
-  structuring_weight: number;
-  graph_weight: number;
-  recurrence_weight: number;
-  alert_threshold: number;
-  block_threshold: number;
-  review_threshold: number;
-  updated_at: string;
+  id: number;
+  rule_weight: number;
+  ml_weight: number;
+  network_weight: number;
+  low_threshold: number;
+  medium_threshold: number;
+  high_threshold: number;
+  critical_threshold: number;
+  sla_low_hours: number;
+  sla_medium_hours: number;
+  sla_high_hours: number;
+  sla_critical_hours: number;
+  updated_at: string | null;
 }
 
 const fetchConfig = () =>
   api.get<ScoringConfig>('/scoring-config').then((r) => r.data);
 
 const fields: { key: keyof ScoringConfig; label: string; step: string }[] = [
-  { key: 'isolation_forest_weight', label: 'Peso — Isolation Forest',    step: '0.01' },
-  { key: 'structuring_weight',      label: 'Peso — Structuring GBM',      step: '0.01' },
-  { key: 'graph_weight',            label: 'Peso — Graph Clustering',     step: '0.01' },
-  { key: 'recurrence_weight',       label: 'Peso — Recurrence kNN',       step: '0.01' },
-  { key: 'alert_threshold',         label: 'Limiar — Gerar Alerta',       step: '0.01' },
-  { key: 'review_threshold',        label: 'Limiar — Revisão Manual',     step: '0.01' },
-  { key: 'block_threshold',         label: 'Limiar — Bloqueio Automático',step: '0.01' },
+  { key: 'rule_weight',       label: 'Peso — Regras DSL',             step: '0.01' },
+  { key: 'ml_weight',         label: 'Peso — Modelos ML',             step: '0.01' },
+  { key: 'network_weight',    label: 'Peso — Análise de Rede',        step: '0.01' },
+  { key: 'low_threshold',     label: 'Limiar Baixo (score 0-100)',    step: '1' },
+  { key: 'medium_threshold',  label: 'Limiar Médio (score 0-100)',    step: '1' },
+  { key: 'high_threshold',    label: 'Limiar Alto (score 0-100)',     step: '1' },
+  { key: 'critical_threshold',label: 'Limiar Crítico (score 0-100)', step: '1' },
+  { key: 'sla_low_hours',     label: 'SLA Baixo (horas)',             step: '1' },
+  { key: 'sla_medium_hours',  label: 'SLA Médio (horas)',             step: '1' },
+  { key: 'sla_high_hours',    label: 'SLA Alto (horas)',              step: '1' },
+  { key: 'sla_critical_hours',label: 'SLA Crítico (horas)',          step: '1' },
 ];
 
 export default function SettingsPage() {

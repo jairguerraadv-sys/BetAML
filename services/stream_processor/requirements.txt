@@ -3,6 +3,7 @@ redis[hiredis]==5.0.4
 clickhouse-driver==0.2.7
 sqlalchemy[asyncio]==2.0.29
 asyncpg==0.29.0
+psycopg2-binary==2.9.9
 pydantic==2.7.1
 pydantic-settings==2.2.1
 minio==7.2.7

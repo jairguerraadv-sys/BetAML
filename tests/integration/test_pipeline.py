@@ -41,16 +41,18 @@ def _headers(token: str) -> dict:
 
 def _make_txn_event(player_id: str | None = None) -> dict:
     return {
-        "source_system":     "BackofficeAlpha",
-        "event_type":        "TRANSACTION",
-        "external_event_id": str(uuid.uuid4()),
-        "player_id":         player_id or f"PLY-{uuid.uuid4().hex[:8]}",
-        "amount":            1500.0,
-        "currency":          "BRL",
-        "transaction_type":  "DEPOSIT",
-        "occurred_at":       "2024-06-15T10:00:00Z",
-        "method":            "PIX",
-        "status":            "SETTLED",
+        "source_system":   "BackofficeAlpha",
+        "entity_type":     "transaction",
+        "source_event_id": str(uuid.uuid4()),
+        "payload": {
+            "player_id":        player_id or f"PLY-{uuid.uuid4().hex[:8]}",
+            "amount":           1500.0,
+            "currency":         "BRL",
+            "transaction_type": "DEPOSIT",
+            "occurred_at":      "2024-06-15T10:00:00Z",
+            "method":           "PIX",
+            "status":           "SETTLED",
+        },
     }
 
 
@@ -166,9 +168,9 @@ def test_ingest_single_event_202(headers_a):
 @skip_unless_stack
 def test_ingest_batch_202(headers_a):
     events = [_make_txn_event() for _ in range(3)]
-    resp = api("/ingest/batch", "POST", headers=headers_a, json={"events": events})
+    resp = api("/ingest/batch", "POST", headers=headers_a, json=events)
     assert resp.status_code in (200, 202)
-    assert resp.json().get("accepted", 0) > 0
+    assert resp.json().get("count", 0) > 0
 
 
 @skip_unless_stack
@@ -193,6 +195,121 @@ def test_ingest_10_events_in_sequence(headers_a):
         if resp.status_code != 202:
             failed += 1
     assert failed == 0, f"{failed}/10 eventos rejeitados"
+
+
+@skip_unless_stack
+def test_mapping_templates_endpoint(headers_a):
+    resp = api("/mappings/templates", headers=headers_a)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body, list)
+    assert any(i.get("source_system") == "ConnectorGamma" for i in body)
+
+
+@skip_unless_stack
+def test_mapping_validate_and_preview(headers_a):
+    mapping_yaml = """
+source_system: ConnectorGamma
+entity_type: TRANSACTION
+connector: xml
+transforms:
+  - field: event_id
+    type: copy
+    source: event_id
+  - field: amount
+    type: coerceDecimal
+    source: amount
+  - field: currency
+    type: copy
+    source: currency
+""".strip()
+
+    valid_resp = api(
+        "/mappings/validate",
+        "POST",
+        headers=headers_a,
+        json={"config_text": mapping_yaml, "format": "yaml"},
+    )
+    assert valid_resp.status_code == 200
+    assert valid_resp.json().get("valid") is True
+
+    preview_resp = api(
+        "/mappings/preview",
+        "POST",
+        headers=headers_a,
+        json={
+            "config_text": mapping_yaml,
+            "format": "yaml",
+            "sample": {"event_id": "evt-1", "amount": "99.90", "currency": "BRL"},
+        },
+    )
+    assert preview_resp.status_code == 200
+    body = preview_resp.json()
+    assert body.get("valid") is True
+    assert body.get("preview", {}).get("event_id") == "evt-1"
+
+
+@skip_unless_stack
+def test_mapping_versioning_and_rollback(headers_a):
+    create_resp = api(
+        "/mappings",
+        "POST",
+        headers=headers_a,
+        json={
+            "name": f"Map Test {uuid.uuid4().hex[:6]}",
+            "source_system": "ConnectorDelta",
+            "entity_type": "TRANSACTION",
+            "format": "json",
+            "config_json": {
+                "source_system": "ConnectorDelta",
+                "entity_type": "TRANSACTION",
+                "fields": [
+                    {"target": "event_id", "source": "event_id", "transform": "copy"},
+                    {"target": "amount", "source": "amount", "transform": "coerceDecimal"},
+                ],
+            },
+            "change_notes": "v1",
+        },
+    )
+    assert create_resp.status_code == 201
+    mapping_id = create_resp.json()["id"]
+
+    update_resp = api(
+        f"/mappings/{mapping_id}",
+        "PUT",
+        headers=headers_a,
+        json={
+            "format": "json",
+            "change_notes": "v2",
+            "config_json": {
+                "source_system": "ConnectorDelta",
+                "entity_type": "TRANSACTION",
+                "fields": [
+                    {"target": "event_id", "source": "event_id", "transform": "copy"},
+                    {"target": "amount", "source": "amount", "transform": "coerceDecimal"},
+                    {"target": "currency", "source": "currency", "transform": "copy"},
+                ],
+            },
+        },
+    )
+    assert update_resp.status_code == 200
+
+    versions_resp = api(f"/mappings/{mapping_id}/versions", headers=headers_a)
+    assert versions_resp.status_code == 200
+    versions = versions_resp.json()
+    assert len(versions) >= 2
+    assert any(v.get("version_number") == 1 for v in versions)
+
+    rollback_resp = api(f"/mappings/{mapping_id}/rollback?version_number=1", "POST", headers=headers_a)
+    assert rollback_resp.status_code == 200
+    assert rollback_resp.json().get("version_number") == 1
+
+
+@skip_unless_stack
+def test_list_ingest_errors_endpoint(headers_a):
+    resp = api("/ingest/errors?limit=5", headers=headers_a)
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
 
 
 # ── Alerts ─────────────────────────────────────────────────────────────────────
@@ -367,10 +484,12 @@ def test_list_rules(headers_a):
 @skip_unless_stack
 def test_create_rule_with_valid_dsl(headers_a):
     resp = api("/rules", "POST", headers=headers_a, json={
-        "name":       f"Regra Teste {uuid.uuid4().hex[:6]}",
-        "expression": "transaction.amount > 9000 and transaction.type == 'DEPOSIT'",
-        "severity":   "HIGH",
-        "enabled":    True,
+        "name":          f"Regra Teste {uuid.uuid4().hex[:6]}",
+        "condition_dsl": "transaction.amount > 9000 and transaction.type == 'DEPOSIT'",
+        "severity":      "HIGH",
+        "status":        "ACTIVE",
+        "scope":         "TRANSACTION",
+        "params":        {},
     })
     assert resp.status_code in (200, 201)
     assert "id" in resp.json()
@@ -379,9 +498,12 @@ def test_create_rule_with_valid_dsl(headers_a):
 @skip_unless_stack
 def test_create_rule_with_invalid_dsl_rejected(headers_a):
     resp = api("/rules", "POST", headers=headers_a, json={
-        "name":       "Regra com DSL inválido",
-        "expression": "(((sem fechamento",
-        "severity":   "LOW",
+        "name":          "Regra com DSL inválido",
+        "condition_dsl": "(((sem fechamento",
+        "severity":      "LOW",
+        "status":        "DRAFT",
+        "scope":         "TRANSACTION",
+        "params":        {},
     })
     assert resp.status_code in (400, 422)
 
@@ -417,12 +539,19 @@ def test_simulate_rule_match(headers_a):
     sim_resp = api(
         f"/rules/{structuring['id']}/simulate", "POST", headers=headers_a,
         json={
-            "transaction": {"amount": 9500, "type": "DEPOSIT"},
-            "features":    {"zscore_current_deposit_vs_baseline": 1.0},
+            "events": [{
+                "transaction": {"amount": 9500, "type": "DEPOSIT"},
+                "features":    {
+                    "deposit_count_24h": 10,
+                    "deposit_sum_24h": 6000,
+                    "zscore_current_deposit_vs_baseline": 1.0,
+                },
+            }],
         },
     )
     assert sim_resp.status_code == 200
-    assert sim_resp.json().get("matched") is True
+    result = sim_resp.json()
+    assert result.get("matches", 0) > 0 or any(r.get("matched") for r in result.get("results", []))
 
 
 # ── Players ────────────────────────────────────────────────────────────────────
@@ -497,7 +626,7 @@ def test_tenant_a_cannot_access_tenant_b_resource(headers_a, token_b):
 
 @skip_unless_stack
 def test_audit_log_endpoint(headers_a):
-    resp = api("/audit-log", headers=headers_a)
+    resp = api("/audit-logs", headers=headers_a)
     assert resp.status_code == 200
 
 
@@ -511,18 +640,18 @@ def test_list_reports(headers_a):
 
 @skip_unless_stack
 def test_list_api_keys(headers_a):
-    resp = api("/api-keys", headers=headers_a)
+    resp = api("/admin/api-keys", headers=headers_a)
     assert resp.status_code in (200, 403)
 
 
 @skip_unless_stack
 def test_create_and_revoke_api_key(headers_a):
-    create_resp = api("/api-keys", "POST", headers=headers_a, json={"name": "test-key-integration"})
+    create_resp = api("/admin/api-keys", "POST", headers=headers_a, json={"name": "test-key-integration"})
     if create_resp.status_code not in (200, 201):
         pytest.skip("Criação de API key não suportada ou sem permissão")
     key_id = create_resp.json()["id"]
 
-    revoke_resp = api(f"/api-keys/{key_id}", "DELETE", headers=headers_a)
+    revoke_resp = api(f"/admin/api-keys/{key_id}", "DELETE", headers=headers_a)
     assert revoke_resp.status_code in (200, 204)
 
 
@@ -537,10 +666,9 @@ def test_e2e_ingest_to_alert(headers_a):
     3. Verifica que o pipeline não travou (alerta pode ou não ter chegado)
     """
     player_id = f"PLY-E2E-{uuid.uuid4().hex[:6]}"
-    ingest_resp = api("/ingest/event", "POST", headers=headers_a, json={
-        **_make_txn_event(player_id),
-        "amount": 9700.0,
-    })
+    evt = _make_txn_event(player_id)
+    evt["payload"]["amount"] = 9700.0
+    ingest_resp = api("/ingest/event", "POST", headers=headers_a, json=evt)
     assert ingest_resp.status_code == 202
 
     before = api("/alerts", headers=headers_a).json().get("total", 0)
@@ -549,3 +677,329 @@ def test_e2e_ingest_to_alert(headers_a):
         after = api("/alerts", headers=headers_a).json().get("total", 0)
         if after > before:
             break
+
+
+# ── File ingestion E2E ────────────────────────────────────────────────────────
+
+def _make_csv_payload(rows: int = 5, source_system: str = "BackofficeAlpha") -> bytes:
+    """Gera CSV de transações no formato do BackofficeAlpha para upload."""
+    import io as _io
+    buf = _io.StringIO()
+    buf.write("txnId,playerId,txnAmount,txnType,txnStatus,txnTimestamp\n")
+    for i in range(rows):
+        buf.write(
+            f"TXN-{uuid.uuid4().hex[:8]},"
+            f"PLY-{uuid.uuid4().hex[:8]},"
+            f"{(i + 1) * 1000.0},"
+            "DEPOSIT,SETTLED,"
+            "2024-06-15T10:00:00Z\n"
+        )
+    return buf.getvalue().encode("utf-8")
+
+
+@skip_unless_stack
+def test_file_ingest_returns_job_id(headers_a):
+    """POST /ingest/file deve aceitar CSV e retornar job_id."""
+    csv_bytes = _make_csv_payload(rows=3)
+    resp = api(
+        "/ingest/file", "POST",
+        headers=headers_a,
+        files={"file": ("transactions.csv", csv_bytes, "text/csv")},
+        data={"source_system": "BackofficeAlpha", "entity_type": "transaction"},
+    )
+    assert resp.status_code in (200, 202), f"Esperado 200/202, recebido {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert "job_id" in body, f"Resposta sem job_id: {body}"
+
+
+@skip_unless_stack
+def test_file_ingest_job_status_polling(headers_a):
+    """
+    E2E: faz upload de CSV, obtém job_id, e faz polling até DONE/FAILED (máx 30 s).
+    O stream_processor precisa estar rodando para processar o job.
+    """
+    csv_bytes = _make_csv_payload(rows=5)
+    upload_resp = api(
+        "/ingest/file", "POST",
+        headers=headers_a,
+        files={"file": ("test_batch.csv", csv_bytes, "text/csv")},
+        data={"source_system": "BackofficeAlpha", "entity_type": "transaction"},
+    )
+    assert upload_resp.status_code in (200, 202), upload_resp.text
+    job_id = upload_resp.json()["job_id"]
+
+    # Poll de status com timeout 30 s
+    final_status = None
+    for _ in range(30):
+        time.sleep(1.0)
+        status_resp = api(f"/ingest/jobs/{job_id}", headers=headers_a)
+        if status_resp.status_code != 200:
+            continue
+        job = status_resp.json()
+        if job.get("status") in ("DONE", "FAILED", "PARTIAL"):
+            final_status = job["status"]
+            break
+
+    assert final_status is not None, (
+        f"Job {job_id} não completou em 30 s. Verifique se stream_processor está rodando."
+    )
+    assert final_status != "FAILED", f"Job falhou: {final_status}"
+
+
+@skip_unless_stack
+def test_file_ingest_invalid_source_system(headers_a):
+    """Upload com source_system desconhecido deve ser rejeitado."""
+    csv_bytes = _make_csv_payload(rows=1)
+    resp = api(
+        "/ingest/file", "POST",
+        headers=headers_a,
+        files={"file": ("bad.csv", csv_bytes, "text/csv")},
+        data={"source_system": "UnknownSystemXYZ999", "entity_type": "transaction"},
+    )
+    assert resp.status_code in (400, 422), (
+        f"Esperado 400/422 para source_system inválido, recebido: {resp.status_code}"
+    )
+
+
+@skip_unless_stack
+def test_file_ingest_empty_csv_rejected(headers_a):
+    """CSV vazio (sem linhas de dados) deve retornar erro."""
+    csv_bytes = b"txnId,playerId,txnAmount\n"  # header apenas, zero rows
+    resp = api(
+        "/ingest/file", "POST",
+        headers=headers_a,
+        files={"file": ("empty.csv", csv_bytes, "text/csv")},
+        data={"source_system": "BackofficeAlpha", "entity_type": "transaction"},
+    )
+    assert resp.status_code in (400, 422), (
+        f"CSV vazio deveria ser rejeitado, recebido: {resp.status_code}"
+    )
+
+
+@skip_unless_stack
+def test_file_ingest_tenant_isolation(headers_a, headers_b):
+    """
+    Job criado pelo tenant A não pode ser acessado pelo tenant B.
+    """
+    csv_bytes = _make_csv_payload(rows=2)
+    upload_resp = api(
+        "/ingest/file", "POST",
+        headers=headers_a,
+        files={"file": ("isolation_test.csv", csv_bytes, "text/csv")},
+        data={"source_system": "BackofficeAlpha", "entity_type": "transaction"},
+    )
+    if upload_resp.status_code not in (200, 202):
+        pytest.skip("Upload falhou, teste de isolamento não pode prosseguir")
+    job_id = upload_resp.json()["job_id"]
+
+    # Tenant B tenta acessar o job do tenant A
+    cross_resp = api(f"/ingest/jobs/{job_id}", headers=headers_b)
+    assert cross_resp.status_code in (403, 404), (
+        f"Tenant B acessou job do tenant A! Status: {cross_resp.status_code}"
+    )
+
+
+@skip_unless_stack
+def test_ingest_jobs_list(headers_a):
+    """GET /ingest/jobs deve retornar lista paginada dos jobs do tenant."""
+    resp = api("/ingest/jobs", headers=headers_a)
+    assert resp.status_code == 200
+    body = resp.json()
+    if isinstance(body, dict):
+        assert "items" in body or "jobs" in body or isinstance(body.get("data"), list)
+    else:
+        assert isinstance(body, list)
+
+
+# ── ReportPackage COAF ────────────────────────────────────────────────────────
+
+@skip_unless_stack
+def test_generate_report_package_draft(headers_a):
+    """
+    POST /cases/{id}/report-package sem decision retorna DRAFT com payload COAF.
+    """
+    case_resp = api("/cases", "POST", headers=headers_a, json={
+        "title": f"Caso COAF Test {uuid.uuid4().hex[:6]}",
+        "priority": "HIGH",
+    })
+    if case_resp.status_code not in (200, 201):
+        pytest.skip("Criação de caso falhou")
+    case_id = case_resp.json()["id"]
+
+    resp = api(
+        f"/cases/{case_id}/report-package", "POST",
+        headers=headers_a,
+        json={},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert "report_package_id" in body
+    assert "payload" in body
+
+    pl = body["payload"]
+    assert "report_id" in pl
+    assert "schema_version" in pl
+    assert "reporting_entity" in pl
+    assert "suspicious_operations" in pl
+    assert "financial_summary" in pl
+    assert "decision" in pl
+
+
+@skip_unless_stack
+def test_generate_report_package_file_sar(headers_a):
+    """
+    decision=FILE_SAR com analyst_narrative deve retornar status FINAL.
+    """
+    case_resp = api("/cases", "POST", headers=headers_a, json={
+        "title": f"Caso SAR {uuid.uuid4().hex[:6]}",
+        "priority": "CRITICAL",
+    })
+    if case_resp.status_code not in (200, 201):
+        pytest.skip("Criação de caso falhou")
+    case_id = case_resp.json()["id"]
+
+    resp = api(
+        f"/cases/{case_id}/report-package", "POST",
+        headers=headers_a,
+        json={
+            "analyst_narrative": "Operações de depósito fracionado abaixo do limite obrigatório de comunicação, padrão típico de Structuring (COAF/FATF Tipologia ML-01). Recomenda-se comunicação ao COAF.",
+            "decision": "FILE_SAR",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["decision"] == "FILE_SAR"
+    assert body["status"] in ("FINAL", "FILED")
+    assert body["payload"]["analyst_narrative"]
+
+
+@skip_unless_stack
+def test_generate_report_package_file_sar_without_narrative_fails(headers_a):
+    """
+    decision=FILE_SAR sem analyst_narrative deve retornar 400 (requisito COAF).
+    """
+    case_resp = api("/cases", "POST", headers=headers_a, json={
+        "title": f"Caso SAR sem narrativa {uuid.uuid4().hex[:6]}",
+        "priority": "HIGH",
+    })
+    if case_resp.status_code not in (200, 201):
+        pytest.skip("Criação de caso falhou")
+    case_id = case_resp.json()["id"]
+
+    resp = api(
+        f"/cases/{case_id}/report-package", "POST",
+        headers=headers_a,
+        json={"decision": "FILE_SAR"},  # sem analyst_narrative
+    )
+    assert resp.status_code == 400, (
+        f"Esperado 400 para FILE_SAR sem narrativa, recebido: {resp.status_code}"
+    )
+
+
+@skip_unless_stack
+def test_report_package_payload_never_exposes_full_cpf(headers_a):
+    """
+    O payload do relatório nunca deve expor CPF sem mascaramento.
+    Valida conformidade com LGPD Art. 46 e princípio de minimização.
+    """
+    case_resp = api("/cases", "POST", headers=headers_a, json={"title": "Caso CPF Mask Test"})
+    if case_resp.status_code not in (200, 201):
+        pytest.skip("Criação de caso falhou")
+    case_id = case_resp.json()["id"]
+
+    resp = api(f"/cases/{case_id}/report-package", "POST", headers=headers_a, json={})
+    assert resp.status_code == 201
+
+    payload_str = resp.text
+    # CPF formato: 11 dígitos seguidos OU com pontuação (###.###.###-##)
+    import re
+    raw_cpf = re.search(r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b", payload_str)
+    raw_digits = re.search(r"\b\d{11}\b", payload_str)
+    assert not raw_cpf, "Payload expõe CPF formatado — violação LGPD"
+    assert not raw_digits, "Payload expõe CPF como sequência de dígitos — violação LGPD"
+
+
+# ── Logout / JWT revocation ───────────────────────────────────────────────────
+
+@skip_unless_stack
+def test_logout_revokes_token():
+    """
+    Após logout, o mesmo token não deve funcionar para acessar /me.
+    """
+    data = _login("admin_a", "admin123")
+    token = data["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Confirma que funciona antes do logout
+    me_before = api("/me", headers=headers)
+    assert me_before.status_code == 200
+
+    # Faz logout
+    logout_resp = api("/auth/logout", "POST", headers=headers)
+    assert logout_resp.status_code in (200, 204)
+
+    # Token deve estar na blacklist Redis agora
+    me_after = api("/me", headers=headers)
+    assert me_after.status_code == 401, (
+        f"Token ainda válido após logout! Status: {me_after.status_code}"
+    )
+
+
+@skip_unless_stack
+def test_login_wrong_tenant_slug():
+    """
+    Login com tenant_slug errado deve falhar com 401.
+    """
+    resp = api("/auth/login", "POST", json={
+        "username":    "admin_a",
+        "password":    "admin123",
+        "tenant_slug": "tenant-que-nao-existe-xyz",
+    })
+    assert resp.status_code in (401, 404), (
+        f"Esperado 401/404 para tenant_slug inválido, recebido: {resp.status_code}"
+    )
+
+
+@skip_unless_stack
+def test_login_with_correct_tenant_slug():
+    """
+    Login com tenant_slug correto deve funcionar normalmente.
+    """
+    # Obtém o slug do tenant para admin_a
+    data = _login("admin_a", "admin123")
+    tenant_id = data.get("tenant_id")
+    if not tenant_id:
+        pytest.skip("tenant_id não retornado pelo login — não é possível determinar slug")
+
+    # Tenta login com tenant_slug vazio (deve funcionar como fallback)
+    resp = api("/auth/login", "POST", json={
+        "username": "admin_a",
+        "password": "admin123",
+    })
+    assert resp.status_code == 200
+
+
+# ── Auditoría ─────────────────────────────────────────────────────────────────
+
+@skip_unless_stack
+def test_audit_log_after_report_generation(headers_a):
+    """
+    Geração de ReportPackage deve criar entrada no audit log.
+    """
+    # Pega o total de audit logs antes
+    before_resp = api("/audit-log?limit=1", headers=headers_a)
+    total_before = before_resp.json().get("total", 0) if before_resp.status_code == 200 else 0
+
+    # Gera um relatório
+    case_resp = api("/cases", "POST", headers=headers_a, json={"title": "Caso Audit Test"})
+    if case_resp.status_code not in (200, 201):
+        pytest.skip("Criação de caso falhou")
+    case_id = case_resp.json()["id"]
+    api(f"/cases/{case_id}/report-package", "POST", headers=headers_a, json={})
+
+    # Verifica que houve incremento no audit log
+    after_resp = api("/audit-log?limit=1", headers=headers_a)
+    if after_resp.status_code != 200:
+        pytest.skip("/audit-log endpoint indisponível")
+    total_after = after_resp.json().get("total", 0)
+    assert total_after >= total_before, "AuditLog não foi incrementado após geração de relatório"

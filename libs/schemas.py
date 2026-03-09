@@ -372,7 +372,7 @@ class RuleMacroCreate(BaseModel):
 
 
 class ScoringConfigOut(BaseModel):
-    id: int
+    id: str
     tenant_id: str
     rule_weight: float = 0.4
     ml_weight: float = 0.4
@@ -405,6 +405,29 @@ class ScoringConfigUpdate(BaseModel):
     sla_high_hours: Optional[int] = None
     sla_critical_hours: Optional[int] = None
     data_retention_days: Optional[int] = None
+
+
+class ScoringPreviewIn(BaseModel):
+    rule_weight: Optional[float] = None
+    ml_weight: Optional[float] = None
+    network_weight: Optional[float] = None
+    low_threshold: Optional[float] = None
+    medium_threshold: Optional[float] = None
+    high_threshold: Optional[float] = None
+    critical_threshold: Optional[float] = None
+
+
+class PreviewBandCount(BaseModel):
+    low: int = 0
+    medium: int = 0
+    high: int = 0
+    critical: int = 0
+
+
+class ScoringPreviewOut(BaseModel):
+    current: PreviewBandCount
+    proposed: PreviewBandCount
+    total_alerts_30d: int = 0
 
 
 class NotificationOut(BaseModel):

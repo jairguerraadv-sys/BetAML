@@ -11,14 +11,14 @@ import asyncio
 import json
 import logging
 import os
+import statistics
 import sys
-from collections import defaultdict
 from datetime import datetime, timedelta
-from decimal import Decimal
 
 import structlog
 
-sys.path.insert(0, "/app/libs")
+# Garante que 'from libs.xxx import' funcione tanto no Docker (/app/libs montado)
+# quanto em desenvolvimento local (raiz do projeto no PYTHONPATH)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 logger = structlog.get_logger()
@@ -33,24 +33,41 @@ TOPICS = [
     "canonical.transactions",
     "canonical.bets",
     "canonical.device_events",
+    "ingest.jobs",
+    "ingest.jobs.reprocess",
 ]
 
 # ──────────────────────────────────────────────────
-# In-memory rolling windows (for a single-instance dev setup)
-# Em prod: use Redis Sorted Sets ou Flink
+# Redis Sorted Set helpers para janelas de tempo
+# Key: betaml:{tenant_id}:txn:{player_id}
+# Score: timestamp Unix epoch (float)
+# Value: JSON da entrada
+# TTL: 30 dias (2 592 000 s)
 # ──────────────────────────────────────────────────
 
-# key: (tenant_id, player_id) → list of (timestamp, amount, type)
-_txn_window: dict[tuple, list] = defaultdict(list)
-_bet_window: dict[tuple, list] = defaultdict(list)
-# key: device_id → set of player_ids
-_device_players: dict[str, set] = defaultdict(set)
-# key: holder_document → set of player_ids
-_bank_players: dict[str, set] = defaultdict(set)
+WINDOW_TTL_SECONDS = 30 * 24 * 3600  # 30 dias
 
 
-def _trim_window(events: list, cutoff: datetime) -> list:
-    return [e for e in events if e["ts"] >= cutoff]
+async def _zadd_entry(redis_client, key: str, ts: datetime, entry: dict) -> None:
+    score = ts.timestamp()
+    value = json.dumps(entry, default=str)
+    await redis_client.zadd_event(key, score, value, window_ttl=WINDOW_TTL_SECONDS)
+
+
+async def _zread_window(redis_client, key: str, cutoff: datetime) -> list[dict]:
+    members = await redis_client.zrange_by_score(key, cutoff.timestamp())
+    result = []
+    for m in members:
+        try:
+            entry = json.loads(m)
+            # re-parse ts from ISO string
+            ts_raw = entry.get("ts")
+            if isinstance(ts_raw, str):
+                entry["ts"] = datetime.fromisoformat(ts_raw)
+            result.append(entry)
+        except Exception:
+            pass
+    return result
 
 
 async def compute_features(
@@ -64,12 +81,12 @@ async def compute_features(
     cutoff_7d  = now - timedelta(days=7)
     cutoff_30d = now - timedelta(days=30)
 
-    key = (tenant_id, player_id)
+    # Read from Redis Sorted Sets (distributed, survives restarts)
+    txn_key = redis_client.txn_window_key(tenant_id, player_id)
+    bet_key = redis_client.bet_window_key(tenant_id, player_id)
 
-    # Trim windows
-    txns = _trim_window(_txn_window.get(key, []), cutoff_30d)
-    bets = _trim_window(_bet_window.get(key, []), cutoff_7d)
-    _txn_window[key] = txns
+    txns = await _zread_window(redis_client, txn_key, cutoff_30d)
+    bets = await _zread_window(redis_client, bet_key, cutoff_7d)
 
     def filter_type(events, type_, since):
         return [e for e in events if e.get("type") == type_ and e["ts"] >= since]
@@ -93,13 +110,12 @@ async def compute_features(
     bet_sum_7d   = sum(b["amount"] for b in bets)
 
     # Baseline (historical deposits — rolling mean/std)
-    daily_deps: dict[str, float] = defaultdict(float)
+    daily_deps: dict[str, float] = {}
     for e in deposits_30d:
         day = e["ts"].date().isoformat()
-        daily_deps[day] += float(e["amount"])
+        daily_deps[day] = daily_deps.get(day, 0.0) + float(e["amount"])
     vals = list(daily_deps.values())
     if vals:
-        import statistics
         baseline_avg = statistics.mean(vals)
         baseline_std = statistics.pstdev(vals) if len(vals) > 1 else 0.0
     else:
@@ -169,15 +185,27 @@ async def compute_features(
     # 11. Cashout ratio (7d) = withdrawals / deposits
     cashout_ratio_7d = with_sum_7d / max(dep_sum_7d, 1e-9)
 
-    # ── Network features ─────────────────────────────────────────────────────
-    shared_device_count = max(
-        (len(_device_players.get(did, set())) for did in _device_players if player_id in _device_players[did]),
-        default=0,
+    # ── Network features (Redis Sets) ─────────────────────────────────────────
+    # player_devices: set of device_ids this player used
+    player_devs = await redis_client.smembers_set(
+        redis_client.player_devices_key(tenant_id, player_id)
     )
-    shared_bank_count = max(
-        (len(_bank_players.get(doc, set())) for doc in _bank_players if player_id in _bank_players[doc]),
-        default=0,
+    # For each device, count how many players share it
+    dev_counts = []
+    for did in player_devs:
+        c = await redis_client.scard_set(redis_client.device_members_key(tenant_id, did))
+        dev_counts.append(c)
+    shared_device_count = max(dev_counts, default=1) - 1  # exclude self
+
+    # player_banks: set of bank-doc-hashes this player used
+    player_banks = await redis_client.smembers_set(
+        redis_client.player_banks_key(tenant_id, player_id)
     )
+    bank_counts = []
+    for doc_hash in player_banks:
+        c = await redis_client.scard_set(redis_client.bank_members_key(tenant_id, doc_hash))
+        bank_counts.append(c)
+    shared_bank_count = max(bank_counts, default=1) - 1  # exclude self
 
     # Shared instrument score: weighted combination
     shared_instrument_score = min(
@@ -297,26 +325,31 @@ async def process_transaction(msg_value: dict, redis_client, ch_client, producer
     if not tenant_id or not player_id:
         return
 
-    # Add to rolling window
-    key = (tenant_id, player_id)
     try:
         occurred_at = datetime.fromisoformat(payload.get("occurred_at", datetime.utcnow().isoformat()))
     except (ValueError, TypeError):
         occurred_at = datetime.utcnow()
 
-    _txn_window[key].append({
-        "ts":     occurred_at,
-        "amount": float(payload.get("amount", 0)),
-        "type":   payload.get("type", ""),
-        "status": payload.get("status", ""),
-        "instrument": payload.get("payment_instrument", {}),
-    })
+    # Add to Redis Sorted Set window
+    entry = {
+        "ts":         occurred_at.isoformat(),
+        "amount":     float(payload.get("amount", 0)),
+        "type":       payload.get("type", ""),
+        "status":     payload.get("status", ""),
+        "method":     payload.get("method", ""),
+        "currency":   payload.get("currency", "BRL"),
+    }
+    txn_key = redis_client.txn_window_key(tenant_id, player_id)
+    await _zadd_entry(redis_client, txn_key, occurred_at, entry)
 
-    # Track bank account sharing
+    # Track bank account sharing via Redis Sets
     instrument = payload.get("payment_instrument") or {}
     holder_doc = instrument.get("holder_document") if isinstance(instrument, dict) else None
     if holder_doc:
-        _bank_players[holder_doc].add(player_id)
+        bank_key   = redis_client.bank_members_key(tenant_id, holder_doc)
+        pbank_key  = redis_client.player_banks_key(tenant_id, player_id)
+        await redis_client.sadd_member(bank_key, player_id)
+        await redis_client.sadd_member(pbank_key, holder_doc)
 
     # Compute + store features
     features = await compute_features(tenant_id, player_id, redis_client, ch_client)
@@ -366,16 +399,19 @@ async def process_bet(msg_value: dict, redis_client, ch_client, producer):
     if not tenant_id or not player_id:
         return
 
-    key = (tenant_id, player_id)
     try:
         placed_at = datetime.fromisoformat(payload.get("placed_at", datetime.utcnow().isoformat()))
     except Exception:
         placed_at = datetime.utcnow()
 
-    _bet_window[key].append({
-        "ts":     placed_at,
-        "amount": float(payload.get("stake_amount", 0)),
-    })
+    entry = {
+        "ts":      placed_at.isoformat(),
+        "amount":  float(payload.get("stake_amount", 0)),
+        "odds":    payload.get("odds"),
+        "outcome": payload.get("outcome"),
+    }
+    bet_key = redis_client.bet_window_key(tenant_id, player_id)
+    await _zadd_entry(redis_client, bet_key, placed_at, entry)
 
     await compute_features(tenant_id, player_id, redis_client, ch_client)
 
@@ -415,14 +451,326 @@ async def process_device_event(msg_value: dict, redis_client, ch_client, produce
     payload   = msg_value.get("payload", {})
     player_id = payload.get("player_id") or payload.get("playerId")
     device_id = payload.get("device_id")
-    if not device_id:
+    tenant_id = msg_value.get("tenant_id")
+    if not device_id or not tenant_id:
         return
     if player_id:
-        _device_players[device_id].add(player_id)
+        # Track device→players and player→devices in Redis Sets
+        dev_key  = redis_client.device_members_key(tenant_id, device_id)
+        pdev_key = redis_client.player_devices_key(tenant_id, player_id)
+        await redis_client.sadd_member(dev_key, player_id)
+        await redis_client.sadd_member(pdev_key, device_id)
         # Recompute features if shared device
-        tenant_id = msg_value.get("tenant_id")
-        if tenant_id:
-            await compute_features(tenant_id, player_id, redis_client, ch_client)
+        await compute_features(tenant_id, player_id, redis_client, ch_client)
+
+
+async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer) -> None:
+    """
+    Consome mensagem de ingest.jobs:
+      - Decodifica conteúdo do arquivo (base64 CSV ou JSON)
+      - Aplica MappingConfig (via MappingEngine) se mapping_config_id fornecido
+      - Publica eventos em raw.{entity_type}s
+      - Atualiza IngestJob no Postgres com DONE/FAILED + contagens
+    """
+    import base64
+    import csv
+    import io
+    import sqlalchemy as sa
+    from minio import Minio
+
+    from libs.mapping import MappingEngine
+
+    job_id = msg_value.get("job_id")
+    tenant_id = msg_value.get("tenant_id")
+    source_system = msg_value.get("source_system", "")
+    mapping_config_id = msg_value.get("mapping_config_id")
+    file_content_b64 = msg_value.get("file_content_b64", "")
+    file_path = msg_value.get("file_path")
+
+    if not job_id or not tenant_id:
+        logger.warning("ingest_job_missing_fields", msg=msg_value)
+        return
+
+    db_url = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@postgres:5432/betaml_dev")
+    sync_url = db_url.replace("postgresql://", "postgresql+psycopg2://")
+
+    def _update_job(
+        status: str,
+        total: int,
+        processed: int,
+        failed: int,
+        error_msg: str | None = None,
+        *,
+        bytes_processed: int = 0,
+        duration_ms: int | None = None,
+        error_sample: list[dict[str, object]] | None = None,
+    ):
+        engine = sa.create_engine(sync_url, pool_pre_ping=True)
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    """
+                    UPDATE ingest_jobs
+                    SET status = :s,
+                        total_records = :t,
+                        processed_records = :p,
+                        failed_records = :f,
+                        error_message = :e,
+                        bytes_processed = :bp,
+                        duration_ms = :dur,
+                        error_sample = CAST(:es AS jsonb),
+                        updated_at = NOW()
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "s": status,
+                    "t": total,
+                    "p": processed,
+                    "f": failed,
+                    "e": error_msg,
+                    "id": job_id,
+                    "bp": bytes_processed,
+                    "dur": duration_ms,
+                    "es": json.dumps(error_sample or [], ensure_ascii=False),
+                },
+            )
+        engine.dispose()
+
+    def _insert_ingest_error(*, raw_payload: dict, line_number: int, reason: str):
+        engine = sa.create_engine(sync_url, pool_pre_ping=True)
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    """
+                    INSERT INTO ingest_errors (
+                        id,
+                        tenant_id,
+                        ingest_job_id,
+                        source_system,
+                        entity_type,
+                        raw_payload,
+                        error_reason,
+                        error_detail,
+                        line_number,
+                        resolved
+                    ) VALUES (
+                        :id,
+                        :tenant_id,
+                        :ingest_job_id,
+                        :source_system,
+                        :entity_type,
+                        :raw_payload,
+                        :error_reason,
+                        CAST(:error_detail AS jsonb),
+                        :line_number,
+                        false
+                    )
+                    """
+                ),
+                {
+                    "id": str(__import__("uuid").uuid4()),
+                    "tenant_id": tenant_id,
+                    "ingest_job_id": job_id,
+                    "source_system": source_system,
+                    "entity_type": "TRANSACTION",
+                    "raw_payload": json.dumps(raw_payload, ensure_ascii=False),
+                    "error_reason": reason,
+                    "error_detail": json.dumps({"line_number": line_number}, ensure_ascii=False),
+                    "line_number": line_number,
+                },
+            )
+        engine.dispose()
+
+    try:
+        if file_content_b64:
+            content = base64.b64decode(file_content_b64).decode("utf-8", errors="replace")
+        elif file_path:
+            endpoint = os.getenv("MINIO_ENDPOINT", "http://minio:9000").replace("http://", "").replace("https://", "")
+            secure = os.getenv("MINIO_ENDPOINT", "http://minio:9000").startswith("https://")
+            bucket = os.getenv("MINIO_BUCKET", "betaml-lakehouse")
+            client = Minio(
+                endpoint,
+                access_key=os.getenv("MINIO_ACCESS_KEY", "minio"),
+                secret_key=os.getenv("MINIO_SECRET_KEY", "minio123"),
+                secure=secure,
+            )
+            obj = client.get_object(bucket, file_path)
+            try:
+                content = obj.read().decode("utf-8", errors="replace")
+            finally:
+                obj.close()
+                obj.release_conn()
+        else:
+            raise ValueError("missing file_content_b64 and file_path")
+    except Exception as exc:
+        await asyncio.to_thread(_update_job, "FAILED", 0, 0, 0, f"file load error: {exc}")
+        return
+
+    mapping_cfg: dict | None = None
+    if mapping_config_id:
+        try:
+            engine = sa.create_engine(sync_url, pool_pre_ping=True)
+            with engine.connect() as conn:
+                row = conn.execute(
+                    sa.text("SELECT config_json FROM mapping_configs WHERE id = :id"),
+                    {"id": mapping_config_id},
+                ).fetchone()
+            mapping_cfg = dict(row._mapping)["config_json"] if row else None
+            engine.dispose()
+        except Exception:
+            mapping_cfg = None
+
+    mapper: MappingEngine | None = None
+    if isinstance(mapping_cfg, dict):
+        try:
+            mapper = MappingEngine(mapping_cfg)
+        except Exception as exc:
+            logger.warning("ingest_job_invalid_mapping", job_id=job_id, error=str(exc))
+
+    rows: list[dict] = []
+    try:
+        reader = csv.DictReader(io.StringIO(content))
+        rows = list(reader)
+    except Exception:
+        for line in content.splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    pass
+
+    total = len(rows)
+    processed = 0
+    failed = 0
+    bytes_processed = 0
+    error_sample: list[dict[str, object]] = []
+    started_at = datetime.utcnow()
+
+    await asyncio.to_thread(_update_job, "PROCESSING", total, 0, 0)
+
+    max_retries = int(os.getenv("DLQ_MAX_RETRIES", "3"))
+
+    async def _publish_with_retries(topic: str, envelope: dict, key: str, row_data: dict, line_number: int) -> bool:
+        for attempt in range(1, max_retries + 1):
+            try:
+                await producer.send(topic, envelope, key=key)
+                return True
+            except Exception as pub_exc:  # noqa: BLE001
+                if attempt >= max_retries:
+                    await producer.send(
+                        f"{topic}.dlq",
+                        {
+                            "tenant_id": tenant_id,
+                            "job_id": job_id,
+                            "source_system": source_system,
+                            "line_number": line_number,
+                            "reason": str(pub_exc),
+                            "attempt": attempt,
+                            "max_retries": max_retries,
+                            "failed_at": datetime.utcnow().isoformat(),
+                            "target_topic": topic,
+                            "raw_payload": row_data,
+                        },
+                        key=str(job_id),
+                    )
+                    return False
+                await asyncio.sleep(0.1 * attempt)
+        return False
+
+    for idx, row_data in enumerate(rows, start=1):
+        try:
+            payload = mapper.apply(row_data) if mapper else row_data
+
+            entity_type = str(
+                payload.get("entity_type")
+                or (mapping_cfg.get("entity_type", "transaction") if mapping_cfg else "transaction")
+            ).lower()
+
+            envelope = {
+                "event_id": str(__import__("uuid").uuid4()),
+                "tenant_id": tenant_id,
+                "source_system": source_system,
+                "source_event_id": payload.get("id") or payload.get("external_id", ""),
+                "schema_version": 1,
+                "entity_type": entity_type,
+                "occurred_at": datetime.utcnow().isoformat(),
+                "payload": payload,
+                "raw_payload": row_data,
+                "ingest_metadata": {"job_id": job_id, "source": "file"},
+            }
+            topic = f"raw.{entity_type}s"
+            ok = await _publish_with_retries(
+                topic,
+                envelope,
+                envelope["source_event_id"] or envelope["event_id"],
+                row_data,
+                idx,
+            )
+            if ok:
+                processed += 1
+                bytes_processed += len(json.dumps(row_data, ensure_ascii=False).encode("utf-8"))
+            else:
+                failed += 1
+                if len(error_sample) < 10:
+                    error_sample.append({"line": idx, "reason": "publish_failed_after_retries", "raw": row_data})
+                await asyncio.to_thread(
+                    _insert_ingest_error,
+                    raw_payload=row_data,
+                    line_number=idx,
+                    reason="publish_failed_after_retries",
+                )
+        except Exception as exc:
+            reason = str(exc)
+            logger.warning("ingest_row_failed", job_id=job_id, line=idx, error=reason)
+            failed += 1
+            if len(error_sample) < 10:
+                error_sample.append({"line": idx, "reason": reason, "raw": row_data})
+
+            await asyncio.to_thread(_insert_ingest_error, raw_payload=row_data, line_number=idx, reason=reason)
+
+            try:
+                await producer.send(
+                    "raw.transactions.dlq",
+                    {
+                        "tenant_id": tenant_id,
+                        "job_id": job_id,
+                        "source_system": source_system,
+                        "line_number": idx,
+                        "reason": reason,
+                        "attempt": max_retries,
+                        "max_retries": max_retries,
+                        "failed_at": datetime.utcnow().isoformat(),
+                        "target_topic": "raw.transactions",
+                        "raw_payload": row_data,
+                    },
+                    key=str(job_id),
+                )
+            except Exception as dlq_exc:
+                logger.warning("dlq_publish_failed", job_id=job_id, error=str(dlq_exc))
+
+    final_status = "DONE" if failed == 0 else ("PARTIAL" if processed > 0 else "FAILED")
+    duration_ms = int((datetime.utcnow() - started_at).total_seconds() * 1000)
+    await asyncio.to_thread(
+        _update_job,
+        final_status,
+        total,
+        processed,
+        failed,
+        None,
+        bytes_processed=bytes_processed,
+        duration_ms=duration_ms,
+        error_sample=error_sample,
+    )
+    logger.info(
+        "ingest_job_complete",
+        job_id=job_id,
+        total=total,
+        processed=processed,
+        failed=failed,
+        status=final_status,
+    )
 
 
 async def main():
@@ -458,6 +806,10 @@ async def main():
                     await process_bet(value, redis_client, ch_client, producer)
                 elif topic == "canonical.device_events":
                     await process_device_event(value, redis_client, ch_client, producer)
+                elif topic == "ingest.jobs":
+                    await process_ingest_job(value, redis_client, ch_client, producer)
+                elif topic == "ingest.jobs.reprocess":
+                    await process_ingest_job(value, redis_client, ch_client, producer)
 
             except Exception as e:
                 logger.error("message_processing_error", topic=msg.topic, error=str(e))
@@ -476,7 +828,7 @@ if __name__ == "__main__":
 # Synchronous helper — used by unit tests (no Redis/ClickHouse required)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def compute_features(player_id: str, history: dict) -> dict:
+def compute_features_offline(player_id: str, history: dict) -> dict:
     """
     Pure synchronous feature computation from a pre-loaded history dict.
     Accepts history = {"transactions": [{"amount", "txn_type", "currency",

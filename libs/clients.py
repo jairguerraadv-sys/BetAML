@@ -137,8 +137,53 @@ class RedisClient:
     async def delete(self, key: str) -> None:
         await self._redis.delete(key)
 
+    # ── Sorted Set helpers (janelas de tempo por player) ──────────────────
+    async def zadd_event(self, key: str, score: float, value: str, window_ttl: int = 2592000) -> None:
+        """Adiciona entrada ao sorted set e mantém TTL de janela."""
+        await self._redis.zadd(key, {value: score})
+        await self._redis.expire(key, window_ttl)
+
+    async def zrange_by_score(self, key: str, min_score: float, max_score: float = float("inf")) -> list[str]:
+        """Retorna membros do sorted set dentro do intervalo de score."""
+        return await self._redis.zrangebyscore(key, min_score, max_score)
+
+    async def zremrange_by_score(self, key: str, min_score: float, max_score: float) -> None:
+        """Remove membros do sorted set abaixo do cutoff (cleanup de janela)."""
+        await self._redis.zremrangebyscore(key, min_score, max_score)
+
+    # ── Set helpers (device/bank sharing) ────────────────────────────────
+    async def sadd_member(self, key: str, member: str, ttl: int = 2592000) -> None:
+        await self._redis.sadd(key, member)
+        await self._redis.expire(key, ttl)
+
+    async def smembers_set(self, key: str) -> set[str]:
+        return await self._redis.smembers(key)
+
+    async def scard_set(self, key: str) -> int:
+        return await self._redis.scard(key)
+
     def features_key(self, tenant_id: str, player_id: str) -> str:
         return f"betaml:{tenant_id}:features:{player_id}"
+
+    def txn_window_key(self, tenant_id: str, player_id: str) -> str:
+        return f"betaml:{tenant_id}:txn:{player_id}"
+
+    def bet_window_key(self, tenant_id: str, player_id: str) -> str:
+        return f"betaml:{tenant_id}:bet:{player_id}"
+
+    def device_members_key(self, tenant_id: str, device_id: str) -> str:
+        return f"betaml:{tenant_id}:dev:{device_id}"
+
+    def player_devices_key(self, tenant_id: str, player_id: str) -> str:
+        return f"betaml:{tenant_id}:pdev:{player_id}"
+
+    def bank_members_key(self, tenant_id: str, holder_doc: str) -> str:
+        import hashlib
+        h = hashlib.sha256(holder_doc.encode()).hexdigest()[:16]
+        return f"betaml:{tenant_id}:bank:{h}"
+
+    def player_banks_key(self, tenant_id: str, player_id: str) -> str:
+        return f"betaml:{tenant_id}:pbank:{player_id}"
 
     def dedup_key(self, tenant_id: str, source_system: str, source_event_id: str) -> str:
         return f"betaml:{tenant_id}:dedup:{source_system}:{source_event_id}"

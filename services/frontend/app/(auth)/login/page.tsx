@@ -15,12 +15,9 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
     try {
-      const res = await login(username, password);
-      localStorage.setItem('betaml_token', res.access_token);
-      localStorage.setItem('betaml_user', JSON.stringify({
-        role: res.role,
-        tenant_id: res.tenant_id,
-      }));
+      // login() chama /api/auth/login (Next.js API route) que seta cookie httpOnly.
+      // O token NUNCA toca o localStorage — imune a XSS.
+      await login(username, password);
       router.push('/dashboard');
     } catch {
       setError('Credenciais inválidas.');

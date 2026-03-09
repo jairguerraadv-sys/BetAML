@@ -1,51 +1,215 @@
 'use client';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchCases, Case } from '@/lib/api';
-import DataTable from '@/components/DataTable';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
+import {
+  FolderOpen, Clock, AlertTriangle, ChevronRight,
+  Filter, Search, Plus,
+} from 'lucide-react';
 
-const STATUS_BADGE: Record<string, string> = {
-  OPEN:       'bg-blue-100 text-blue-700',
-  UNDER_REVIEW:'bg-purple-100 text-purple-700',
-  CLOSED:     'bg-gray-100 text-gray-600',
-  ARCHIVED:   'bg-gray-50 text-gray-400',
+const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
+  OPEN:       { label: 'Aberto',      cls: 'bg-blue-100 text-blue-700' },
+  IN_REVIEW:  { label: 'Em revisão',  cls: 'bg-purple-100 text-purple-700' },
+  UNDER_REVIEW:{ label: 'Em revisão', cls: 'bg-purple-100 text-purple-700' },
+  CLOSED:     { label: 'Encerrado',   cls: 'bg-gray-100 text-gray-600' },
+  REPORTED:   { label: 'Reportado',   cls: 'bg-green-100 text-green-600' },
+  ARCHIVED:   { label: 'Arquivado',   cls: 'bg-gray-50 text-gray-400' },
 };
 
-export default function CasesPage() {
-  const router = useRouter();
-  const { data: cases = [], isLoading } = useQuery({
-    queryKey: ['cases'],
-    queryFn:  () => fetchCases(),
-  });
+const PRIORITY_CONFIG: Record<string, { label: string; cls: string }> = {
+  HIGH:   { label: 'Alta',   cls: 'text-red-600' },
+  MEDIUM: { label: 'Média',  cls: 'text-orange-500' },
+  LOW:    { label: 'Baixa',  cls: 'text-green-600' },
+};
 
-  const columns = [
-    { header: 'Ref',       accessorKey: 'reference_number' as keyof Case },
-    { header: 'Título',    accessorKey: 'title' as keyof Case },
-    { header: 'Prioridade', accessorKey: 'priority' as keyof Case },
-    {
-      header: 'Status',
-      accessorKey: 'status' as keyof Case,
-      cell: (v: unknown) => {
-        const s = v as string;
-        return <span className={`rounded px-2 py-0.5 text-xs font-semibold ${STATUS_BADGE[s] ?? 'bg-gray-100'}`}>{s}</span>;
-      },
-    },
-    {
-      header: 'Criado em',
-      accessorKey: 'created_at' as keyof Case,
-      cell: (v: unknown) => new Date(v as string).toLocaleString('pt-BR'),
-    },
-  ];
+function SLABadge({ sla_due_at }: { sla_due_at?: string }) {
+  if (!sla_due_at) return null;
+  const diff = new Date(sla_due_at).getTime() - Date.now();
+  if (diff < 0) {
+    return <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700">SLA VENCIDO</span>;
+  }
+  const mins = Math.round(diff / 60000);
+  const label = mins < 60 ? `${mins}min` : `${Math.round(mins / 60)}h`;
+  const cls   = diff < 2 * 3600000
+    ? 'bg-orange-100 text-orange-700'
+    : 'bg-green-50 text-green-700';
+  return <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${cls}`}>{label} p/ vencer</span>;
+}
+
+function CaseRow({ c, onClick }: { c: Case; onClick: () => void }) {
+  const status   = STATUS_CONFIG[c.status] ?? { label: c.status, cls: 'bg-gray-100 text-gray-600' };
+  const priority = PRIORITY_CONFIG[c.priority] ?? { label: c.priority, cls: 'text-gray-600' };
+  const isUrgent = !!((c as Record<string, unknown>).sla_due_at) &&
+    (new Date((c as Record<string, unknown>).sla_due_at as string).getTime() - Date.now()) < 2 * 3600000;
 
   return (
-    <div>
-      <h1 className="mb-6 text-2xl font-bold">Casos</h1>
-      <DataTable
-        data={cases}
-        columns={columns}
-        loading={isLoading}
-        onRowClick={(c) => router.push(`/cases/${c.id}`)}
-      />
+    <div
+      onClick={onClick}
+      className={`flex cursor-pointer items-center gap-4 rounded-xl border bg-white px-5 py-3.5 shadow-sm transition-all hover:shadow-md hover:border-brand/30 ${
+        isUrgent ? 'border-orange-200' : 'border-gray-200'
+      }`}
+    >
+      <FolderOpen size={16} className={isUrgent ? 'text-orange-400' : 'text-gray-400'} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-semibold text-gray-900 truncate">{c.title}</p>
+          {(c as Record<string, unknown>).auto_created && (
+            <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600">AUTO</span>
+          )}
+        </div>
+        <p className="mt-0.5 text-[10px] font-mono text-gray-400">
+          {(c as Record<string, unknown>).reference_number as string} ·{' '}
+          {new Date(c.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+        </p>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-3">
+        <SLABadge sla_due_at={(c as Record<string, unknown>).sla_due_at as string | undefined} />
+        <span className={`text-xs font-semibold ${priority.cls}`}>{priority.label}</span>
+        <span className={`rounded px-2 py-0.5 text-xs font-medium ${status.cls}`}>{status.label}</span>
+        <ChevronRight size={14} className="text-gray-300" />
+      </div>
+    </div>
+  );
+}
+
+export default function CasesPage() {
+  const router       = useRouter();
+  const searchParams = useSearchParams();
+  const [search, setSearch]       = useState('');
+  const [statusFilter, setStatus] = useState('active');
+
+  const { data: cases = [], isLoading } = useQuery({
+    queryKey: ['cases', statusFilter],
+    queryFn:  () => fetchCases(
+      statusFilter === 'active'
+        ? { per_page: '200' }
+        : statusFilter === 'closed'
+        ? { status: 'CLOSED', per_page: '200' }
+        : { per_page: '500' }
+    ),
+  });
+
+  // Filtra ativos por padrão
+  const filtered = cases.filter((c) => {
+    const matchStatus =
+      statusFilter === 'active'
+        ? ['OPEN', 'IN_REVIEW', 'UNDER_REVIEW'].includes(c.status)
+        : statusFilter === 'closed'
+        ? ['CLOSED', 'REPORTED', 'ARCHIVED'].includes(c.status)
+        : true;
+    const matchSearch =
+      !search ||
+      c.title.toLowerCase().includes(search.toLowerCase()) ||
+      ((c as Record<string, unknown>).reference_number as string)?.includes(search);
+    return matchStatus && matchSearch;
+  });
+
+  // Ordenação: SLA vencido primeiro, depois por prioridade
+  const priorityOrder: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+  const sorted = [...filtered].sort((a, b) => {
+    const aSlaBreach = (a as Record<string, unknown>).sla_due_at && new Date((a as Record<string, unknown>).sla_due_at as string) < new Date();
+    const bSlaBreach = (b as Record<string, unknown>).sla_due_at && new Date((b as Record<string, unknown>).sla_due_at as string) < new Date();
+    if (aSlaBreach && !bSlaBreach) return -1;
+    if (!aSlaBreach && bSlaBreach) return 1;
+    return (priorityOrder[a.priority] ?? 3) - (priorityOrder[b.priority] ?? 3);
+  });
+
+  const slaBreachCount = filtered.filter(
+    (c) => (c as Record<string, unknown>).sla_due_at && new Date((c as Record<string, unknown>).sla_due_at as string) < new Date()
+  ).length;
+
+  return (
+    <div className="space-y-5">
+      {/* Cabeçalho */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Casos em Investigação</h1>
+          <p className="mt-0.5 text-sm text-gray-500">
+            Gerencie as investigações em andamento e acompanhe os prazos.
+          </p>
+        </div>
+        <button
+          onClick={() => router.push('/cases/new')}
+          className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:opacity-90 shadow-sm"
+        >
+          <Plus size={15} /> Novo caso
+        </button>
+      </div>
+
+      {/* SLA breach banner */}
+      {slaBreachCount > 0 && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+          <p className="flex items-center gap-2 text-sm font-medium text-red-700">
+            <AlertTriangle size={15} />
+            {slaBreachCount} caso{slaBreachCount > 1 ? 's' : ''} com prazo regulatório vencido — requer atenção imediata.
+          </p>
+        </div>
+      )}
+
+      {/* Filtros */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar por título ou referência..."
+            className="rounded-lg border border-gray-200 bg-white py-1.5 pl-8 pr-3 text-sm text-gray-700 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand w-64 shadow-sm"
+          />
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <Filter size={13} className="text-gray-400" />
+          {[
+            { val: 'active', label: `Em andamento (${cases.filter((c) => ['OPEN', 'IN_REVIEW', 'UNDER_REVIEW'].includes(c.status)).length})` },
+            { val: 'closed', label: 'Encerrados' },
+            { val: 'all',    label: 'Todos' },
+          ].map(({ val, label }) => (
+            <button
+              key={val}
+              onClick={() => setStatus(val)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                statusFilter === val
+                  ? 'bg-brand text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Lista */}
+      {isLoading ? (
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-16 rounded-xl bg-gray-100 animate-pulse" />
+          ))}
+        </div>
+      ) : sorted.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 py-16 text-center">
+          <FolderOpen size={32} className="mx-auto mb-3 text-gray-300" />
+          <p className="text-sm font-medium text-gray-400">Nenhum caso encontrado</p>
+          {search && <p className="mt-1 text-xs text-gray-400">Tente outra busca.</p>}
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          {sorted.map((c) => (
+            <CaseRow
+              key={c.id}
+              c={c}
+              onClick={() => router.push(`/cases/${c.id}`)}
+            />
+          ))}
+        </div>
+      )}
+
+      <p className="text-center text-xs text-gray-400">
+        {sorted.length} caso{sorted.length !== 1 ? 's' : ''} exibido{sorted.length !== 1 ? 's' : ''}
+      </p>
     </div>
   );
 }

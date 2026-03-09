@@ -20,7 +20,8 @@ from typing import Any
 
 import structlog
 
-sys.path.insert(0, "/app/libs")
+# Garante que 'from libs.xxx import' funcione tanto no Docker (/app/libs montado)
+# quanto em desenvolvimento local (raiz do projeto no PYTHONPATH)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 logger = structlog.get_logger()
@@ -397,9 +398,17 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
             queue.task_done()
         return
 
+    # Mapeamento severity → risk_score mínimo para o player
+    _SEVERITY_SCORE = {"CRITICAL": 0.95, "HIGH": 0.80, "MEDIUM": 0.55, "LOW": 0.30}
+
     def _write(item: dict):
         alert = item["alert"]
         with engine.begin() as conn:
+            # Define contexto do tenant para respeitar FORCE ROW LEVEL SECURITY
+            conn.execute(
+                sa.text("SET LOCAL app.current_tenant = :tid"),
+                {"tid": alert["tenant_id"]},
+            )
             # Upsert alert
             conn.execute(sa.text("""
                 INSERT INTO alerts
@@ -441,6 +450,25 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                 "eval_ms":        item.get("eval_ms", 0),
                 "ctx":            json.dumps(item.get("context_snapshot") or {}),
             })
+            # Atualizar risk_score e risk_band do player com base na severidade do alerta
+            # (apenas sobe o score, nunca diminui — persistência de risco)
+            if alert.get("player_id"):
+                new_score = _SEVERITY_SCORE.get(alert.get("severity", "LOW"), 0.30)
+                conn.execute(sa.text("""
+                    UPDATE players
+                    SET risk_score = GREATEST(risk_score, :score),
+                        risk_band  = CASE
+                            WHEN GREATEST(risk_score, :score) >= 0.70 THEN 'HIGH'
+                            WHEN GREATEST(risk_score, :score) >= 0.35 THEN 'MEDIUM'
+                            ELSE 'LOW'
+                        END,
+                        last_scored_at = NOW()
+                    WHERE id = :player_id AND tenant_id = :tenant_id
+                """), {
+                    "score":     new_score,
+                    "player_id": alert["player_id"],
+                    "tenant_id": alert["tenant_id"],
+                })
 
     while True:
         item = await queue.get()

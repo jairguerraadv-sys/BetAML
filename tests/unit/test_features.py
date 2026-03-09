@@ -23,7 +23,7 @@ sys.modules.setdefault("minio",         MagicMock())
 
 import importlib
 sp = importlib.import_module("main")
-compute_features = sp.compute_features
+compute_features = sp.compute_features_offline
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "betaml-libs"
+version = "0.1.0"
+description = "Shared Python libraries for BetAML microservices (Kafka, Redis, ClickHouse clients, DSL parser, MappingEngine, Pydantic schemas)"
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["betaml", "pld", "ft", "kafka", "redis", "clickhouse"]
+dependencies = [
+    "aiokafka>=0.10.0",
+    "redis[hiredis]>=5.0.0",
+    "clickhouse-driver>=0.2.7",
+    "pydantic>=2.0",
+    "structlog>=24.0",
+    "minio>=7.0",
+]
+
+[tool.setuptools.packages.find]
+# Procura pacotes no diretório PAI deste pyproject.toml (/workspaces/BetAML/)
+# e encontra o pacote `libs` (com __init__.py)
+where = [".."]
+include = ["libs*"]
+
+[tool.setuptools.package-dir]
+"" = ".."
