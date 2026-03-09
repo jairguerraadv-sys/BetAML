@@ -10,6 +10,9 @@ No CI com Docker:
     TEST_STACK_UP=1 pytest tests/integration/
 """
 import os
+import json
+import hmac
+import hashlib
 import time
 import uuid
 import pytest
@@ -195,6 +198,133 @@ def test_ingest_10_events_in_sequence(headers_a):
         if resp.status_code != 202:
             failed += 1
     assert failed == 0, f"{failed}/10 eventos rejeitados"
+
+
+@skip_unless_stack
+def test_ingest_connector_gamma_xml_parse(headers_a):
+    xml_payload = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<transactions>
+  <transaction>
+    <id>TXG-1</id>
+    <player_id>PLY-G-1</player_id>
+    <type>DEPOSIT</type>
+    <amount>1200.50</amount>
+    <currency>BRL</currency>
+    <timestamp>2026-03-09T10:00:00Z</timestamp>
+  </transaction>
+</transactions>
+""".encode("utf-8")
+
+    resp = api(
+        "/ingest/connectors/gamma/parse",
+        "POST",
+        headers=headers_a,
+        files={"file": ("gamma.xml", xml_payload, "application/xml")},
+        data={"entity_type": "transaction"},
+    )
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert "job_id" in body
+    assert body.get("source_system") == "ConnectorGamma"
+    assert body.get("summary", {}).get("accepted", 0) >= 1
+
+
+@skip_unless_stack
+def test_ingest_connector_delta_ndjson_parse(headers_a):
+    ndjson_payload = (
+        '{"id":"TXD-1","player_id":"PLY-D-1","evt_type":"DEPOSIT","amount":500.0,"ts":"2026-03-09T10:01:00Z"}\n'
+        '{"id":"TXD-2","player_id":"PLY-D-2","evt_type":"WITHDRAWAL","amount":100.0,"ts":"2026-03-09T10:02:00Z"}\n'
+    ).encode("utf-8")
+
+    resp = api(
+        "/ingest/connectors/delta/parse",
+        "POST",
+        headers=headers_a,
+        files={"file": ("delta.ndjson", ndjson_payload, "application/x-ndjson")},
+        data={"entity_type": "transaction"},
+    )
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert "job_id" in body
+    assert body.get("source_system") == "ConnectorDelta"
+    assert body.get("summary", {}).get("accepted", 0) >= 2
+
+
+@skip_unless_stack
+def test_ingest_connector_unknown_name_rejected(headers_a):
+    resp = api(
+        "/ingest/connectors/unknown/parse",
+        "POST",
+        headers=headers_a,
+        files={"file": ("unknown.txt", b"{}", "application/json")},
+        data={"entity_type": "transaction"},
+    )
+    assert resp.status_code == 400
+
+
+@skip_unless_stack
+def test_ingest_webhook_epsilon_hmac_validation(headers_a):
+    payload = {
+        "events": [
+            {
+                "event_id": f"evt-eps-{uuid.uuid4().hex[:8]}",
+                "player_id": f"PLY-EPS-{uuid.uuid4().hex[:6]}",
+                "event_type": "DEPOSIT",
+                "gross_amount": 999.9,
+                "event_time": "2026-03-09T10:03:00Z",
+                "currency_code": "BRL",
+            }
+        ]
+    }
+    raw = json.dumps(payload).encode("utf-8")
+    secret = "dev-secret-change-me"
+    signature = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+
+    ok_resp = api(
+        "/ingest/webhook/epsilon",
+        "POST",
+        headers={
+            **headers_a,
+            "Content-Type": "application/json",
+            "x-epsilon-signature": signature,
+        },
+        data=raw,
+    )
+    assert ok_resp.status_code == 202, ok_resp.text
+
+    bad_resp = api(
+        "/ingest/webhook/epsilon",
+        "POST",
+        headers={
+            **headers_a,
+            "Content-Type": "application/json",
+            "x-epsilon-signature": "sha256=invalid",
+        },
+        data=raw,
+    )
+    assert bad_resp.status_code in (400, 401), bad_resp.text
+
+
+@skip_unless_stack
+def test_resolve_ingest_error_not_found(headers_a):
+    resp = api(
+        f"/ingest/errors/{uuid.uuid4()}/resolve",
+        "POST",
+        headers=headers_a,
+        json={"note": "resolve inexistente"},
+    )
+    assert resp.status_code == 404
+
+
+@skip_unless_stack
+def test_reprocess_job_not_found(headers_a):
+    resp = api(
+        f"/ingest/jobs/{uuid.uuid4()}/reprocess",
+        "POST",
+        headers=headers_a,
+        json={"reason": "job inexistente"},
+    )
+    assert resp.status_code == 404
 
 
 @skip_unless_stack

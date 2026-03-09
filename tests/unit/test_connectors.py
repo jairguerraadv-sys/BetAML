@@ -26,14 +26,18 @@ SAMPLE_XML = textwrap.dedent("""\
       <transaction>
         <id>TX001</id>
         <player_id>P001</player_id>
+                <type>DEPOSIT</type>
         <amount>250.00</amount>
         <currency>BRL</currency>
+                <timestamp>2026-03-09T10:00:00Z</timestamp>
       </transaction>
       <transaction>
         <id>TX002</id>
         <player_id>P002</player_id>
+                <type>WITHDRAWAL</type>
         <amount>100.50</amount>
         <currency>USD</currency>
+                <timestamp>2026-03-09T10:05:00Z</timestamp>
       </transaction>
     </transactions>
 """)
@@ -52,7 +56,7 @@ def test_gamma_record_fields():
     rec = result.records[0]
     assert rec["id"] == "TX001"
     assert rec["player_id"] == "P001"
-    assert rec["amount"] == "250.00"
+    assert rec["amount"] == 250.0
 
 
 def test_gamma_invalid_xml():
@@ -72,8 +76,8 @@ def test_gamma_empty_xml():
 # ── ConnectorDelta (NDJSON) ───────────────────────────────────────────────────
 
 SAMPLE_NDJSON = (
-    '{"id":"TX001","player_id":"P001","amount":250.0}\n'
-    '{"id":"TX002","player_id":"P002","amount":100.5}\n'
+    '{"id":"TX001","player_id":"P001","evt_type":"DEPOSIT","amount":250.0,"ts":"2026-03-09T10:00:00Z"}\n'
+    '{"id":"TX002","player_id":"P002","evt_type":"WITHDRAWAL","amount":100.5,"ts":"2026-03-09T10:01:00Z"}\n'
     '\n'  # blank line — should be ignored
 )
 
@@ -93,7 +97,11 @@ def test_delta_record_values():
 
 
 def test_delta_handles_partial_invalid_lines():
-    bad = b'{"valid": true}\nNOT_JSON\n{"also": "valid"}'
+    bad = (
+        b'{"id":"TX-OK","player_id":"P001","evt_type":"DEPOSIT","amount":10.0,"ts":"2026-03-09T10:00:00Z"}\n'
+        b'NOT_JSON\n'
+        b'{"also": "invalid"}'
+    )
     dd = ConnectorDelta()
     result = dd.parse(bad)
     # Should succeed partially — valid lines parsed, errors recorded
@@ -111,7 +119,16 @@ def test_delta_empty_payload():
 # ── ConnectorEpsilon (Webhook + HMAC) ────────────────────────────────────────
 
 SECRET = "s3cr3t-k3y"
-PAYLOAD = json.dumps([{"event": "deposit", "player_id": "P001", "amount": 50.0}]).encode()
+PAYLOAD = json.dumps([
+    {
+        "event_id": "evt-1",
+        "player_id": "P001",
+        "event_type": "DEPOSIT",
+        "gross_amount": 50.0,
+        "event_time": "2026-03-09T10:00:00Z",
+        "currency_code": "BRL",
+    }
+]).encode()
 SIG = "sha256=" + hmac.new(SECRET.encode(), PAYLOAD, hashlib.sha256).hexdigest()
 
 
@@ -145,8 +162,16 @@ def test_epsilon_no_secret_skips_validation():
 def test_epsilon_parses_records():
     ep = ConnectorEpsilon(secret=SECRET)
     result = ep.parse(PAYLOAD, headers={"x-epsilon-signature": SIG})
-    assert result.records[0]["event"] == "deposit"
-    assert result.records[0]["player_id"] == "P001"
+    assert result.records[0]["event_id"] == "evt-1"
+    assert result.records[0]["external_player_id"] == "P001"
+
+
+def test_delta_missing_required_fields_goes_to_error():
+    dd = ConnectorDelta()
+    # missing event timestamp and event type
+    result = dd.parse(b'{"id":"TX-BAD","player_id":"P001","amount":10}')
+    assert result.success is False
+    assert result.failed >= 1
 
 
 # ── get_connector factory ─────────────────────────────────────────────────────

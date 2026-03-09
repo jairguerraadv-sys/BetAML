@@ -5,7 +5,7 @@ import asyncio
 import base64
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import structlog
@@ -30,7 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import require_roles
 from config import settings
 from database import AsyncSessionLocal, get_db
-from libs.connectors import EPSILON_SIGNATURE_HEADER, EPSILON_TIMESTAMP_HEADER, ConnectorEpsilon
+from libs.connectors import (
+    EPSILON_SIGNATURE_HEADER,
+    EPSILON_TIMESTAMP_HEADER,
+    ConnectorEpsilon,
+    get_connector,
+)
 from models import IngestError, IngestJob, MappingConfig, SystemFlag, User
 from utils import get_producer, redis_rate_limit
 
@@ -78,6 +83,53 @@ class WebsocketIngestRequest(BaseModel):
 
 class ResolveIngestErrorRequest(BaseModel):
     note: Optional[str] = None
+
+
+class ConnectorParseSummary(BaseModel):
+    accepted: int
+    failed: int
+    total: int
+    errors: list[dict[str, Any]]
+
+
+async def _publish_with_retries(
+    *,
+    producer: Any,
+    topic: str,
+    payload: dict[str, Any],
+    key: str,
+    tenant_id: str,
+    source_system: str,
+    context: dict[str, Any] | None = None,
+) -> bool:
+    max_retries = int(getattr(settings, "dlq_max_retries", 3) or 3)
+    for attempt in range(1, max_retries + 1):
+        try:
+            await producer.send(topic, payload, key=key)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            if attempt >= max_retries:
+                try:
+                    await producer.send(
+                        f"{topic}.dlq",
+                        {
+                            "tenant_id": tenant_id,
+                            "source_system": source_system,
+                            "target_topic": topic,
+                            "reason": str(exc),
+                            "attempt": attempt,
+                            "max_retries": max_retries,
+                            "failed_at": datetime.now(timezone.utc).isoformat(),
+                            "payload": payload,
+                            "context": context or {},
+                        },
+                        key=key,
+                    )
+                except Exception as dlq_exc:  # noqa: BLE001
+                    logger.error("ingest_dlq_publish_failed", error=str(dlq_exc), topic=topic)
+                return False
+            await asyncio.sleep(0.1 * attempt)
+    return False
 
 
 def _get_minio_client() -> Minio | None:
@@ -165,12 +217,12 @@ def _build_envelope(
         "source_event_id": source_event_id,
         "schema_version": 1,
         "entity_type": entity_type,
-        "occurred_at": datetime.utcnow().isoformat(),
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
         "payload": payload,
         "raw_payload": payload,
         "mapping_config_id": mapping_config_id,
         "ingest_metadata": {
-            "received_at": datetime.utcnow().isoformat(),
+            "received_at": datetime.now(timezone.utc).isoformat(),
             "mapper_version": "1.0",
             **(ingest_metadata or {}),
         },
@@ -201,7 +253,17 @@ async def ingest_event(
     producer = await get_producer()
     if producer:
         topic = f"raw.{body.entity_type.lower()}s"
-        await producer.send(topic, envelope, key=source_event_id)
+        ok = await _publish_with_retries(
+            producer=producer,
+            topic=topic,
+            payload=envelope,
+            key=source_event_id,
+            tenant_id=current_user.tenant_id,
+            source_system=body.source_system,
+            context={"endpoint": "/ingest/event"},
+        )
+        if not ok:
+            raise HTTPException(503, "Falha ao enfileirar evento após retries; enviado para DLQ")
     return {"event_id": envelope["event_id"], "status": "queued"}
 
 
@@ -235,7 +297,18 @@ async def ingest_batch(
         )
         if producer:
             topic = f"raw.{body.entity_type.lower()}s"
-            await producer.send(topic, envelope, key=source_event_id)
+            ok = await _publish_with_retries(
+                producer=producer,
+                topic=topic,
+                payload=envelope,
+                key=source_event_id,
+                tenant_id=current_user.tenant_id,
+                source_system=body.source_system,
+                context={"endpoint": "/ingest/batch"},
+            )
+            if not ok:
+                results.append({"event_id": envelope["event_id"], "status": "failed_dlq"})
+                continue
         results.append({"event_id": envelope["event_id"], "status": "queued"})
 
     return {"count": len(results), "results": results}
@@ -310,7 +383,17 @@ async def ingest_file(
             "file_path": job.file_path,
             "file_content_b64": base64.b64encode(content).decode(),
         }
-        await producer.send("ingest.jobs", msg, key=job.id)
+        ok = await _publish_with_retries(
+            producer=producer,
+            topic="ingest.jobs",
+            payload=msg,
+            key=job.id,
+            tenant_id=current_user.tenant_id,
+            source_system=source_system,
+            context={"endpoint": "/ingest/file", "job_id": job.id},
+        )
+        if not ok:
+            raise HTTPException(503, "Falha ao enfileirar job de ingestão após retries; enviado para DLQ")
 
     return {"job_id": job.id, "status": "QUEUED", "file_name": file.filename}
 
@@ -349,7 +432,17 @@ async def ingest_epsilon_webhook(
             ingest_metadata={"channel": "webhook", "webhook": "epsilon"},
         )
         if producer:
-            await producer.send("raw.transactions", envelope, key=source_event_id)
+            ok = await _publish_with_retries(
+                producer=producer,
+                topic="raw.transactions",
+                payload=envelope,
+                key=source_event_id,
+                tenant_id=current_user.tenant_id,
+                source_system="ConnectorEpsilon",
+                context={"endpoint": "/ingest/webhook/epsilon"},
+            )
+            if not ok:
+                continue
         queued += 1
 
     return {"status": "accepted", "count": queued}
@@ -524,7 +617,7 @@ async def resolve_ingest_error(
 
     err.resolved = True
     err.resolved_by = current_user.id
-    err.resolved_at = datetime.utcnow()
+    err.resolved_at = datetime.now(timezone.utc)
     err.error_detail = {
         **(err.error_detail or {}),
         "resolution_note": body.note,
@@ -582,7 +675,17 @@ async def reprocess_job(
             "file_name": new_job.file_name,
             "file_path": new_job.file_path,
         }
-        await producer.send("ingest.jobs", msg, key=new_job.id)
+        ok = await _publish_with_retries(
+            producer=producer,
+            topic="ingest.jobs",
+            payload=msg,
+            key=new_job.id,
+            tenant_id=current_user.tenant_id,
+            source_system=new_job.source_system,
+            context={"endpoint": "/ingest/jobs/{job_id}/reprocess", "job_id": new_job.id},
+        )
+        if not ok:
+            raise HTTPException(503, "Falha ao enfileirar reprocessamento após retries; enviado para DLQ")
     elif producer and not job.file_path:
         raise HTTPException(409, "Job original sem arquivo Bronze para reprocessamento")
 
@@ -643,8 +746,19 @@ async def ingest_websocket(websocket: WebSocket):
                     ingest_metadata={"channel": "websocket"},
                 )
                 topic = f"raw.{item.entity_type.lower()}s"
-                await producer.send(topic, envelope, key=source_event_id)
-                await websocket.send_json({"status": "queued", "event_id": envelope["event_id"]})
+                ok = await _publish_with_retries(
+                    producer=producer,
+                    topic=topic,
+                    payload=envelope,
+                    key=source_event_id,
+                    tenant_id=tenant_id,
+                    source_system=item.source_system,
+                    context={"endpoint": "/ingest/ws"},
+                )
+                if not ok:
+                    await websocket.send_json({"status": "failed_dlq", "event_id": envelope["event_id"]})
+                else:
+                    await websocket.send_json({"status": "queued", "event_id": envelope["event_id"]})
             except Exception as exc:  # noqa: BLE001
                 await websocket.send_json({"status": "failed", "error": str(exc)})
             finally:
@@ -683,3 +797,128 @@ async def ingest_websocket(websocket: WebSocket):
             await worker_task
         except Exception:
             pass
+
+
+@router.post("/ingest/connectors/{connector_name}/parse", status_code=202)
+async def parse_connector_payload(
+    connector_name: str,
+    file: UploadFile = File(...),
+    entity_type: str = Form("TRANSACTION"),
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Dedicated parser endpoint for Gamma/XML and Delta/NDJSON connectors.
+
+    Validates connector payload, quarantines parse errors and enqueues valid events.
+    """
+    name = connector_name.strip().lower()
+    if name not in {"gamma", "delta"}:
+        raise HTTPException(400, "connector_name deve ser 'gamma' ou 'delta' para este endpoint")
+
+    max_requests = await _tenant_ingest_rate_limit(db, current_user.tenant_id, default_limit=120)
+    await redis_rate_limit(current_user.tenant_id, f"ingest.connector.{name}", max_requests=max_requests)
+
+    content = await file.read()
+    source_system = "ConnectorGamma" if name == "gamma" else "ConnectorDelta"
+    connector_kwargs = {"root_tag": "transaction"} if name == "gamma" else {}
+    connector = get_connector(name, **connector_kwargs)
+    parse_result = connector.parse(content, entity_type=entity_type)
+
+    # Register an ingest job for observability and reprocessing trail
+    job = IngestJob(
+        tenant_id=current_user.tenant_id,
+        source_system=source_system,
+        connector_type="FILE",
+        file_name=file.filename,
+        file_size_bytes=len(content),
+        total_records=parse_result.total,
+        processed_records=0,
+        failed_records=parse_result.failed,
+        bytes_processed=0,
+        status="PROCESSING",
+        created_by=current_user.id,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    bronze_path = _upload_bronze_file(
+        tenant_id=current_user.tenant_id,
+        job_id=job.id,
+        file_name=file.filename or f"{name}.payload",
+        content=content,
+    )
+    if bronze_path:
+        job.file_path = bronze_path
+        await db.commit()
+
+    producer = await get_producer()
+    accepted = 0
+    failed = 0
+    error_rows: list[dict[str, Any]] = []
+
+    for rec in parse_result.records:
+        source_event_id = str(rec.get("event_id") or uuid.uuid4())
+        envelope = _build_envelope(
+            tenant_id=current_user.tenant_id,
+            source_system=source_system,
+            entity_type=entity_type,
+            payload=rec,
+            source_event_id=source_event_id,
+            ingest_metadata={"channel": "connector-parse", "job_id": job.id},
+        )
+        topic = f"raw.{entity_type.lower()}s"
+        if producer:
+            ok = await _publish_with_retries(
+                producer=producer,
+                topic=topic,
+                payload=envelope,
+                key=source_event_id,
+                tenant_id=current_user.tenant_id,
+                source_system=source_system,
+                context={"endpoint": "/ingest/connectors/{connector_name}/parse", "job_id": job.id},
+            )
+            if not ok:
+                failed += 1
+                error_rows.append({"line": None, "reason": "publish_failed_after_retries", "raw": rec})
+                continue
+        accepted += 1
+
+    for err in parse_result.errors:
+        failed += 1
+        reason = err.get("reason", "parse_error") if isinstance(err, dict) else str(err)
+        raw_payload = err.get("raw", "") if isinstance(err, dict) else ""
+        line_number = err.get("line") if isinstance(err, dict) else None
+        error_rows.append({"line": line_number, "reason": reason, "raw": raw_payload})
+        db.add(
+            IngestError(
+                tenant_id=current_user.tenant_id,
+                ingest_job_id=job.id,
+                source_system=source_system,
+                entity_type=entity_type,
+                raw_payload=str(raw_payload),
+                error_reason=reason,
+                error_detail={"line": line_number, "connector": name},
+                line_number=line_number,
+                resolved=False,
+            )
+        )
+
+    job.processed_records = accepted
+    job.failed_records = failed
+    job.bytes_processed = len(content)
+    job.error_sample = error_rows[:10]
+    job.status = "DONE" if failed == 0 else ("PARTIAL" if accepted > 0 else "FAILED")
+    await db.commit()
+
+    return {
+        "job_id": job.id,
+        "source_system": source_system,
+        "status": job.status,
+        "summary": ConnectorParseSummary(
+            accepted=accepted,
+            failed=failed,
+            total=parse_result.total,
+            errors=error_rows[:20],
+        ).model_dump(),
+    }
