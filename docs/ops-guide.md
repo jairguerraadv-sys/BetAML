@@ -258,6 +258,69 @@ Configure alertas no Grafana em: **Alerting → Alert rules → New alert rule**
 docker compose ps api        # checar estado
 docker compose logs --tail=50 api
 docker compose restart api
+
+## 12. Runbook de Ingestão (DLQ, Erros e Reprocessamento)
+
+### 12.1 Consultar erros de ingestão
+
+```bash
+curl -s "http://localhost:8000/ingest/errors?limit=50" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Filtros suportados:
+
+- `job_id`
+- `resolved` (`true` ou `false`)
+- `source_system`
+- `limit` / `offset`
+
+### 12.2 Marcar erro como resolvido
+
+```bash
+curl -s -X POST "http://localhost:8000/ingest/errors/$ERROR_ID/resolve" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"note":"corrigido em backoffice"}'
+```
+
+### 12.3 Reprocessar job com arquivo Bronze
+
+```bash
+curl -s -X POST "http://localhost:8000/ingest/jobs/$JOB_ID/reprocess" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"reprocess after mapping fix"}'
+```
+
+Comportamento operacional:
+
+- Reprocessamento exige Kafka disponível.
+- Reprocessamento exige `file_path` (arquivo Bronze) no job original.
+- Em falha de enqueue após retries, o novo job é marcado como `FAILED`.
+
+### 12.4 Parse dedicado de conectores (Gamma/Delta)
+
+```bash
+curl -s -X POST "http://localhost:8000/ingest/connectors/gamma/parse" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "entity_type=transaction" \
+  -F "file=@./sample-gamma.xml;type=application/xml"
+```
+
+```bash
+curl -s -X POST "http://localhost:8000/ingest/connectors/delta/parse" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "entity_type=transaction" \
+  -F "file=@./sample-delta.ndjson;type=application/x-ndjson"
+```
+
+Resposta inclui:
+
+- `job_id`
+- `source_system`
+- `status` (`DONE`, `PARTIAL` ou `FAILED`)
+- `summary.accepted`, `summary.failed`, `summary.total`, `summary.errors`
 ```
 
 ### ML Service fora do ar / modelos não carregados
