@@ -321,6 +321,48 @@ Resposta inclui:
 - `source_system`
 - `status` (`DONE`, `PARTIAL` ou `FAILED`)
 - `summary.accepted`, `summary.failed`, `summary.total`, `summary.errors`
+
+## 13. Verificações de Isolamento Multi-tenant (Checklist)
+
+Use dois tokens de tenants distintos (`$TOKEN_A` e `$TOKEN_B`) para validar
+que recursos de um tenant não são acessíveis pelo outro.
+
+### 13.1 Audit log (novo e legado)
+
+```bash
+curl -i -s http://localhost:8000/audit-logs -H "Authorization: Bearer $TOKEN_A"
+curl -i -s http://localhost:8000/audit-log  -H "Authorization: Bearer $TOKEN_A"
+```
+
+Sem token, ambos devem retornar `401`/`403`.
+
+### 13.2 Ingest job por tenant
+
+```bash
+curl -i -s http://localhost:8000/ingest/jobs/$JOB_ID_A -H "Authorization: Bearer $TOKEN_B"
+```
+
+Esperado: `403` ou `404` para acesso cross-tenant.
+
+### 13.3 Reprocessamento cross-tenant bloqueado
+
+```bash
+curl -i -s -X POST "http://localhost:8000/ingest/jobs/$JOB_ID_A/reprocess" \
+  -H "Authorization: Bearer $TOKEN_B" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"cross-tenant attempt"}'
+```
+
+Esperado: `403` ou `404`.
+
+### 13.4 Erros de ingestão cross-tenant
+
+```bash
+curl -i -s "http://localhost:8000/ingest/errors?job_id=$JOB_ID_A" \
+  -H "Authorization: Bearer $TOKEN_B"
+```
+
+Esperado: lista vazia para listagem e `403`/`404` para tentativa de resolve em erro de outro tenant.
 ```
 
 ### ML Service fora do ar / modelos não carregados
