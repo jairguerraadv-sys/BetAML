@@ -988,7 +988,12 @@ def test_audit_log_after_report_generation(headers_a):
     """
     # Pega o total de audit logs antes
     before_resp = api("/audit-log?limit=1", headers=headers_a)
-    total_before = before_resp.json().get("total", 0) if before_resp.status_code == 200 else 0
+    assert before_resp.status_code == 200
+    before_body = before_resp.json()
+    assert isinstance(before_body, dict)
+    assert "total" in before_body
+    assert "items" in before_body
+    total_before = before_body.get("total", 0)
 
     # Gera um relatório
     case_resp = api("/cases", "POST", headers=headers_a, json={"title": "Caso Audit Test"})
@@ -999,7 +1004,10 @@ def test_audit_log_after_report_generation(headers_a):
 
     # Verifica que houve incremento no audit log
     after_resp = api("/audit-log?limit=1", headers=headers_a)
-    if after_resp.status_code != 200:
-        pytest.skip("/audit-log endpoint indisponível")
-    total_after = after_resp.json().get("total", 0)
+    assert after_resp.status_code == 200
+    after_body = after_resp.json()
+    assert isinstance(after_body, dict)
+    assert "total" in after_body
+    assert "items" in after_body
+    total_after = after_body.get("total", 0)
     assert total_after >= total_before, "AuditLog não foi incrementado após geração de relatório"
