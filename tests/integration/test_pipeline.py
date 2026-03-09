@@ -333,7 +333,16 @@ def test_mapping_templates_endpoint(headers_a):
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body, list)
-    assert any(i.get("source_system") == "ConnectorGamma" for i in body)
+    gamma = next((i for i in body if i.get("source_system") == "ConnectorGamma"), None)
+    epsilon = next((i for i in body if i.get("source_system") == "ConnectorEpsilon"), None)
+    assert gamma is not None
+    assert gamma.get("payload_format") == "xml"
+    assert gamma.get("content_type") == "application/xml"
+    assert isinstance(gamma.get("input_schema"), list)
+    assert gamma.get("sample_payload")
+    assert epsilon is not None
+    assert epsilon.get("auth_mode") == "hmac_sha256"
+    assert epsilon.get("signature_header") == "x-epsilon-signature"
 
 
 @skip_unless_stack
@@ -939,6 +948,22 @@ def test_ingest_jobs_list(headers_a):
         assert "items" in body or "jobs" in body or isinstance(body.get("data"), list)
     else:
         assert isinstance(body, list)
+
+
+@skip_unless_stack
+def test_ingest_jobs_list_filter_by_source_system(headers_a):
+    resp = api("/ingest/jobs?source_system=BackofficeAlpha&limit=5", headers=headers_a)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body, list)
+    for item in body:
+        assert item.get("source_system") == "BackofficeAlpha"
+
+
+@skip_unless_stack
+def test_ingest_jobs_list_rejects_cross_tenant_filter(headers_a):
+    resp = api("/ingest/jobs?tenant=other-tenant", headers=headers_a)
+    assert resp.status_code == 403
 
 
 # ── ReportPackage COAF ────────────────────────────────────────────────────────

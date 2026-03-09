@@ -131,6 +131,11 @@ export default function MappingsPage() {
     enabled: !!selected,
   });
 
+  const activeTemplate = useMemo(
+    () => templates.find((tpl) => tpl.source_system === sourceSystem) || null,
+    [templates, sourceSystem],
+  );
+
   const validateMutation = useMutation({
     mutationFn: (payload: { config_text?: string; format: EditorFormat }) => validateMappingConfig(payload),
     onSuccess: (data) => {
@@ -421,6 +426,42 @@ export default function MappingsPage() {
         </div>
 
         <div className="space-y-3 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+          {activeTemplate && (
+            <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Contrato do conector</p>
+                <p className="text-xs text-slate-500">
+                  {activeTemplate.payload_format} · {activeTemplate.content_type} · auth {activeTemplate.auth_mode}
+                </p>
+                {activeTemplate.signature_header && (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Signature header: {activeTemplate.signature_header}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Campos esperados</p>
+                <div className="max-h-32 space-y-1 overflow-auto rounded border border-slate-200 bg-white p-2">
+                  {activeTemplate.input_schema.map((field) => (
+                    <div key={field.name} className="text-xs text-slate-700">
+                      <span className="font-mono text-slate-900">{field.name}</span>{' '}
+                      <span className="text-slate-500">({field.type})</span>{' '}
+                      {field.required ? <span className="text-rose-600">obrigatório</span> : <span className="text-slate-400">opcional</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Payload de exemplo</p>
+                <pre className="max-h-36 overflow-auto rounded border border-slate-200 bg-slate-950 p-3 text-[11px] text-slate-200">
+                  {activeTemplate.sample_payload}
+                </pre>
+              </div>
+            </div>
+          )}
+
           <p className="text-sm font-semibold text-gray-800">Preview do Mapping</p>
           <textarea
             value={sampleText}

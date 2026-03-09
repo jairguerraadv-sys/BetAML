@@ -544,3 +544,93 @@ transforms:
     type: copy
     source: ip_address
 """
+
+
+CONNECTOR_TEMPLATE_REGISTRY: dict[str, dict[str, Any]] = {
+    "ConnectorGamma": {
+        "connector_name": "gamma",
+        "source_system": "ConnectorGamma",
+        "format": "yaml",
+        "content_type": "application/xml",
+        "payload_format": "xml",
+        "auth_mode": "none",
+        "template": GAMMA_TEMPLATE_YAML,
+        "sample_payload": """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<transactions>
+  <transaction>
+    <id>TXG-9001</id>
+    <player_id>PLY-G-100</player_id>
+    <type>DEPOSIT</type>
+    <amount>1200.50</amount>
+    <currency>BRL</currency>
+    <timestamp>2026-03-09T10:00:00Z</timestamp>
+    <device_id>device-gamma-01</device_id>
+  </transaction>
+</transactions>
+""",
+        "input_schema": [
+            {"name": "id", "type": "string", "required": True, "description": "Identificador externo do evento"},
+            {"name": "player_id", "type": "string", "required": True, "description": "Identificador externo do jogador"},
+            {"name": "type", "type": "string", "required": True, "description": "Tipo transacional no XML de origem"},
+            {"name": "amount", "type": "number", "required": True, "description": "Valor monetário da transação"},
+            {"name": "timestamp", "type": "datetime", "required": True, "description": "Data/hora ISO8601 do evento"},
+            {"name": "currency", "type": "string", "required": False, "description": "Moeda da transação; default BRL"},
+            {"name": "device_id", "type": "string", "required": False, "description": "Identificador do dispositivo"},
+        ],
+    },
+    "ConnectorDelta": {
+        "connector_name": "delta",
+        "source_system": "ConnectorDelta",
+        "format": "yaml",
+        "content_type": "application/x-ndjson",
+        "payload_format": "ndjson",
+        "auth_mode": "none",
+        "template": DELTA_TEMPLATE_YAML,
+        "sample_payload": """{\"id\":\"TXD-1\",\"player_id\":\"PLY-D-1\",\"evt_type\":\"DEPOSIT\",\"amount\":500.0,\"ts\":\"2026-03-09T10:01:00Z\"}
+{\"id\":\"TXD-2\",\"player_id\":\"PLY-D-2\",\"evt_type\":\"WITHDRAWAL\",\"amount\":100.0,\"ts\":\"2026-03-09T10:02:00Z\"}
+""",
+        "input_schema": [
+            {"name": "id", "type": "string", "required": True, "description": "Identificador externo do evento"},
+            {"name": "player_id", "type": "string", "required": True, "description": "Identificador externo do jogador"},
+            {"name": "evt_type", "type": "string", "required": True, "description": "Tipo transacional em formato NDJSON"},
+            {"name": "amount", "type": "number", "required": True, "description": "Valor monetário da linha"},
+            {"name": "ts", "type": "datetime", "required": True, "description": "Timestamp ISO8601 do evento"},
+            {"name": "currency", "type": "string", "required": False, "description": "Moeda opcional"},
+            {"name": "device_id", "type": "string", "required": False, "description": "Dispositivo associado ao evento"},
+        ],
+    },
+    "ConnectorEpsilon": {
+        "connector_name": "epsilon",
+        "source_system": "ConnectorEpsilon",
+        "format": "yaml",
+        "content_type": "application/json",
+        "payload_format": "webhook-json",
+        "auth_mode": "hmac_sha256",
+        "signature_header": EPSILON_SIGNATURE_HEADER,
+        "timestamp_header": EPSILON_TIMESTAMP_HEADER,
+        "template": EPSILON_TEMPLATE_YAML,
+        "sample_payload": json.dumps(
+            {
+                "events": [
+                    {
+                        "event_id": "evt-eps-100",
+                        "player_id": "PLY-EPS-1",
+                        "event_type": "DEPOSIT",
+                        "gross_amount": 999.9,
+                        "event_time": "2026-03-09T10:03:00Z",
+                        "currency_code": "BRL",
+                    }
+                ]
+            },
+            indent=2,
+        ),
+        "input_schema": [
+            {"name": "events[].event_id", "type": "string", "required": True, "description": "Identificador do evento entregue no webhook"},
+            {"name": "events[].player_id", "type": "string", "required": True, "description": "Identificador do jogador"},
+            {"name": "events[].event_type", "type": "string", "required": True, "description": "Tipo do evento transacional"},
+            {"name": "events[].gross_amount", "type": "number", "required": True, "description": "Valor bruto recebido"},
+            {"name": "events[].event_time", "type": "datetime", "required": True, "description": "Timestamp ISO8601 do evento"},
+            {"name": "events[].currency_code", "type": "string", "required": False, "description": "Moeda opcional; default BRL"},
+        ],
+    },
+}

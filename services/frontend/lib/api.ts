@@ -232,9 +232,22 @@ export const linkAlertToCase = (alertId: string, caseId: string) =>
 // ── Mappings (Módulo 1) ─────────────────────────────────────────────────────
 
 export interface MappingTemplate {
+  connector_name: string;
   source_system: string;
   format: 'json' | 'yaml';
+  payload_format: string;
+  content_type: string;
+  auth_mode: string;
+  signature_header?: string;
+  timestamp_header?: string;
   template: string;
+  sample_payload: string;
+  input_schema: Array<{
+    name: string;
+    type: string;
+    required: boolean;
+    description: string;
+  }>;
 }
 
 export interface MappingListItem {

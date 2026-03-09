@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user, require_roles
 from database import get_db
-from libs.connectors import DELTA_TEMPLATE_YAML, EPSILON_TEMPLATE_YAML, GAMMA_TEMPLATE_YAML
+from libs.connectors import CONNECTOR_TEMPLATE_REGISTRY
 from libs.mapping import MappingConfigSchema, MappingEngine
 from models import MappingConfig, User
 
@@ -154,11 +154,7 @@ async def list_mapping_templates(
     current_user: User = Depends(get_current_user),
 ):
     _ = current_user
-    return [
-        {"source_system": "ConnectorGamma", "format": "yaml", "template": GAMMA_TEMPLATE_YAML},
-        {"source_system": "ConnectorDelta", "format": "yaml", "template": DELTA_TEMPLATE_YAML},
-        {"source_system": "ConnectorEpsilon", "format": "yaml", "template": EPSILON_TEMPLATE_YAML},
-    ]
+    return list(CONNECTOR_TEMPLATE_REGISTRY.values())
 
 
 @router.post("/mappings/validate")
