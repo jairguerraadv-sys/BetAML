@@ -29,6 +29,8 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(_ROOT, "libs"))
 sys.path.insert(0, os.path.join(_ROOT, "services", "stream_processor"))
 
+import main as sp  # noqa: E402
+
 from main import compute_features  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -289,6 +291,22 @@ class TestNightActivityRatio(unittest.TestCase):
         redis = _make_redis_mock(txn_entries=txns)
         features = _run(compute_features("t1", "p1", redis, _ch_mock()))
         self.assertEqual(features["night_activity_ratio"], 0.0)
+
+
+class TestFeatureSnapshotPersistence(unittest.TestCase):
+    def test_compute_features_persists_snapshot(self):
+        redis = _make_redis_mock()
+        calls = []
+
+        async def _fake_to_thread(func, *args, **kwargs):
+            calls.append(getattr(func, "__name__", str(func)))
+            return None
+
+        with patch.object(sp.asyncio, "to_thread", side_effect=_fake_to_thread):
+            _run(compute_features("t1", "p1", redis, _ch_mock()))
+
+        assert "_ch_insert_features" in calls
+        assert "_persist_feature_snapshot" in calls
 
 
 if __name__ == "__main__":

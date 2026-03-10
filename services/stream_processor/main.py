@@ -296,6 +296,16 @@ async def compute_features(
     except Exception as e:
         logger.warning("ch_insert_features_failed", error=str(e))
 
+    try:
+        await asyncio.to_thread(_persist_feature_snapshot, features, now.date())
+    except Exception as e:
+        logger.warning("feature_snapshot_persist_failed", error=str(e), player_id=player_id)
+
+    try:
+        await asyncio.to_thread(_persist_feature_snapshot, features, now.date())
+    except Exception as e:
+        logger.warning("feature_snapshot_persist_failed", error=str(e), player_id=player_id)
+
     return features
 
 
@@ -345,6 +355,80 @@ def _ch_insert_features(ch_client, features: dict, feature_date) -> None:
         "computed_at":                datetime.utcnow(),
     }
     ch_client.insert_dict("betaml.player_features_daily", [row])
+
+
+def _persist_feature_snapshot(features: dict, feature_date) -> None:
+    import io
+    import sqlalchemy as sa
+
+    db_url = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@postgres:5432/betaml_dev")
+    sync_url = db_url.replace("postgresql://", "postgresql+psycopg2://")
+    engine = sa.create_engine(sync_url, pool_pre_ping=True)
+    payload = json.dumps(features, ensure_ascii=False, default=str)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    """
+                    INSERT INTO feature_snapshots (
+                        id,
+                        tenant_id,
+                        player_id,
+                        feature_date,
+                        snapshot_date,
+                        features,
+                        created_at
+                    ) VALUES (
+                        :id,
+                        :tenant_id,
+                        :player_id,
+                        :feature_date,
+                        :snapshot_date,
+                        CAST(:features AS jsonb),
+                        NOW()
+                    )
+                    ON CONFLICT (tenant_id, player_id, feature_date)
+                    DO UPDATE SET
+                        snapshot_date = EXCLUDED.snapshot_date,
+                        features = EXCLUDED.features,
+                        created_at = NOW()
+                    """
+                ),
+                {
+                    "id": str(__import__("uuid").uuid4()),
+                    "tenant_id": features["tenant_id"],
+                    "player_id": features["player_id"],
+                    "feature_date": feature_date,
+                    "snapshot_date": feature_date,
+                    "features": payload,
+                },
+            )
+    finally:
+        engine.dispose()
+
+    try:
+        from minio import Minio
+
+        endpoint = os.getenv("MINIO_ENDPOINT", "http://minio:9000").replace("http://", "").replace("https://", "")
+        secure = os.getenv("MINIO_ENDPOINT", "http://minio:9000").startswith("https://")
+        bucket = os.getenv("MINIO_BUCKET", "betaml-lakehouse")
+        client = Minio(
+            endpoint,
+            access_key=os.getenv("MINIO_ACCESS_KEY", "minio"),
+            secret_key=os.getenv("MINIO_SECRET_KEY", "minio123"),
+            secure=secure,
+        )
+        object_name = (
+            f"gold/{features['tenant_id']}/feature_date={feature_date.isoformat()}/"
+            f"entity_type=player/player_id={features['player_id']}.json"
+        )
+        encoded = payload.encode("utf-8")
+        stream = io.BytesIO(encoded)
+        if not client.bucket_exists(bucket):
+            client.make_bucket(bucket)
+        client.put_object(bucket, object_name, stream, length=len(encoded), content_type="application/json")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("gold_snapshot_persist_failed", error=str(exc), player_id=features.get("player_id"))
 
 
 async def process_transaction(msg_value: dict, redis_client, ch_client, producer):
