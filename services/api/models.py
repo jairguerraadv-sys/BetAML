@@ -410,9 +410,14 @@ class FeatureSnapshot(Base):
     tenant_id    = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     player_id    = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
     feature_date = Column(Date, nullable=False)
+    snapshot_date = Column(Date)
     features     = Column(JSONB, nullable=False, default={})
     drift_score  = Column(Numeric(5, 4))
     created_at   = Column(DateTime(timezone=True), server_default=func.now())
+
+    @property
+    def snapshot_date_value(self):
+        return self.snapshot_date or self.feature_date
 
 
 # ── Admin / Config ────────────────────────────────────────────────────────────
@@ -456,15 +461,21 @@ class Notification(Base):
 
     id          = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
     tenant_id   = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    user_id     = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id     = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
     type        = Column(String(30), nullable=False)
     title       = Column(Text, nullable=False)
     body        = Column(Text)
-    entity_type = Column(Text)
-    entity_id   = Column(Text)
-    read        = Column(Boolean, nullable=False, default=False)
+    is_read     = Column(Boolean, nullable=False, default=False)
     read_at     = Column(DateTime(timezone=True))
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
+
+    @property
+    def reference_type(self):
+        return None
+
+    @property
+    def reference_id(self):
+        return None
 
 
 class SystemFlag(Base):

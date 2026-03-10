@@ -924,7 +924,7 @@ async def list_notifications(
 
 @enterprise_router.post("/notifications/{notif_id}/read", tags=["notifications"])
 async def mark_notification_read(
-    notif_id: int,
+    notif_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

@@ -431,12 +431,12 @@ class ScoringPreviewOut(BaseModel):
 
 
 class NotificationOut(BaseModel):
-    id: int
+    id: str
     tenant_id: str
-    user_id: str
+    user_id: Optional[str] = None
     type: str
     title: str
-    body: str
+    body: Optional[str] = None
     reference_type: Optional[str] = None
     reference_id: Optional[str] = None
     is_read: bool = False
@@ -456,7 +456,7 @@ class NotificationCreate(BaseModel):
 
 
 class FeatureSnapshotOut(BaseModel):
-    id: int
+    id: str
     tenant_id: str
     player_id: str
     snapshot_date: str        # YYYY-MM-DD

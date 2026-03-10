@@ -19,7 +19,7 @@ import json
 import os
 import sys
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
 import structlog
@@ -40,7 +40,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update, func as sqlfunc
+from sqlalchemy import desc, select, text, update, func as sqlfunc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Adiciona libs ao path
@@ -67,9 +67,11 @@ from models import (
     Bet,
     Case,
     CaseEvent,
+    FeatureSnapshot,
     FinancialTransaction,
     IngestJob,
     MappingConfig,
+    Notification,
     Player,
     ReportPackage,
     RuleDefinition,
@@ -137,6 +139,7 @@ Instrumentator(
 
 # ─── Producer global ──────────────────────────────
 _producer = None
+_feature_maintenance_task = None
 
 
 async def get_producer():
@@ -198,6 +201,188 @@ async def _setup_minio_lifecycle() -> None:
         logger.warning("minio_lifecycle_setup_failed", error=str(exc))
 
 
+async def _warm_feature_store_cache() -> None:
+    """Warm Redis online store with latest persisted snapshots."""
+    try:
+        import redis.asyncio as aioredis
+
+        redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                text(
+                    """
+                    SELECT DISTINCT ON (tenant_id, player_id)
+                           tenant_id, player_id, feature_date, features, created_at
+                    FROM feature_snapshots
+                    ORDER BY tenant_id, player_id, feature_date DESC, created_at DESC
+                    """
+                )
+            )
+            rows = result.mappings().all()
+
+        warmed = 0
+        for row in rows:
+            features = dict(row.get("features") or {})
+            if not features:
+                continue
+            features.setdefault("snapshot_date", str(row.get("feature_date")))
+            features.setdefault("warmed_from", "feature_snapshot")
+            key = f"betaml:{row['tenant_id']}:features:{row['player_id']}"
+            await redis.hset(key, mapping={k: str(v) for k, v in features.items()})
+            await redis.expire(key, 14400)
+            warmed += 1
+
+        await redis.aclose()
+        logger.info("feature_store_cache_warmed", players=warmed)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("feature_store_cache_warm_failed", error=str(exc))
+
+
+def _feature_null_ratio(rows: list[FeatureSnapshot], key: str) -> float:
+    if not rows:
+        return 0.0
+    missing = 0
+    for row in rows:
+        value = (row.features or {}).get(key)
+        if value in (None, "", "null"):
+            missing += 1
+    return missing / max(len(rows), 1)
+
+
+def _feature_mean(rows: list[FeatureSnapshot], key: str) -> float | None:
+    values: list[float] = []
+    for row in rows:
+        value = (row.features or {}).get(key)
+        if isinstance(value, bool):
+            values.append(float(value))
+            continue
+        try:
+            if value not in (None, "", "null"):
+                values.append(float(value))
+        except Exception:
+            continue
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+async def _run_feature_drift_check_once() -> None:
+    try:
+        async with AsyncSessionLocal() as db:
+            tenant_ids = list((await db.execute(select(Tenant.id))).scalars().all())
+            for tenant_id in tenant_ids:
+                dates = list(
+                    (
+                        await db.execute(
+                            select(FeatureSnapshot.feature_date)
+                            .where(FeatureSnapshot.tenant_id == tenant_id)
+                            .distinct()
+                            .order_by(desc(FeatureSnapshot.feature_date))
+                            .limit(2)
+                        )
+                    ).scalars().all()
+                )
+                if len(dates) < 2:
+                    continue
+
+                current_date, previous_date = dates[0], dates[1]
+                current_rows = list(
+                    (
+                        await db.execute(
+                            select(FeatureSnapshot).where(
+                                FeatureSnapshot.tenant_id == tenant_id,
+                                FeatureSnapshot.feature_date == current_date,
+                            )
+                        )
+                    ).scalars().all()
+                )
+                previous_rows = list(
+                    (
+                        await db.execute(
+                            select(FeatureSnapshot).where(
+                                FeatureSnapshot.tenant_id == tenant_id,
+                                FeatureSnapshot.feature_date == previous_date,
+                            )
+                        )
+                    ).scalars().all()
+                )
+                if not current_rows or not previous_rows:
+                    continue
+
+                feature_keys = sorted(set().union(*[(row.features or {}).keys() for row in current_rows + previous_rows]))
+                findings: list[str] = []
+                drift_score = 0.0
+                for key in feature_keys:
+                    null_ratio = _feature_null_ratio(current_rows, key)
+                    prev_null_ratio = _feature_null_ratio(previous_rows, key)
+                    if null_ratio >= 0.30 and null_ratio - prev_null_ratio >= 0.20:
+                        findings.append(f"{key}: null_ratio {null_ratio:.0%} (antes {prev_null_ratio:.0%})")
+                        drift_score = max(drift_score, min(1.0, null_ratio))
+                        continue
+
+                    mean_now = _feature_mean(current_rows, key)
+                    mean_prev = _feature_mean(previous_rows, key)
+                    if mean_now is None or mean_prev is None:
+                        continue
+                    delta = abs(mean_now - mean_prev) / max(abs(mean_prev), 1.0)
+                    if delta >= 0.50:
+                        findings.append(f"{key}: media {mean_now:.2f} vs {mean_prev:.2f} ({delta:.0%})")
+                        drift_score = max(drift_score, min(1.0, delta))
+
+                if not findings:
+                    continue
+
+                title = f"Drift de features detectado em {current_date.isoformat()}"
+                existing = (
+                    await db.execute(
+                        select(Notification).where(
+                            Notification.tenant_id == tenant_id,
+                            Notification.type == "FEATURE_DRIFT",
+                            Notification.title == title,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if existing:
+                    continue
+
+                admin_ids = list(
+                    (
+                        await db.execute(
+                            select(User.id).where(
+                                User.tenant_id == tenant_id,
+                                User.role == "ADMIN",
+                                User.active == True,
+                            )
+                        )
+                    ).scalars().all()
+                )
+                for admin_id in admin_ids:
+                    db.add(
+                        Notification(
+                            tenant_id=tenant_id,
+                            user_id=admin_id,
+                            type="FEATURE_DRIFT",
+                            title=title,
+                            body="; ".join(findings[:5]),
+                            is_read=False,
+                        )
+                    )
+
+                for row in current_rows:
+                    row.drift_score = drift_score
+
+            await db.commit()
+        logger.info("feature_drift_check_completed")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("feature_drift_check_failed", error=str(exc))
+
+
+async def _feature_store_maintenance_loop() -> None:
+    while True:
+        await _run_feature_drift_check_once()
+        await asyncio.sleep(24 * 3600)
+
+
 @app.on_event("startup")
 async def startup():
     # Guard: JWT secret inseguro em ambientes não-dev
@@ -220,6 +405,7 @@ async def startup():
         await conn.run_sync(Base.metadata.create_all)
     await get_producer()
     await _setup_minio_lifecycle()
+    await _warm_feature_store_cache()
     # Inicia background task para auto-criação de cases a partir de scoring.alerts
     try:
         from alert_processor import start_alert_consumer
@@ -227,11 +413,19 @@ async def startup():
         logger.info("alert_processor_scheduled")
     except Exception as exc:
         logger.warning("alert_processor_start_failed", error=str(exc))
+    global _feature_maintenance_task
+    _feature_maintenance_task = asyncio.create_task(
+        _feature_store_maintenance_loop(),
+        name="feature_store_maintenance",
+    )
     logger.info("betaml_api_started", env=settings.environment)
 
 
 @app.on_event("shutdown")
 async def shutdown():
+    global _feature_maintenance_task
+    if _feature_maintenance_task:
+        _feature_maintenance_task.cancel()
     if _producer:
         await _producer.stop()
 
