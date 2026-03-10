@@ -14,7 +14,7 @@ import logging
 import os
 import statistics
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import structlog
 
@@ -77,7 +77,7 @@ async def compute_features(
     redis_client,
     ch_client,
 ) -> dict:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     cutoff_1h = now - timedelta(hours=1)
     cutoff_24h = now - timedelta(hours=24)
     cutoff_7d  = now - timedelta(days=7)
@@ -352,7 +352,7 @@ def _ch_insert_features(ch_client, features: dict, feature_date) -> None:
         "cashout_ratio_7d":           _f("cashout_ratio_7d"),
         "shared_instrument_score":    _f("shared_instrument_score"),
         "feature_version":            int(features.get("feature_version", 2)),
-        "computed_at":                datetime.utcnow(),
+        "computed_at":                datetime.now(timezone.utc).replace(tzinfo=None),
     }
     ch_client.insert_dict("betaml.player_features_daily", [row])
 
@@ -439,9 +439,9 @@ async def process_transaction(msg_value: dict, redis_client, ch_client, producer
         return
 
     try:
-        occurred_at = datetime.fromisoformat(payload.get("occurred_at", datetime.utcnow().isoformat()))
+        occurred_at = datetime.fromisoformat(payload.get("occurred_at", datetime.now(timezone.utc).isoformat()))
     except (ValueError, TypeError):
-        occurred_at = datetime.utcnow()
+        occurred_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Add to Redis Sorted Set window
     entry = {
@@ -484,9 +484,9 @@ async def process_transaction(msg_value: dict, redis_client, ch_client, producer
 
 def _ch_insert_transaction(ch_client, envelope: dict, payload: dict) -> None:
     try:
-        occurred_at = datetime.fromisoformat(payload.get("occurred_at", datetime.utcnow().isoformat()))
+        occurred_at = datetime.fromisoformat(payload.get("occurred_at", datetime.now(timezone.utc).isoformat()))
     except Exception:
-        occurred_at = datetime.utcnow()
+        occurred_at = datetime.now(timezone.utc).replace(tzinfo=None)
     row = {
         "event_id":         envelope.get("event_id", ""),
         "tenant_id":        envelope.get("tenant_id", ""),
@@ -500,7 +500,7 @@ def _ch_insert_transaction(ch_client, envelope: dict, payload: dict) -> None:
         "status":           payload.get("status", ""),
         "occurred_at":      occurred_at,
         "event_date":       occurred_at.date(),
-        "created_at":       datetime.utcnow(),
+        "created_at":       datetime.now(timezone.utc).replace(tzinfo=None),
     }
     ch_client.insert_dict("betaml.transactions", [row])
 
@@ -513,9 +513,9 @@ async def process_bet(msg_value: dict, redis_client, ch_client, producer):
         return
 
     try:
-        placed_at = datetime.fromisoformat(payload.get("placed_at", datetime.utcnow().isoformat()))
+        placed_at = datetime.fromisoformat(payload.get("placed_at", datetime.now(timezone.utc).isoformat()))
     except Exception:
-        placed_at = datetime.utcnow()
+        placed_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     entry = {
         "ts":      placed_at.isoformat(),
@@ -536,9 +536,9 @@ async def process_bet(msg_value: dict, redis_client, ch_client, producer):
 
 def _ch_insert_bet(ch_client, envelope: dict, payload: dict) -> None:
     try:
-        placed_at = datetime.fromisoformat(payload.get("placed_at", datetime.utcnow().isoformat()))
+        placed_at = datetime.fromisoformat(payload.get("placed_at", datetime.now(timezone.utc).isoformat()))
     except Exception:
-        placed_at = datetime.utcnow()
+        placed_at = datetime.now(timezone.utc).replace(tzinfo=None)
     row = {
         "event_id":       envelope.get("event_id", ""),
         "tenant_id":      envelope.get("tenant_id", ""),
@@ -555,7 +555,7 @@ def _ch_insert_bet(ch_client, envelope: dict, payload: dict) -> None:
         "settled_at":     None,
         "event_date":     placed_at.date(),
         "status":         payload.get("status", ""),
-        "created_at":     datetime.utcnow(),
+        "created_at":     datetime.now(timezone.utc).replace(tzinfo=None),
     }
     ch_client.insert_dict("betaml.bets", [row])
 
@@ -759,7 +759,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
     failed = 0
     bytes_processed = 0
     error_sample: list[dict[str, object]] = []
-    started_at = datetime.utcnow()
+    started_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     await asyncio.to_thread(_update_job, "PROCESSING", total, 0, 0)
 
@@ -782,7 +782,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                             "reason": str(pub_exc),
                             "attempt": attempt,
                             "max_retries": max_retries,
-                            "failed_at": datetime.utcnow().isoformat(),
+                            "failed_at": datetime.now(timezone.utc).isoformat(),
                             "target_topic": topic,
                             "raw_payload": row_data,
                         },
@@ -808,7 +808,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                 "source_event_id": payload.get("id") or payload.get("external_id", ""),
                 "schema_version": 1,
                 "entity_type": entity_type,
-                "occurred_at": datetime.utcnow().isoformat(),
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
                 "payload": payload,
                 "raw_payload": row_data,
                 "ingest_metadata": {"job_id": job_id, "source": "file"},
@@ -854,7 +854,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                         "reason": reason,
                         "attempt": max_retries,
                         "max_retries": max_retries,
-                        "failed_at": datetime.utcnow().isoformat(),
+                        "failed_at": datetime.now(timezone.utc).isoformat(),
                         "target_topic": "raw.transactions",
                         "raw_payload": row_data,
                     },
@@ -864,7 +864,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                 logger.warning("dlq_publish_failed", job_id=job_id, error=str(dlq_exc))
 
     final_status = "DONE" if failed == 0 else ("PARTIAL" if processed > 0 else "FAILED")
-    duration_ms = int((datetime.utcnow() - started_at).total_seconds() * 1000)
+    duration_ms = int((datetime.now(timezone.utc).replace(tzinfo=None) - started_at).total_seconds() * 1000)
     await asyncio.to_thread(
         _update_job,
         final_status,
@@ -950,7 +950,7 @@ def compute_features_offline(player_id: str, history: dict) -> dict:
     from datetime import datetime as _dt, timedelta as _td
 
     txns_raw = history.get("transactions", [])
-    now = _dt.utcnow()
+    now = _dt.now(timezone.utc).replace(tzinfo=None)
     cutoff_24h = now - _td(hours=24)
     cutoff_7d  = now - _td(days=7)
     cutoff_30d = now - _td(days=30)
