@@ -1,7 +1,7 @@
 """routers/players.py — Listagem, perfil e compatibilidade econômica de players."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import structlog
@@ -12,10 +12,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import decrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
 from models import FinancialTransaction, Player, ScoringConfig, User
+from utils import write_audit
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["players"])
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _coerce_scalar(value):
+    if hasattr(value, "__float__") and not isinstance(value, (str, bool)):
+        return float(value)
+    return value
+
+
+def _normalize_feature_history_row(columns: list[str], row: tuple) -> dict:
+    record = {col: _coerce_scalar(val) for col, val in zip(columns, row)}
+    if "unique_instruments_7d" in record and "unique_instruments_used_7d" not in record:
+        record["unique_instruments_used_7d"] = record["unique_instruments_7d"]
+    if "bonus_to_real_ratio_30d" in record and "bonus_to_real_money_ratio_30d" not in record:
+        record["bonus_to_real_money_ratio_30d"] = record["bonus_to_real_ratio_30d"]
+    return record
 
 
 @router.get("/players")
@@ -32,6 +52,14 @@ async def list_players(
         .offset(offset)
     )
     players = (await db.execute(q)).scalars().all()
+    # LGPD Art. 37 — log de acesso a dados pessoais (CPF mascarado)
+    if current_user.role in ("ADMIN", "AML_ANALYST") and players:
+        await write_audit(
+            db, current_user.tenant_id, current_user.id,
+            "LIST_PLAYERS", "Player", None,
+            pii_accessed="cpf_masked"
+        )
+        await db.flush()
     return [
         {
             "id": p.id,
@@ -55,8 +83,21 @@ async def get_player(
     p = await db.get(Player, player_id)
     if not p or p.tenant_id != current_user.tenant_id:
         raise HTTPException(404, "Player não encontrado")
+    if p.status == "ERASED":
+        # LGPD Art. 18 — dados anonimizados; não retornar PII
+        raise HTTPException(410, "Dados deste player foram anonimizados (LGPD Art. 18)")
     cpf_plain = decrypt_pii(p.cpf_encrypted)
     show_full = current_user.role in ("ADMIN", "AML_ANALYST")
+
+    # Audit access to PII (LGPD Art. 37)
+    if show_full:
+        await write_audit(
+            db, current_user.tenant_id, current_user.id,
+            "GET_PLAYER", "Player", player_id,
+            pii_accessed="cpf"
+        )
+        await db.flush()
+
     return {
         "id": p.id,
         "external_player_id": p.external_player_id,
@@ -90,7 +131,7 @@ async def get_player_econ_compat(
     ).scalars().first()
     ratio_threshold = float(sc_row.income_volume_ratio_threshold) if sc_row else 1.5
 
-    cutoff_30d = datetime.utcnow() - timedelta(days=30)
+    cutoff_30d = _utcnow() - timedelta(days=30)
     deposit_sum_30d = float(
         (
             await db.execute(
@@ -161,6 +202,11 @@ async def get_player_feature_history(
         "ratio_w2d_7d", "baseline_avg_deposit", "baseline_stddev_deposit",
         "zscore_deposit", "new_payment_flag", "new_device_flag",
         "shared_device_count", "shared_bank_count", "chargeback_count_30d",
+        "deposit_velocity", "unique_instruments_7d", "night_activity_ratio",
+        "weekend_activity_ratio", "avg_odds_bet_7d", "win_loss_ratio_30d",
+        "avg_dep_to_wdraw_hours", "multi_currency_flag", "chargeback_rate_30d",
+        "bonus_to_real_ratio_30d", "cashout_ratio_7d", "shared_instrument_score",
+        "feature_version",
         "computed_at",
     ]
 
@@ -189,9 +235,5 @@ async def get_player_feature_history(
         "player_id": player_id,
         "days_requested": days,
         "count": len(rows),
-        "data": [
-            {col: (float(val) if hasattr(val, "__float__") and not isinstance(val, (str, bool)) else val)
-             for col, val in zip(_COLUMNS, row)}
-            for row in rows
-        ],
+        "data": [_normalize_feature_history_row(_COLUMNS, row) for row in rows],
     }

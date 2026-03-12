@@ -380,7 +380,114 @@ async def generate_report_package(
     }
 
 
-@router.get("/cases/{case_id}/report-package/{rp_id}/pdf")
+@router.post("/cases/{case_id}/report-package/submit")
+async def submit_report_package(
+    case_id: str,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Submete o ReportPackage mais recente ao COAF (stub para integração futura).
+
+    Comportamento atual:
+    - Valida que existe um ReportPackage com decision=FILE_SAR para o caso
+    - Marca o report como FILED (status de comunicação confirmada)
+    - Registra no audit_log: SUBMIT_COAF_REPORT
+    - Persiste CaseEvent com tipo REPORT_SUBMITTED
+
+    Integração futura:
+    - Quando o portal COAF disponibilizar API REST, este endpoint
+      fará HTTP POST do payload para o endpoint oficial.
+
+    Returns:
+        JSON com status da submissão e identificador de rastreamento.
+    """
+    c = await db.get(Case, case_id)
+    if not c or c.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Caso não encontrado")
+
+    # Buscar o ReportPackage mais recente para este caso
+    from sqlalchemy import select as _select
+    from models import ReportPackage as _RP
+
+    rp = (await db.execute(
+        _select(_RP).where(
+            _RP.case_id == case_id,
+            _RP.tenant_id == current_user.tenant_id,
+        ).order_by(_RP.created_at.desc())
+    )).scalar_one_or_none()
+
+    if rp is None:
+        raise HTTPException(
+            400,
+            "Nenhum ReportPackage encontrado para este caso. "
+            "Gere primeiro com POST /cases/{id}/report-package."
+        )
+
+    payload_decision = (rp.payload or {}).get("decision", "PENDING") if isinstance(rp.payload, dict) else "PENDING"
+    if payload_decision != "FILE_SAR":
+        raise HTTPException(
+            400,
+            f"ReportPackage deve ter decision=FILE_SAR para ser submetido. "
+            f"Decision atual: '{payload_decision}'."
+        )
+
+    if rp.status == "FILED":
+        raise HTTPException(409, "Este ReportPackage já foi submetido anteriormente.")
+
+    # Marcar como FILED
+    rp.status = "FILED"
+
+    # Registrar evento no caso
+    import uuid as _uuid
+    tracking_id = str(_uuid.uuid4())
+    db.add(CaseEvent(
+        case_id=case_id,
+        tenant_id=current_user.tenant_id,
+        event_type="REPORT_SUBMITTED",
+        content={
+            "report_package_id": rp.id,
+            "tracking_id": tracking_id,
+            "submitted_by": current_user.id,
+            "submitted_at": datetime.utcnow().isoformat() + "Z",
+            "channel": "STUB_MANUAL",
+            "note": (
+                "Submissão registrada. Quando o portal COAF disponibilizar API, "
+                "este endpoint será atualizado para envio automático."
+            ),
+        },
+        created_by=current_user.id,
+    ))
+
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "SUBMIT_COAF_REPORT", "Case", case_id,
+        after={"report_package_id": rp.id, "tracking_id": tracking_id},
+    )
+    await db.commit()
+
+    logger.info(
+        "coaf_report_submitted",
+        case_id=case_id,
+        report_package_id=rp.id,
+        tracking_id=tracking_id,
+        user_id=current_user.id,
+    )
+
+    return {
+        "status": "FILED",
+        "report_package_id": rp.id,
+        "tracking_id": tracking_id,
+        "submitted_at": datetime.utcnow().isoformat() + "Z",
+        "submitted_by": current_user.id,
+        "channel": "STUB_MANUAL",
+        "message": (
+            "Submissão registrada com sucesso. "
+            "Guarde o tracking_id para rastreamento. "
+            "Quando a API COAF estiver disponível, o envio será automático."
+        ),
+    }
+
 async def download_report_pdf(
     case_id: str,
     rp_id: str,

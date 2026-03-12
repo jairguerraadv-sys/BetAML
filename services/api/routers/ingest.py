@@ -85,6 +85,14 @@ class ResolveIngestErrorRequest(BaseModel):
     note: Optional[str] = None
 
 
+class ReplayIngestErrorRequest(BaseModel):
+    corrected_payload: dict[str, Any]
+    entity_type: Optional[str] = None
+    mapping_config_id: Optional[str] = None
+    resolve_original: bool = True
+    note: Optional[str] = None
+
+
 class ConnectorParseSummary(BaseModel):
     accepted: int
     failed: int
@@ -626,6 +634,87 @@ async def resolve_ingest_error(
     return {"status": "resolved", "id": err.id}
 
 
+@router.post("/ingest/errors/{error_id}/replay", status_code=202)
+async def replay_ingest_error(
+    error_id: str,
+    body: ReplayIngestErrorRequest,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    err = await db.get(IngestError, error_id)
+    if not err or err.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Erro de ingestão não encontrado")
+
+    if err.source_system not in ALLOWED_SOURCE_SYSTEMS:
+        raise HTTPException(400, f"source_system '{err.source_system}' não suportado para replay")
+
+    mapping_config_id = body.mapping_config_id
+    if mapping_config_id:
+        mc = await db.get(MappingConfig, mapping_config_id)
+        if not mc or mc.tenant_id != current_user.tenant_id:
+            raise HTTPException(404, "MappingConfig não encontrado para o tenant")
+
+    entity_type = (body.entity_type or err.entity_type or "TRANSACTION").upper()
+    source_event_id = str(body.corrected_payload.get("event_id") or uuid.uuid4())
+
+    producer = await get_producer()
+    if not producer:
+        raise HTTPException(503, "Kafka indisponível para replay do erro")
+
+    envelope = _build_envelope(
+        tenant_id=current_user.tenant_id,
+        source_system=err.source_system,
+        entity_type=entity_type,
+        payload=body.corrected_payload,
+        source_event_id=source_event_id,
+        mapping_config_id=mapping_config_id,
+        ingest_metadata={
+            "channel": "quarantine_replay",
+            "ingest_error_id": err.id,
+            "replayed_by": current_user.id,
+            "original_line_number": err.line_number,
+        },
+    )
+    topic = f"raw.{entity_type.lower()}s"
+    ok = await _publish_with_retries(
+        producer=producer,
+        topic=topic,
+        payload=envelope,
+        key=source_event_id,
+        tenant_id=current_user.tenant_id,
+        source_system=err.source_system,
+        context={"endpoint": "/ingest/errors/{error_id}/replay", "ingest_error_id": err.id},
+    )
+    if not ok:
+        raise HTTPException(503, "Falha ao reenfileirar erro após retries; enviado para DLQ")
+
+    err.error_detail = {
+        **(err.error_detail or {}),
+        "replay": {
+            "replayed_at": datetime.now(timezone.utc).isoformat(),
+            "replayed_by": current_user.id,
+            "event_id": envelope["event_id"],
+            "source_event_id": source_event_id,
+            "entity_type": entity_type,
+            "mapping_config_id": mapping_config_id,
+            "note": body.note,
+        },
+    }
+    if body.resolve_original:
+        err.resolved = True
+        err.resolved_by = current_user.id
+        err.resolved_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    return {
+        "status": "queued",
+        "event_id": envelope["event_id"],
+        "source_event_id": source_event_id,
+        "ingest_error_id": err.id,
+        "resolved": err.resolved,
+    }
+
+
 @router.post("/ingest/jobs/{job_id}/reprocess", status_code=202)
 async def reprocess_job(
     job_id: str,
@@ -720,10 +809,27 @@ async def ingest_websocket(websocket: WebSocket):
         await websocket.close(code=1008)
         return
 
+    # Verificar blacklist de JWT (tokens revogados via /auth/logout)
+    jti = payload.get("jti")
+    if jti:
+        try:
+            from auth import _get_auth_redis
+            r = await _get_auth_redis()
+            if r and await r.exists(f"betaml:revoked:jti:{jti}"):
+                await websocket.send_json({"error": "token_revoked"})
+                await websocket.close(code=1008)
+                return
+        except Exception:
+            pass  # Redis indisponível não bloqueia o WS
+
     async with AsyncSessionLocal() as db:
         user = await db.get(User, user_id)
         if not user or not user.active:
             await websocket.send_json({"error": "inactive_user"})
+            await websocket.close(code=1008)
+            return
+        if user.role not in {"ADMIN", "AML_ANALYST"}:
+            await websocket.send_json({"error": "insufficient_role"})
             await websocket.close(code=1008)
             return
 
