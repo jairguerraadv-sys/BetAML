@@ -236,12 +236,21 @@ Funções disponíveis: `zscore(value, mean, std)`, `ratio(a, b)`, `abs(v)`, `su
 
 ## Tenants Seed
 
-| Tenant    | Usuário   | Senha      | Slug          |
-|-----------|-----------|------------|---------------|
-| OperadorA | `admin_a` | `admin123` | `operadora-a` |
-| OperadorB | `admin_b` | `admin123` | `operadora-b` |
+Após o primeiro `docker compose up`, o seed é aplicado automaticamente. Credenciais:
 
-Cada tenant possui: 1 ADMIN + 1 AML_ANALYST + 1 AUDITOR + 50 jogadores + 12 regras DSL ativas.
+| Tenant    | Usuário       | Senha        | Role         |
+|-----------|---------------|--------------|--------------|
+| OperadorA | `admin_a`     | `admin123`   | ADMIN        |
+| OperadorA | `analyst_a`   | `analyst123` | AML_ANALYST  |
+| OperadorA | `auditor_a`   | `auditor123` | AUDITOR      |
+| OperadorB | `admin_b`     | `admin123`   | ADMIN        |
+| OperadorB | `analyst_b`   | `analyst123` | AML_ANALYST  |
+| OperadorB | `auditor_b`   | `auditor123` | AUDITOR      |
+
+Cada tenant possui: **3 usuários** (ADMIN + AML_ANALYST + AUDITOR) + **50 jogadores** (3 PEP) + **12 regras DSL** ativas + **4 alertas suspeitos** + **1 case auto-criado** + **ScoringConfig** + **2 PlayerLists** + **2 CompoundRules**.
+
+> **Atenção:** Credenciais de **desenvolvimento** geradas pelo seed. Em staging/produção, troque
+> todas as senhas e configure `JWT_SECRET` e `PII_ENCRYPTION_KEY` únicos no arquivo `.env`.
 
 ---
 

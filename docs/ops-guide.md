@@ -98,10 +98,56 @@ run(create())
 
 ### Ordem de Execução
 
+Execute as migrations em ordem crescente de número. O arquivo `init-db.sql` cria o schema base (v1). As migrations incrementais adicionam tabelas e colunas conforme o projeto evolui.
+
 ```bash
-# Primeiro: schema base (criado automaticamente no init-db.sql)
-# Após primeira subida, aplicar migration v2:
-docker compose exec postgres psql -U betaml -d betaml -f /docker-entrypoint-initdb.d/migration_v2.sql
+# Helper: aplica uma migration específica
+apply_migration() {
+  local version=$1
+  docker compose exec postgres psql -U betaml -d betaml \
+    -f /migrations/migration_v${version}.sql
+}
+
+# Aplicar sequencialmente a partir de v2
+for v in 2 3 4 5 6 7 8 9 10; do
+  echo "=== Aplicando migration v$v ==="
+  apply_migration $v
+done
+```
+
+### Resumo de Cada Migration
+
+| Versão | Descrição |
+|--------|-----------|
+| v2 | Tabelas secundárias: `system_flags`, `notifications`, `feature_snapshots`, `scoring_configs`, `player_lists`, `rule_macros`, `api_keys`, `compound_rules`, `ingest_errors`; coluna `weight` em `rules` |
+| v3 | Tabelas OLTP: `financial_transactions`, `bets`, `device_events`; RLS por tenant |
+| v4 | Extensão `pgcrypto`; colunas `status`/`analyst_narrative`/`pdf_url` em `report_packages`; coluna `pii_accessed` em `audit_logs` |
+| v5 | Colunas em `compound_rules`, `model_registry`, `player_list_entries`; `risk_band` em `players`; `auto_created` em `cases`; thresholds em `scoring_configs`; índices adicionais |
+| v6 | Colunas de threshold (`low_threshold` … `critical_threshold`), `is_active` e `data_retention_days` em `scoring_configs` |
+| v7 | Coluna `snapshot_date` em `feature_snapshots`; índice por tenant/player/snapshot_date |
+| v8 | Coluna `is_read` em `notifications`; backfill de legado `read → is_read`; default `false` |
+| v9 | Colunas `reference_type`/`reference_id` em `notifications`; constraint `chk_player_status` em `players` (inclui `ERASED`); índice filtrado `status != 'ERASED'` |
+| v10 | Coluna `feature_version INTEGER NOT NULL DEFAULT 2` em `feature_snapshots`; índice por tenant/player/feature_version |
+
+### Aplicar Migration Individual
+
+```bash
+# Exemplo: aplicar apenas a v9
+docker compose exec postgres psql -U betaml -d betaml \
+  -f /migrations/migration_v9.sql
+```
+
+### Verificar Migrações Aplicadas
+
+```bash
+# Checar se coluna snapshot_date existe (v7)
+docker compose exec postgres psql -U betaml -d betaml -c \
+  "SELECT column_name FROM information_schema.columns
+   WHERE table_name='feature_snapshots' AND column_name='snapshot_date';"
+
+# Checar constraint de status (v9)
+docker compose exec postgres psql -U betaml -d betaml -c \
+  "\d players" | grep chk_player_status
 ```
 
 ### Reverter Migration v2
@@ -250,7 +296,37 @@ services:
 
 Configure alertas no Grafana em: **Alerting → Alert rules → New alert rule**.
 
-## 11. Troubleshooting
+## 11. Feature Store Operacional
+
+### Endpoints Canônicos
+
+Use estes endpoints como contrato principal do feature store:
+
+```bash
+# Features atuais do player (Redis online store)
+GET /feature-store/players/{player_id}/current
+
+# Histórico de snapshots (Postgres/Gold)
+GET /feature-store/players/{player_id}/history?from=2026-03-01T00:00:00Z&to=2026-03-10T23:59:59Z
+```
+
+### Endpoints Legados Compatíveis
+
+Os endpoints abaixo continuam ativos por compatibilidade e retornam payload equivalente quando aplicável:
+
+```bash
+GET /players/{player_id}/features/current
+GET /players/{player_id}/features
+GET /players/{player_id}/feature-history?days=30
+```
+
+### Observações Operacionais
+
+- O endpoint current normaliza tipos vindos do Redis antes de responder, preservando `bool`, `int` e `float`.
+- O histórico canônico retorna `items[]` com `snapshot_date`, `created_at`, `features` e `drift_score`.
+- A rota legada `feature-history` expõe aliases compatíveis como `unique_instruments_used_7d` e `bonus_to_real_money_ratio_30d`.
+
+## 12. Troubleshooting
 
 ### API não responde
 
@@ -388,3 +464,144 @@ docker compose exec redpanda rpk group describe betaml-stream-processor
 docker compose exec clickhouse clickhouse-client \
   --query "SELECT count() FROM betaml.player_features_daily"
 ```
+
+---
+
+## 14. Procedure de Rotação de Chaves Criptográficas
+
+> **Criticalidade: ALTA.** Execute este procedure em manutenção programada com comunicação prévia
+> aos usuários, pois todos os tokens JWT ativos serão invalidados durante o processo.
+
+### 14.1 Rotação do JWT_SECRET
+
+A rotação do `JWT_SECRET` invalida **todos os tokens JWT ativos** no momento da troca.
+Os usuários precisarão re-autenticar após o restart.
+
+```bash
+# 1. Gerar novo segredo (mínimo 32 bytes)
+NEW_JWT_SECRET=$(python -c "import secrets; print(secrets.token_hex(32))")
+echo "Novo JWT_SECRET: $NEW_JWT_SECRET"
+
+# 2. Atualizar .env
+sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$NEW_JWT_SECRET/" .env
+
+# 3. Invalidar blacklist Redis (tokens antigos são inválidos de qualquer forma pós-restart)
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD" FLUSHDB
+
+# 4. Restart da API (invalida todos os tokens em circulação)
+docker compose restart api
+
+# 5. Verificar que a API subiu com novo secret
+curl http://localhost:8000/health
+```
+
+### 14.2 Rotação do PII_ENCRYPTION_KEY (chave Fernet de CPF)
+
+> **ATENÇÃO CRÍTICA:** A rotação da `PII_ENCRYPTION_KEY` **RE-ENCRIPTA todos os CPFs** no banco.
+> Se executado parcialmente (ex: crash no meio), parte dos registros ficará com a chave nova
+> e parte com a antiga. Execute **sempre** com backup completo e em transação.
+
+```bash
+# 1. BACKUP OBRIGATÓRIO antes de qualquer rotação de PII_ENCRYPTION_KEY
+docker compose exec postgres pg_dump -U betaml betaml_dev > backup_pre_rotation_$(date +%Y%m%d_%H%M%S).sql
+
+# 2. Gerar nova chave Fernet (base64-urlsafe, 32 bytes)
+NEW_PII_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+echo "Nova PII_ENCRYPTION_KEY: $NEW_PII_KEY"
+
+# 3. Executar script de re-encriptação (requer ambas as chaves)
+# O script lê com a chave ANTIGA e grava com a chave NOVA
+docker compose exec api python - <<'EOF'
+import os, asyncio
+from cryptography.fernet import Fernet
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
+OLD_KEY = os.environ["PII_ENCRYPTION_KEY"].encode()
+NEW_KEY = input("Digite a NOVA PII_ENCRYPTION_KEY: ").strip().encode()
+
+old_fernet = Fernet(OLD_KEY)
+new_fernet = Fernet(NEW_KEY)
+
+DATABASE_URL = os.environ["DATABASE_URL"].replace("postgresql://", "postgresql+asyncpg://")
+engine = create_async_engine(DATABASE_URL, echo=False)
+Session = async_sessionmaker(engine, expire_on_commit=False)
+
+async def reencrypt():
+    from models import Player
+    async with Session() as db:
+        players = (await db.execute(select(Player))).scalars().all()
+        for p in players:
+            if p.cpf_encrypted and not p.cpf_encrypted.startswith(b"ERASURE_"):
+                plain = old_fernet.decrypt(p.cpf_encrypted)
+                p.cpf_encrypted = new_fernet.encrypt(plain)
+            if p.name_encrypted and not p.name_encrypted.startswith(b"ERASURE_"):
+                plain = old_fernet.decrypt(p.name_encrypted)
+                p.name_encrypted = new_fernet.encrypt(plain)
+        await db.commit()
+        print(f"Re-encriptados: {len(players)} players")
+
+asyncio.run(reencrypt())
+EOF
+
+# 4. Atualizar .env com a nova chave
+sed -i "s|^PII_ENCRYPTION_KEY=.*|PII_ENCRYPTION_KEY=$NEW_PII_KEY|" .env
+
+# 5. Restart da API com a nova chave
+docker compose restart api
+
+# 6. Verificar que a API descifra CPFs corretamente
+curl -s -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin_a", "password": "admin123"}' | jq .access_token
+```
+
+### 14.3 Rotação de Redis Password
+
+```bash
+# 1. Gerar nova senha
+NEW_REDIS_PW=$(python -c "import secrets; print(secrets.token_hex(16))")
+
+# 2. Atualizar .env
+sed -i "s/^REDIS_PASSWORD=.*/REDIS_PASSWORD=$NEW_REDIS_PW/" .env
+
+# 3. Atualizar REDIS_URL no .env
+sed -i "s|redis://:[^@]*@|redis://:$NEW_REDIS_PW@|g" .env
+
+# 4. Restart Redis + serviços dependentes
+docker compose restart redis api stream-processor rules-engine ml-service
+```
+
+### 14.4 Checklist pós-rotação
+
+Após qualquer rotação de chave, verificar:
+
+```bash
+# API saudável
+curl http://localhost:8000/health
+
+# Login funcional com novo JWT_SECRET
+curl -s -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin_a", "password": "admin123"}' | jq '.access_token | length'
+
+# CPF descifrado corretamente (deve mostrar CPF mascarado, não erro)
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin_a", "password": "admin123"}' | jq -r .access_token)
+
+curl -s http://localhost:8000/players?limit=1 \
+  -H "Authorization: Bearer $TOKEN" | jq '.[0].cpf_masked'
+
+# Audit log registra a rotação
+echo "Registre manualmente no audit_log: ação=ROTATE_SECRET, entity=API, motivo=rotação programada"
+```
+
+### 14.5 Frequência recomendada
+
+| Chave               | Frequência mínima | Gatilho adicional                        |
+|---------------------|-------------------|------------------------------------------|
+| `JWT_SECRET`        | 90 dias           | Suspeita de comprometimento, saída de dev |
+| `PII_ENCRYPTION_KEY`| 180 dias          | Suspeita de acesso não autorizado ao DB   |
+| `REDIS_PASSWORD`    | 90 dias           | Saída de membro da equipe ops             |
+| API Keys (`btml_*`) | 365 dias          | Saída de parceiro/integração              |

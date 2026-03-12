@@ -10,7 +10,7 @@ O BetAML é uma plataforma de detecção de lavagem de dinheiro e financiamento 
 
 1. Acesse `http://localhost:3000` (ou a URL do seu ambiente)
 2. Use as credenciais fornecidas pelo administrador
-3. Papéis disponíveis: `ANALYST`, `SUPERVISOR`, `AUDITOR`, `ADMIN`
+3. Papéis disponíveis: `AML_ANALYST`, `AUDITOR`, `ADMIN` (e `SUPER_ADMIN` para operadores de plataforma)
 
 ---
 
@@ -161,10 +161,19 @@ Em **Feature Store**, consulte o perfil de features de qualquer jogador:
 
 | Grupo | Features |
 |-------|----------|
-| Volume | txn_count_24h/7d/30d, txn_amount_24h/7d/30d |
-| Depósitos/Saques | deposit_count_30d, withdrawal_count_30d, deposit_velocity, cashout_ratio |
-| Comportamento | night_activity_ratio, weekend_activity_ratio, avg_odds_bet_7d, win_loss_ratio |
-| Rede | shared_instrument_score, multi_currency_flag, unique_instruments_7d |
+| Volume | deposit_count_1h/24h/7d/90d, deposit_sum_24h/30d/90d |
+| Depósitos/Saques | withdrawal_count_24h/7d/90d, withdrawal_sum_24h/30d/90d, deposit_velocity |
+| Comportamento | night_activity_ratio, weekend_activity_ratio, avg_odds_bet_7d, win_loss_ratio_30d, avg_time_between_deposit_and_withdrawal_7d |
+| Rede | shared_instrument_score, shared_device_score, cluster_id, cluster_size, unique_instruments_7d, multi_currency_flag |
+
+### Fontes Consultadas pela Plataforma
+
+- **Atual**: perfil online em tempo quase real carregado do Redis.
+- **Histórico**: snapshots diários armazenados no Gold layer.
+
+### Observação sobre Compatibilidade
+
+Alguns relatórios e integrações ainda podem exibir aliases legados, como `unique_instruments_used_7d` e `bonus_to_real_money_ratio_30d`. Eles representam os mesmos valores das features canônicas atuais.
 
 ---
 
@@ -186,6 +195,33 @@ O relatório inclui:
 ### 8.2 Relatório de Caso Individual
 
 Em **Casos → [Caso] → Exportar PDF**
+
+### 8.3 Pacote de Relatório COAF (SAR)
+
+Para comunicar uma operação suspeita ao COAF (Resolução COAF 36/2021 Art. 9):
+
+1. Acesse o caso encerrado em **Casos → [Caso]**
+2. Clique em **Gerar Pacote COAF**
+3. Preencha:
+   - **Decisão**: `FILE_SAR` (comunicar) ou `NO_ACTION` (arquivar)
+   - **Narrativa do analista** *(obrigatória quando decisão = FILE_SAR)*
+4. Confirme — o sistema gera um PDF e registra o `report_id`
+
+Via API:
+```bash
+curl -X POST http://localhost:8000/cases/{case_id}/report-package \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "decision": "FILE_SAR",
+    "analyst_narrative": "Operações incompatíveis com renda declarada (COAF Art. 9)",
+    "include_evidence": true
+  }'
+```
+
+Resposta inclui:
+- `report_id` — UUID único para protocolo COAF
+- `pdf_url` — link para download do PDF no MinIO
 
 ---
 
@@ -242,3 +278,61 @@ UUID-2,PEP identificado
 - **Documentação técnica**: `/docs` (Swagger UI em desenvolvimento)
 - **E-mail**: compliance@betaml.io
 - **Canal interno**: #betaml-suporte
+
+---
+
+## 13. Notificações
+
+A plataforma envia notificações ao usuário autenticado para eventos relevantes (novos alertas, mudanças de status de caso, etc.).
+
+### Listagem
+
+```bash
+# Todas as notificações
+GET /notifications
+
+# Apenas não lidas
+GET /notifications?unread_only=true
+```
+
+### Marcar como Lida
+
+```bash
+# Uma notificação
+POST /notifications/{notif_id}/read
+
+# Todas de uma vez
+POST /notifications/read-all
+```
+
+Notificações podem referenciar um alerta ou caso via campos `reference_type` (`alert` | `case`) e `reference_id`.
+
+---
+
+## 14. Registro de Modelos (Model Registry)
+
+O **Model Registry** rastreia versões de modelos de ML treinados para cada tenant.
+
+### Listar Modelos
+
+```bash
+GET /model-registry
+# Filtrar por tipo:
+GET /model-registry?model_type=anomaly_detection
+```
+
+Cada entrada exibe:
+- `model_name`, `model_type`, `version`
+- `status`: `champion` (ativo), `challenger` (em teste A/B), `archived`
+- `metrics` — AUC-ROC, F1, precisão registrados no treino
+- `trained_at`, `promoted_at`, `promoted_by`
+
+### Promover um Challenger para Champion
+
+Requer role `ADMIN`:
+
+```bash
+POST /model-registry/{model_id}/promote
+```
+
+O sistema arquiva automaticamente o champion anterior do mesmo `model_type` e promove o challenger. A ação é registrada no audit log com ação `PROMOTE_MODEL`.
