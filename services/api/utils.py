@@ -32,6 +32,7 @@ async def get_producer():
             _producer = KafkaProducerClient(settings.kafka_bootstrap_servers)
             await _producer.start()
         except Exception as e:
+            _producer = None  # reset so next call retries
             logger.warning("kafka_producer_unavailable", error=str(e))
     return _producer
 
@@ -58,9 +59,22 @@ async def write_audit(
     before: Optional[dict] = None,
     after: Optional[dict] = None,
     ip: Optional[str] = None,
+    pii_accessed: Optional[str] = None,
 ) -> None:
-    """Persiste um registro de AuditLog. Faz flush mas não commit."""
+    """
+    Persiste um registro de AuditLog. Faz flush mas não commit.
+
+    Args:
+        pii_accessed: Se não None, registra acesso a PII específico (ex: "cpf", "full_name").
+                     Exemplo: pii_accessed="cpf" registra "ACCESS_PII: cpf acessado".
+                     Exigido para LGPD Art. 37 (auditoria de acesso a dados pessoais).
+    """
     from models import AuditLog  # importação local para evitar circular
+
+    # Se PII foi acessado, registra explicitamente
+    if pii_accessed:
+        action = f"ACCESS_PII:{pii_accessed}"
+
     al = AuditLog(
         tenant_id=tenant_id,
         user_id=user_id,

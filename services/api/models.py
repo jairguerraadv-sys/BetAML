@@ -215,6 +215,11 @@ class RuleMacro(Base):
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
     updated_at  = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    @property
+    def expression(self):
+        """Alias for body_dsl — used by RuleMacroOut schema (from_attributes=True)."""
+        return self.body_dsl
+
 
 # ── Player Lists ──────────────────────────────────────────────────────────────
 
@@ -402,18 +407,24 @@ class ModelRegistry(Base):
     trained_at           = Column(DateTime(timezone=True), server_default=func.now())
     created_at           = Column(DateTime(timezone=True), server_default=func.now())
 
+    @property
+    def version(self):
+        """Alias for model_version — used by ModelRegistryOut schema (from_attributes=True)."""
+        return self.model_version
+
 
 class FeatureSnapshot(Base):
     __tablename__ = "feature_snapshots"
 
-    id           = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    tenant_id    = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    player_id    = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
-    feature_date = Column(Date, nullable=False)
-    snapshot_date = Column(Date)
-    features     = Column(JSONB, nullable=False, default={})
-    drift_score  = Column(Numeric(5, 4))
-    created_at   = Column(DateTime(timezone=True), server_default=func.now())
+    id              = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id       = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    player_id       = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
+    feature_date    = Column(Date, nullable=False)
+    snapshot_date   = Column(Date)
+    features        = Column(JSONB, nullable=False, default={})
+    drift_score     = Column(Numeric(5, 4))
+    feature_version = Column(Integer, nullable=False, default=2)
+    created_at      = Column(DateTime(timezone=True), server_default=func.now())
 
     @property
     def snapshot_date_value(self):
@@ -459,23 +470,17 @@ class ScoringConfig(Base):
 class Notification(Base):
     __tablename__ = "notifications"
 
-    id          = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    tenant_id   = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    user_id     = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
-    type        = Column(String(30), nullable=False)
-    title       = Column(Text, nullable=False)
-    body        = Column(Text)
-    is_read     = Column(Boolean, nullable=False, default=False)
-    read_at     = Column(DateTime(timezone=True))
-    created_at  = Column(DateTime(timezone=True), server_default=func.now())
-
-    @property
-    def reference_type(self):
-        return None
-
-    @property
-    def reference_id(self):
-        return None
+    id             = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id      = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    user_id        = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    type           = Column(String(30), nullable=False)
+    title          = Column(Text, nullable=False)
+    body           = Column(Text)
+    is_read        = Column(Boolean, nullable=False, default=False)
+    read_at        = Column(DateTime(timezone=True))
+    reference_type = Column(Text)   # e.g. "alert" | "case" (added by migration_v9)
+    reference_id   = Column(Text)   # UUID of the referenced entity
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class SystemFlag(Base):

@@ -5,7 +5,7 @@ Shared by API, stream_processor, rules_engine, ml_service.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Optional
@@ -264,17 +264,17 @@ class AlertLabel(str, Enum):
 
 
 class IngestErrorOut(BaseModel):
-    id: int
+    id: str                              # UUID
     tenant_id: str
-    ingest_job_id: Optional[int] = None
+    ingest_job_id: Optional[str] = None  # UUID FK
     source_system: str
-    raw_record: Optional[str] = None
-    error_type: str
-    error_detail: str
-    resolution_status: str = "open"
-    resolution_note: Optional[str] = None
-    resolved_at: Optional[datetime] = None
+    entity_type: Optional[str] = None
+    raw_payload: Optional[str] = None    # ORM column name
+    error_reason: str = ""
+    error_detail: Optional[dict] = None  # JSONB
+    resolved: bool = False
     resolved_by: Optional[str] = None
+    resolved_at: Optional[datetime] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -285,12 +285,12 @@ class IngestErrorResolveIn(BaseModel):
 
 
 class ApiKeyOut(BaseModel):
-    id: int
+    id: str                  # UUID
     tenant_id: str
     name: str
     key_prefix: str          # first 8 chars only
-    scopes: list[str]
-    is_active: bool
+    permissions: list[str]   # ORM field name (column: permissions)
+    active: bool             # ORM field name (column: active)
     last_used_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
     created_at: datetime
@@ -304,12 +304,23 @@ class ApiKeyCreate(BaseModel):
     expires_in_days: Optional[int] = None
 
 
-class ApiKeyCreateResponse(ApiKeyOut):
+class ApiKeyCreateResponse(BaseModel):
+    id: str
+    tenant_id: str
+    name: str
+    key_prefix: str
+    permissions: list[str]
+    active: bool
+    last_used_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    created_at: datetime
     raw_key: str             # shown only once on creation
+
+    model_config = {"from_attributes": True}
 
 
 class PlayerListOut(BaseModel):
-    id: int
+    id: str
     tenant_id: str
     name: str
     description: Optional[str] = None
@@ -333,11 +344,11 @@ class PlayerListEntryBulk(BaseModel):
 
 
 class CompoundRuleOut(BaseModel):
-    id: int
+    id: str
     tenant_id: str
     name: str
-    logic: str               # DSL expression or JSON  
-    component_rule_ids: list[int]
+    logic: Optional[str] = None       # DSL expression or JSON (nullable)
+    component_rule_ids: list[str]
     score_weights: dict[str, float] = Field(default_factory=dict)
     min_score_threshold: Optional[float] = None
     is_active: bool = True
@@ -349,13 +360,13 @@ class CompoundRuleOut(BaseModel):
 class CompoundRuleCreate(BaseModel):
     name: str
     logic: str
-    component_rule_ids: list[int] = Field(default_factory=list)
+    component_rule_ids: list[str] = Field(default_factory=list)
     score_weights: dict[str, float] = Field(default_factory=dict)
     min_score_threshold: Optional[float] = None
 
 
 class RuleMacroOut(BaseModel):
-    id: int
+    id: str
     tenant_id: str
     name: str
     expression: str
@@ -455,11 +466,31 @@ class NotificationCreate(BaseModel):
     reference_id: Optional[str] = None
 
 
+class ModelRegistryOut(BaseModel):
+    id: str
+    tenant_id: str
+    model_name: str
+    model_type: str
+    version: str
+    training_rows: Optional[int] = None
+    feature_columns: list[str] = []
+    metrics: dict = {}
+    status: str
+    is_challenger: bool
+    promoted_by: Optional[str] = None
+    promoted_at: Optional[datetime] = None
+    trained_by: Optional[str] = None
+    trained_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class FeatureSnapshotOut(BaseModel):
     id: str
     tenant_id: str
     player_id: str
-    snapshot_date: str        # YYYY-MM-DD
+    snapshot_date: Optional[date]  # ORM Column(Date) → datetime.date object
     features: dict[str, Any]
     feature_version: int = 1
     created_at: datetime
@@ -467,12 +498,36 @@ class FeatureSnapshotOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class FeatureStoreCurrentOut(BaseModel):
+    player_id: str
+    source: str = "redis"
+    feature_version: int = 1
+    computed_at: Optional[str] = None
+    features: dict[str, Any]
+
+
+class FeatureStoreHistoryItemOut(BaseModel):
+    id: str
+    snapshot_date: str
+    created_at: datetime
+    features: dict[str, Any]
+    drift_score: Optional[float] = None
+    feature_version: int = 1
+
+
+class FeatureStoreHistoryOut(BaseModel):
+    player_id: str
+    from_: Optional[str] = Field(None, alias="from")
+    to: Optional[str] = None
+    count: int
+    items: list[FeatureStoreHistoryItemOut]
+
+    model_config = {"populate_by_name": True}
+
+
 class SystemFlagOut(BaseModel):
-    id: int
-    tenant_id: str
-    flag_name: str
-    flag_value: str
-    description: Optional[str] = None
+    key: str                     # composite: "{tenant_id}:{flag_name}"
+    value: Any = None            # JSONB — the stored flag value
     updated_by: Optional[str] = None
     updated_at: Optional[datetime] = None
 
@@ -480,7 +535,7 @@ class SystemFlagOut(BaseModel):
 
 
 class SystemFlagUpdate(BaseModel):
-    flag_value: str
+    value: Any  # JSONB — new flag value (string, bool, int, or object)
 
 
 class ReprocessJobIn(BaseModel):
@@ -488,7 +543,7 @@ class ReprocessJobIn(BaseModel):
 
 
 class MappingVersionOut(BaseModel):
-    id: int
+    id: str
     tenant_id: str
     source_system: str
     entity_type: str

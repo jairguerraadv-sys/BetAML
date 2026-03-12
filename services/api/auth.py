@@ -23,7 +23,7 @@ from models import User
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
-ROLES = {"ADMIN", "AML_ANALYST", "AUDITOR"}
+ROLES = {"SUPER_ADMIN", "ADMIN", "AML_ANALYST", "AUDITOR"}
 
 # ── Redis client para blacklist de JWT ────────────────────────────────────────
 _auth_redis: Any = None

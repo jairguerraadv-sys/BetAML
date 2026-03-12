@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # Encryption key for PII (AES-256 — base64 encoded 32 bytes)
     pii_encryption_key: str = "ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5"
 
+    # Ingest DLQ
+    dlq_max_retries: int = 3
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

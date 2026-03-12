@@ -418,6 +418,43 @@ async def startup():
         _feature_store_maintenance_loop(),
         name="feature_store_maintenance",
     )
+
+    # ── Scheduled jobs (APScheduler) ─────────────────────────────────────────
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from jobs import calculate_risk_score_decay, cleanup_expired_player_data
+
+        scheduler = AsyncIOScheduler(timezone="UTC")
+
+        # Risk Score Decay — todo dia às 04:00 UTC
+        scheduler.add_job(
+            calculate_risk_score_decay,
+            trigger="cron",
+            hour=4,
+            minute=0,
+            id="risk_score_decay",
+            replace_existing=True,
+            misfire_grace_time=3600,  # até 1h de tolerância
+        )
+
+        # LGPD Data Expiration — todo dia às 05:00 UTC
+        scheduler.add_job(
+            cleanup_expired_player_data,
+            trigger="cron",
+            hour=5,
+            minute=0,
+            id="lgpd_data_expiration",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
+        scheduler.start()
+        logger.info("scheduled_jobs_started", jobs=["risk_score_decay@04:00", "lgpd_data_expiration@05:00"])
+    except ImportError:
+        logger.warning("apscheduler_not_installed", hint="pip install apscheduler")
+    except Exception as exc:
+        logger.warning("scheduler_start_failed", error=str(exc))
+
     logger.info("betaml_api_started", env=settings.environment)
 
 
@@ -465,6 +502,10 @@ async def health():
 # ═══════════════════════════════════════════════════
 
 from routers import auth, alerts, audit, cases, ingest, mappings, players, rules  # noqa: E402
+from routers.admin import router as admin_router                # noqa: E402
+from routers.feature_store import router as feature_store_router  # noqa: E402
+from routers.ml import router as ml_router                     # noqa: E402
+from routers.notifications import router as notifications_router  # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(alerts.router)
@@ -474,8 +515,13 @@ app.include_router(ingest.router)
 app.include_router(mappings.router)
 app.include_router(players.router)
 app.include_router(rules.router)
+app.include_router(admin_router)
+app.include_router(feature_store_router)
+app.include_router(ml_router)
+app.include_router(notifications_router)
 
-# Register enterprise routes after core routers so Module 1 endpoints
-# (`/ingest/*` and `/mappings/*`) resolve to the newer handlers.
+# Enterprise router is registered last; note that FastAPI resolves routes in
+# registration order (first match wins), so core router paths take precedence
+# over any duplicate paths in enterprise_router.
 app.include_router(enterprise_router)
 
