@@ -1,18 +1,8 @@
 'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { fetchAuditLogs, type AuditLog } from '@/lib/api';
 import DataTable from '@/components/DataTable';
-
-interface AuditLog {
-  id: string;
-  actor_id: string;
-  action: string;
-  entity_type: string;
-  entity_id: string;
-  ip_address?: string;
-  created_at: string;
-}
 
 export default function AuditLogsPage() {
   const [page, setPage]           = useState(1);
@@ -21,11 +11,15 @@ export default function AuditLogsPage() {
 
   const { data: logs = [], isLoading } = useQuery({
     queryKey: ['audit-logs', page, entity, actor],
-    queryFn: () =>
-      api.get<AuditLog[]>('/audit-logs', {
-        params: { page, per_page: 50, entity_type: entity || undefined, actor_id: actor || undefined },
-      }).then((r) => r.data),
+    queryFn: () => {
+      const params: Record<string, string> = { page: String(page), per_page: '50' };
+      if (entity) params.entity_type = entity;
+      if (actor)  params.user_id = actor;
+      return fetchAuditLogs(params);
+    },
   });
+
+  const normalizedLogs = logs.filter((item) => Boolean(item.id));
 
   const columns = [
     {
@@ -38,9 +32,16 @@ export default function AuditLogsPage() {
     { header: 'Entidade',   accessorKey: 'entity_type' as keyof AuditLog },
     { header: 'Entity ID',  accessorKey: 'entity_id' as keyof AuditLog,
       cell: (v: unknown) => <span className="font-mono text-xs">{((v as string) ?? '').slice(0, 12)}…</span> },
-    { header: 'Ator',       accessorKey: 'actor_id' as keyof AuditLog,
-      cell: (v: unknown) => <span className="font-mono text-xs">{((v as string) ?? '').slice(0, 12)}…</span> },
+    { header: 'Ator',       accessorKey: 'user_id' as keyof AuditLog,
+      cell: (_: unknown, row?: AuditLog) => {
+        const value = row?.user_id ?? row?.actor_id ?? '';
+        return <span className="font-mono text-xs">{String(value).slice(0, 12)}{value ? '…' : ''}</span>;
+      } },
     { header: 'IP',         accessorKey: 'ip_address' as keyof AuditLog },
+    { header: 'PII Acessado', accessorKey: 'pii_accessed' as keyof AuditLog,
+      cell: (v: unknown) => v
+        ? <span className="rounded bg-orange-50 px-1.5 py-0.5 text-xs font-mono text-orange-700">{v as string}</span>
+        : null },
     {
       header: 'Data',
       accessorKey: 'created_at' as keyof AuditLog,
@@ -70,7 +71,7 @@ export default function AuditLogsPage() {
         />
       </div>
 
-      <DataTable data={logs} columns={columns} loading={isLoading} />
+      <DataTable data={normalizedLogs} columns={columns} loading={isLoading} />
 
       {/* Paginação */}
       <div className="mt-4 flex items-center gap-4">
@@ -84,7 +85,7 @@ export default function AuditLogsPage() {
         <span className="text-sm text-gray-500">Página {page}</span>
         <button
           onClick={() => setPage((p) => p + 1)}
-          disabled={logs.length < 50}
+          disabled={normalizedLogs.length < 50}
           className="rounded-lg border px-4 py-1.5 text-sm disabled:opacity-40"
         >
           Próxima →

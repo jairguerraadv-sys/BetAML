@@ -58,8 +58,17 @@ export async function refreshToken() {
 }
 
 export interface AuditLog {
-  id: string; actor_id: string; action: string; entity_type: string;
-  entity_id: string; ip_address?: string; created_at: string;
+  id: string;
+  user_id?: string | null;
+  actor_id?: string | null;
+  action: string;
+  entity_type: string;
+  entity_id?: string | null;
+  ip_address?: string | null;
+  pii_accessed?: string | null;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+  created_at: string;
 }
 
 export const fetchAuditLogs = (params?: Record<string, string>) =>
@@ -116,6 +125,31 @@ export interface PlayerDetail {
   id: string; external_player_id: string; cpf: string; pep_flag: boolean;
   risk_score: number; risk_band: 'LOW' | 'MEDIUM' | 'HIGH';
   declared_income_monthly: number | null; last_scored_at: string | null;
+}
+
+export interface FeatureStoreCurrent {
+  player_id: string;
+  source: string;
+  feature_version: number;
+  computed_at?: string;
+  features: Record<string, unknown>;
+}
+
+export interface FeatureStoreHistoryItem {
+  id: string;
+  snapshot_date: string;
+  created_at: string;
+  features: Record<string, unknown>;
+  drift_score?: number | null;
+  feature_version: number;
+}
+
+export interface FeatureStoreHistory {
+  player_id: string;
+  from?: string | null;
+  to?: string | null;
+  count: number;
+  items: FeatureStoreHistoryItem[];
 }
 
 export interface EconCompat {
@@ -176,6 +210,12 @@ export const fetchPlayers = (params?: Record<string, string>) =>
 export const fetchPlayer = (id: string) =>
   api.get<PlayerDetail>(`/players/${id}`).then((r) => r.data);
 
+export const fetchFeatureStoreCurrent = (playerId: string) =>
+  api.get<FeatureStoreCurrent>(`/feature-store/players/${playerId}/current`).then((r) => r.data);
+
+export const fetchFeatureStoreHistory = (playerId: string) =>
+  api.get<FeatureStoreHistory>(`/feature-store/players/${playerId}/history`).then((r) => r.data);
+
 export const fetchPlayerEconCompat = (id: string) =>
   api.get<EconCompat>(`/players/${id}/econ-compat`).then((r) => r.data);
 
@@ -188,7 +228,7 @@ export const generateReportPackage = (
 ) => api.post<ReportPackageResult>(`/cases/${caseId}/report-package`, body).then((r) => r.data);
 
 export interface ScoringConfig {
-  id: number;
+  id: string;  // UUID
   rule_weight: number;
   ml_weight: number;
   network_weight: number;
@@ -200,6 +240,7 @@ export interface ScoringConfig {
   sla_medium_hours: number;
   sla_high_hours: number;
   sla_critical_hours: number;
+  data_retention_days: number;
   updated_at: string | null;
 }
 
@@ -334,3 +375,79 @@ export const updateMappingAsNewVersion = (id: string, body: {
 
 export const rollbackMappingVersion = (id: string, versionNumber: number) =>
   api.post(`/mappings/${id}/rollback`, null, { params: { version_number: versionNumber } }).then((r) => r.data);
+
+// ── Notifications ───────────────────────────────────────────────────────────
+
+export interface Notification {
+  id: string;
+  tenant_id: string;
+  user_id: string | null;
+  type: string;
+  title: string;
+  body: string | null;
+  reference_type: string | null;
+  reference_id: string | null;
+  is_read: boolean;
+  created_at: string;
+  read_at: string | null;
+}
+
+export const fetchNotifications = (unreadOnly?: boolean) =>
+  api.get<Notification[]>('/notifications', { params: unreadOnly ? { unread_only: true } : {} })
+    .then((r) => r.data);
+
+export const markNotificationRead = (id: string) =>
+  api.post<{ status: string }>(`/notifications/${id}/read`).then((r) => r.data);
+
+export const markAllNotificationsRead = () =>
+  api.post<{ status: string }>('/notifications/read-all').then((r) => r.data);
+
+// ── Model Registry ──────────────────────────────────────────────────────────
+
+export interface ModelRegistry {
+  id: string;
+  tenant_id: string;
+  model_name: string;
+  model_type: string;
+  version: string;
+  training_rows: number | null;
+  feature_columns: string[];
+  metrics: Record<string, unknown>;
+  status: string;
+  is_challenger: boolean;
+  promoted_by: string | null;
+  promoted_at: string | null;
+  trained_by: string | null;
+  trained_at: string | null;
+  created_at: string;
+}
+
+export const fetchModelRegistry = (modelType?: string) =>
+  api.get<ModelRegistry[]>('/model-registry', { params: modelType ? { model_type: modelType } : {} })
+    .then((r) => r.data);
+
+export const promoteModel = (modelId: string) =>
+  api.post<{ status: string; model_id: string }>(`/model-registry/${modelId}/promote`)
+    .then((r) => r.data);
+
+// ── Admin — Tenant Onboarding ───────────────────────────────────────────────
+
+export interface TenantCreatePayload {
+  name: string;
+  slug: string;
+  admin_username: string;
+  admin_email: string;
+  admin_password: string;
+  risk_score_threshold?: number;
+}
+
+export interface TenantCreateResult {
+  tenant_id: string;
+  slug: string;
+  admin_user_id: string;
+  admin_username: string;
+  message: string;
+}
+
+export const createTenant = (body: TenantCreatePayload) =>
+  api.post<TenantCreateResult>('/admin/tenants', body).then((r) => r.data);

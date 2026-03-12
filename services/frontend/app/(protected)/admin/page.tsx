@@ -5,13 +5,14 @@ import { api } from '@/lib/api';
 import { Shield, Key, Trash2, Plus, Power } from 'lucide-react';
 
 interface ApiKey { id: string; name: string; prefix: string; created_at: string; last_used_at?: string; is_active: boolean; }
-interface SystemFlag { flag_name: string; flag_value: string; description?: string; updated_at: string; }
+interface SystemFlag { key: string; value: unknown; updated_at?: string; }
 
 const fetchApiKeys   = () => api.get<ApiKey[]>('/admin/api-keys').then((r) => r.data);
 const fetchFlags     = () => api.get<SystemFlag[]>('/admin/flags').then((r) => r.data).catch(() => [] as SystemFlag[]);
 const deleteKey      = (id: string) => api.delete(`/admin/api-keys/${id}`);
-const toggleMaint    = (enabled: boolean) => api.post('/admin/maintenance-mode', { enabled });
-const updateFlag     = (name: string, value: string) => api.put(`/admin/flags/${name}`, { flag_value: value });
+const toggleMaint    = (enabled: boolean) => api.post('/admin/maintenance-mode', null, { params: { enabled } });
+// flagName = part after first colon (e.g. "maintenance_mode" from "{tenant_id}:maintenance_mode")
+const updateFlag     = (flagName: string, value: string) => api.put(`/admin/flags/${flagName}`, { value });
 
 export default function AdminPage() {
   const qc = useQueryClient();
@@ -141,23 +142,26 @@ export default function AdminPage() {
         <h2 className="mb-4 text-sm font-semibold text-gray-700">Feature Flags do Sistema</h2>
         {loadingFlags && <p className="text-sm text-gray-400">Carregando…</p>}
         <div className="space-y-3">
-          {flags.map((f) => (
-            <div key={f.flag_name} className="flex items-center gap-4 rounded-lg border border-gray-100 px-4 py-3">
+          {flags.map((f) => {
+            const flagName = f.key.split(':').slice(1).join(':');
+            const currentValue = String(f.value ?? '');
+            return (
+            <div key={f.key} className="flex items-center gap-4 rounded-lg border border-gray-100 px-4 py-3">
               <div className="flex-1">
-                <p className="text-sm font-medium text-gray-800">{f.flag_name}</p>
-                {f.description && <p className="text-xs text-gray-400">{f.description}</p>}
+                <p className="text-sm font-medium text-gray-800">{flagName}</p>
               </div>
               <input
-                defaultValue={f.flag_value}
+                defaultValue={currentValue}
                 onBlur={(e) => {
-                  if (e.target.value !== f.flag_value) {
-                    saveFlag.mutate({ name: f.flag_name, value: e.target.value });
+                  if (e.target.value !== currentValue) {
+                    saveFlag.mutate({ name: flagName, value: e.target.value });
                   }
                 }}
                 className="w-32 rounded border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-brand"
               />
             </div>
-          ))}
+            );
+          })}
           {!loadingFlags && flags.length === 0 && (
             <p className="text-sm text-gray-400">Nenhuma flag configurada</p>
           )}

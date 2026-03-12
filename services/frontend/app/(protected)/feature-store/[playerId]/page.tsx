@@ -1,67 +1,54 @@
 'use client';
 import { use } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { fetchFeatureStoreCurrent, fetchFeatureStoreHistory, type FeatureStoreCurrent, type FeatureStoreHistory } from '@/lib/api';
 import { Database, RefreshCw } from 'lucide-react';
-
-interface FeatureSnapshot {
-  player_id: string;
-  feature_version: number;
-  computed_at: string;
-  txn_count_24h: number;
-  txn_amount_24h: number;
-  txn_count_7d: number;
-  txn_amount_7d: number;
-  txn_count_30d: number;
-  txn_amount_30d: number;
-  avg_txn_amount_30d: number;
-  deposit_count_30d: number;
-  withdrawal_count_30d: number;
-  deposit_velocity?: number;
-  unique_instruments_7d?: number;
-  night_activity_ratio?: number;
-  weekend_activity_ratio?: number;
-  avg_odds_bet_7d?: number;
-  win_loss_ratio_30d?: number;
-  multi_currency_flag?: boolean;
-  chargeback_rate_30d?: number;
-  cashout_ratio_7d?: number;
-  shared_instrument_score?: number;
-}
 
 type Props = { params: Promise<{ playerId: string }> };
 
 const GROUPS = [
   {
     label: 'Volume Transacional',
-    keys: ['txn_count_24h', 'txn_amount_24h', 'txn_count_7d', 'txn_amount_7d', 'txn_count_30d', 'txn_amount_30d', 'avg_txn_amount_30d'],
+    keys: ['deposit_count_24h', 'deposit_count_7d', 'deposit_sum_24h', 'deposit_sum_7d', 'deposit_sum_30d', 'deposit_velocity'],
   },
   {
     label: 'Depósitos & Saques',
-    keys: ['deposit_count_30d', 'withdrawal_count_30d', 'deposit_velocity', 'cashout_ratio_7d', 'chargeback_rate_30d'],
+    keys: ['withdrawal_count_24h', 'withdrawal_sum_24h', 'withdrawal_sum_7d', 'cashout_ratio_7d', 'chargeback_count_30d', 'chargeback_rate_30d'],
   },
   {
     label: 'Comportamento',
-    keys: ['night_activity_ratio', 'weekend_activity_ratio', 'avg_odds_bet_7d', 'win_loss_ratio_30d', 'unique_instruments_7d'],
+    keys: ['night_activity_ratio', 'weekend_activity_ratio', 'avg_odds_bet_7d', 'win_loss_ratio_30d', 'unique_instruments_7d', 'avg_deposit_to_withdrawal_hours', 'bonus_to_real_ratio_30d'],
   },
   {
     label: 'Rede & Risco',
-    keys: ['multi_currency_flag', 'shared_instrument_score'],
+    keys: ['multi_currency_flag', 'shared_instrument_score', 'cluster_size', 'cluster_id'],
   },
 ];
 
 const LABELS: Record<string, string> = {
-  txn_count_24h: 'Transações (24h)', txn_amount_24h: 'Volume (24h)',
-  txn_count_7d: 'Transações (7d)', txn_amount_7d: 'Volume (7d)',
-  txn_count_30d: 'Transações (30d)', txn_amount_30d: 'Volume (30d)',
-  avg_txn_amount_30d: 'Média por transação (30d)',
-  deposit_count_30d: 'Depósitos (30d)', withdrawal_count_30d: 'Saques (30d)',
-  deposit_velocity: 'Velocidade depósito', cashout_ratio_7d: 'Ratio saque (7d)',
+  deposit_count_24h: 'Depósitos (24h)',
+  deposit_count_7d: 'Depósitos (7d)',
+  deposit_sum_24h: 'Volume depósitos (24h)',
+  deposit_sum_7d: 'Volume depósitos (7d)',
+  deposit_sum_30d: 'Volume depósitos (30d)',
+  deposit_velocity: 'Velocidade depósito',
+  withdrawal_count_24h: 'Saques (24h)',
+  withdrawal_sum_24h: 'Volume saques (24h)',
+  withdrawal_sum_7d: 'Volume saques (7d)',
+  cashout_ratio_7d: 'Ratio saque (7d)',
+  chargeback_count_30d: 'Chargebacks (30d)',
   chargeback_rate_30d: 'Taxa chargeback (30d)',
-  night_activity_ratio: 'Atividade noturna', weekend_activity_ratio: 'Atividade fim de semana',
-  avg_odds_bet_7d: 'Odd média (7d)', win_loss_ratio_30d: 'Win/Loss (30d)',
+  night_activity_ratio: 'Atividade noturna',
+  weekend_activity_ratio: 'Atividade fim de semana',
+  avg_odds_bet_7d: 'Odd média (7d)',
+  win_loss_ratio_30d: 'Win/Loss (30d)',
   unique_instruments_7d: 'Instrumentos únicos (7d)',
-  multi_currency_flag: 'Multi-moeda', shared_instrument_score: 'Score rede (instrumento)',
+  avg_deposit_to_withdrawal_hours: 'Tempo méd. depósito->saque',
+  bonus_to_real_ratio_30d: 'Ratio bônus/dinheiro real (30d)',
+  multi_currency_flag: 'Multi-moeda',
+  shared_instrument_score: 'Score rede (instrumento)',
+  cluster_size: 'Tamanho do cluster',
+  cluster_id: 'Cluster ID',
 };
 
 function fmt(key: string, val: unknown): string {
@@ -71,7 +58,7 @@ function fmt(key: string, val: unknown): string {
     if (key.includes('ratio') || key.includes('rate') || key.includes('score')) {
       return (val as number).toFixed(4);
     }
-    if (key.includes('amount') || key.includes('velocity')) {
+    if (key.includes('amount') || key.includes('sum') || key.includes('velocity')) {
       return `R$ ${(val as number).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
     }
     return (val as number).toLocaleString('pt-BR');
@@ -84,15 +71,18 @@ export default function FeatureDetailPage({ params }: Props) {
 
   const { data: current, isLoading: loadingCurrent, refetch } = useQuery({
     queryKey: ['features-current', playerId],
-    queryFn: () => api.get<FeatureSnapshot>(`/players/${playerId}/features/current`).then((r) => r.data),
+    queryFn: () => fetchFeatureStoreCurrent(playerId),
     retry: false,
   });
 
-  const { data: history = [], isLoading: loadingHistory } = useQuery({
+  const { data: history, isLoading: loadingHistory } = useQuery({
     queryKey: ['features-history', playerId],
-    queryFn: () => api.get<FeatureSnapshot[]>(`/players/${playerId}/features`).then((r) => r.data),
+    queryFn: () => fetchFeatureStoreHistory(playerId),
     retry: false,
   });
+
+  const currentFeatures = current?.features ?? {};
+  const historyItems = history?.items ?? [];
 
   return (
     <div className="space-y-6">
@@ -119,7 +109,7 @@ export default function FeatureDetailPage({ params }: Props) {
         <div className="space-y-4">
           <div className="flex items-center gap-3 text-xs text-gray-400">
             <span>Versão: <strong className="text-gray-700">v{current.feature_version}</strong></span>
-            <span>Atualizado: <strong className="text-gray-700">{new Date(current.computed_at).toLocaleString('pt-BR')}</strong></span>
+            <span>Atualizado: <strong className="text-gray-700">{current.computed_at ? new Date(current.computed_at).toLocaleString('pt-BR') : '—'}</strong></span>
           </div>
 
           {GROUPS.map((g) => (
@@ -132,7 +122,7 @@ export default function FeatureDetailPage({ params }: Props) {
                   <div key={k} className="border-b border-r border-gray-50 px-4 py-3 last:border-r-0">
                     <p className="text-xs text-gray-400">{LABELS[k] ?? k}</p>
                     <p className="mt-0.5 text-sm font-semibold text-gray-800">
-                      {fmt(k, (current as unknown as Record<string, unknown>)[k])}
+                      {fmt(k, currentFeatures[k])}
                     </p>
                   </div>
                 ))}
@@ -143,31 +133,31 @@ export default function FeatureDetailPage({ params }: Props) {
       )}
 
       {/* History table */}
-      {history.length > 0 && (
+      {!loadingHistory && historyItems.length > 0 && (
         <div className="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
           <div className="border-b border-gray-100 bg-gray-50 px-4 py-2.5">
             <span className="text-xs font-semibold uppercase tracking-wide text-gray-600">
-              Histórico de Snapshots ({history.length})
+              Histórico de Snapshots ({historyItems.length})
             </span>
           </div>
           <table className="w-full text-sm">
             <thead className="bg-gray-50/50 text-xs font-semibold uppercase text-gray-500">
               <tr>
                 <th className="px-4 py-2.5 text-left">Data</th>
-                <th className="px-4 py-2.5 text-right">Txn 24h</th>
+                <th className="px-4 py-2.5 text-right">Depósitos 24h</th>
                 <th className="px-4 py-2.5 text-right">Volume 30d</th>
-                <th className="px-4 py-2.5 text-right">Score Rede</th>
+                <th className="px-4 py-2.5 text-right">Score Instrumento</th>
                 <th className="px-4 py-2.5 text-right">Versão</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {history.slice(0, 30).map((h: FeatureSnapshot, i: number) => (
-                <tr key={i} className="hover:bg-gray-50/50">
-                  <td className="px-4 py-2 text-gray-500">{new Date(h.computed_at).toLocaleString('pt-BR')}</td>
-                  <td className="px-4 py-2 text-right">{h.txn_count_24h}</td>
-                  <td className="px-4 py-2 text-right">{fmt('amount', h.txn_amount_30d)}</td>
-                  <td className="px-4 py-2 text-right">{h.shared_instrument_score?.toFixed(4) ?? '—'}</td>
-                  <td className="px-4 py-2 text-right text-gray-400">v{h.feature_version}</td>
+              {historyItems.slice(0, 30).map((item) => (
+                <tr key={item.id} className="hover:bg-gray-50/50">
+                  <td className="px-4 py-2 text-gray-500">{item.snapshot_date ? new Date(item.snapshot_date).toLocaleDateString('pt-BR') : new Date(item.created_at).toLocaleString('pt-BR')}</td>
+                  <td className="px-4 py-2 text-right">{fmt('deposit_count_24h', item.features.deposit_count_24h)}</td>
+                  <td className="px-4 py-2 text-right">{fmt('deposit_sum_30d', item.features.deposit_sum_30d)}</td>
+                  <td className="px-4 py-2 text-right">{fmt('shared_instrument_score', item.features.shared_instrument_score)}</td>
+                  <td className="px-4 py-2 text-right text-gray-400">v{item.feature_version ?? 1}</td>
                 </tr>
               ))}
             </tbody>
