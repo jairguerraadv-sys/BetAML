@@ -23,7 +23,7 @@ import pickle
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import joblib
@@ -33,6 +33,11 @@ from fastapi import FastAPI, HTTPException, Header, Query
 from pydantic import BaseModel, Field
 
 logger = structlog.get_logger()
+
+FEATURE_ALIASES = {
+    "unique_instruments_used_7d": "unique_instruments_7d",
+    "bonus_to_real_money_ratio_30d": "bonus_to_real_ratio_30d",
+}
 
 DATABASE_URL   = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@localhost:5432/betaml_dev")
 REDIS_URL      = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -90,6 +95,10 @@ GRAPH_COLS = [
 
 # Cache de modelos carregados por tenant
 _model_cache: dict[str, dict[str, Any]] = {}
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers MinIO
@@ -174,7 +183,7 @@ def register_model_db(
             "tid":   tenant_id,
             "algo":  algorithm,
             "uri":   artifact_uri,
-            "ts":    datetime.utcnow(),
+            "ts":    _utcnow(),
             "rows":  int(metrics.get("training_rows", 0)),
             "metrics": json.dumps(metrics),
             "fc":    json.dumps(feature_columns),
@@ -215,10 +224,19 @@ def _load_tenant_model_legacy(tenant_id: str) -> dict | None:
     return _load_tenant_model(tenant_id, model_type="champion")
 
 
+def _normalize_feature_aliases(features: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(features)
+    for alias, canonical in FEATURE_ALIASES.items():
+        if canonical not in normalized and alias in normalized:
+            normalized[canonical] = normalized[alias]
+    return normalized
+
+
 def _features_to_vector(features: dict, columns: list[str]) -> np.ndarray:
+    normalized = _normalize_feature_aliases(features)
     vec = []
     for col in columns:
-        raw = features.get(col, 0.0)
+        raw = normalized.get(col, 0.0)
         try:
             vec.append(float(raw))
         except (ValueError, TypeError):
@@ -349,6 +367,7 @@ def score(req: ScoreRequest):
     Online scoring: recebe features do player e retorna anomaly_score [0,1].
     Sem modelo treinado → retorna 0.0.
     """
+    normalized_features = _normalize_feature_aliases(req.features)
     entry = _load_tenant_model(req.tenant_id)
     if entry is None:
         return ScoreResponse(
@@ -358,12 +377,12 @@ def score(req: ScoreRequest):
             is_anomaly=False,
             top_drivers=[],
             model_id=None,
-            scored_at=datetime.utcnow().isoformat(),
+            scored_at=_utcnow().isoformat(),
         )
 
     clf = entry["clf"]
     fc  = entry.get("feature_columns", FEATURE_COLS)
-    X   = _features_to_vector(req.features, fc)
+    X   = _features_to_vector(normalized_features, fc)
 
     # IsolationForest: score < 0 → anomalia; decision_function → [-1, 1]
     raw_score = clf.decision_function(X)[0]  # mais negativo = mais anômalo
@@ -373,7 +392,7 @@ def score(req: ScoreRequest):
 
     # Top drivers: features com maior desvio em relação a zero (proxy simples)
     drivers = sorted(
-        [(col, abs(float(req.features.get(col, 0)))) for col in fc],
+        [(col, abs(float(normalized_features.get(col, 0) or 0))) for col in fc],
         key=lambda t: t[1],
         reverse=True,
     )[:5]
@@ -386,7 +405,7 @@ def score(req: ScoreRequest):
         is_anomaly=is_anomaly,
         top_drivers=top_drivers,
         model_id=entry.get("model_id"),
-        scored_at=datetime.utcnow().isoformat(),
+        scored_at=_utcnow().isoformat(),
     )
 
 
@@ -435,7 +454,8 @@ def train(req: TrainRequest):
     # Monta matriz X
     X_list = []
     for row in rows:
-        vec = [float(row.get(col, 0.0) or 0.0) for col in FEATURE_COLS]
+        normalized_row = _normalize_feature_aliases(row)
+        vec = [float(normalized_row.get(col, 0.0) or 0.0) for col in FEATURE_COLS]
         X_list.append(vec)
     X = np.array(X_list, dtype=np.float32)
 
@@ -550,7 +570,7 @@ def score_shap(req: SHAPRequest):
 
     clf = entry["clf"]
     fc  = entry.get("feature_columns", FEATURE_COLS)
-    X   = _features_to_vector(req.features, fc)
+    X   = _features_to_vector(_normalize_feature_aliases(req.features), fc)
 
     def _score_vec(x: np.ndarray) -> float:
         raw = clf.decision_function(x.reshape(1, -1))[0]
@@ -579,7 +599,7 @@ def score_shap(req: SHAPRequest):
         model_type=req.model_type,
         shap_values=shap_vals,
         baseline=round(base_score, 4),
-        scored_at=datetime.utcnow().isoformat(),
+        scored_at=_utcnow().isoformat(),
     )
 
 
@@ -610,7 +630,7 @@ def score_ab(req: ScoreRequest):
             return 0.0, None
         clf = entry["clf"]
         fc  = entry.get("feature_columns", FEATURE_COLS)
-        X   = _features_to_vector(req.features, fc)
+        X   = _features_to_vector(_normalize_feature_aliases(req.features), fc)
         raw = clf.decision_function(X)[0]
         return float(np.clip((raw * -1 + 1) / 2, 0.0, 1.0)), entry.get("model_id")
 
@@ -626,7 +646,7 @@ def score_ab(req: ScoreRequest):
         champion_model_id=champ_id,
         challenger_model_id=chal_id,
         delta=delta,
-        scored_at=datetime.utcnow().isoformat(),
+        scored_at=_utcnow().isoformat(),
     )
 
 
@@ -700,7 +720,7 @@ def train_structuring(req: TrainRequest):
             ).fetchall()
         for row in labeled:
             ev = json.loads(row.evidence) if isinstance(row.evidence, str) else (row.evidence or {})
-            fs = ev.get("feature_snapshot", {})
+            fs = _normalize_feature_aliases(ev.get("feature_snapshot", {}))
             vec = [float(fs.get(col, 0.0) or 0.0) for col in STRUCTURING_COLS]
             X_pos_list.append(vec)
     except Exception as e:

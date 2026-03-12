@@ -301,11 +301,6 @@ async def compute_features(
     except Exception as e:
         logger.warning("feature_snapshot_persist_failed", error=str(e), player_id=player_id)
 
-    try:
-        await asyncio.to_thread(_persist_feature_snapshot, features, now.date())
-    except Exception as e:
-        logger.warning("feature_snapshot_persist_failed", error=str(e), player_id=player_id)
-
     return features
 
 

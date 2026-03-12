@@ -15,7 +15,7 @@ import os
 import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -37,6 +37,29 @@ TOPICS = [
     "features.player_daily",
 ]
 
+FEATURE_EVIDENCE_KEYS = [
+    "deposit_sum_24h",
+    "deposit_sum_7d",
+    "deposit_sum_30d",
+    "deposit_count_24h",
+    "zscore_current_deposit_vs_baseline",
+    "new_payment_instrument_flag",
+    "shared_device_count",
+    "shared_device_score",
+    "shared_instrument_score",
+    "deposit_velocity",
+    "night_activity_ratio",
+    "weekend_activity_ratio",
+    "chargeback_rate_30d",
+    "cashout_ratio_7d",
+    "unique_instruments_7d",
+    "unique_instruments_used_7d",
+    "bonus_to_real_ratio_30d",
+    "bonus_to_real_money_ratio_30d",
+    "cluster_id",
+    "cluster_size",
+]
+
 
 # ──────────────────────────────────────────────────
 # Rule cache (tenant_id → [(rule_id, rule_name, dsl, params, severity, scope, version)])
@@ -45,6 +68,10 @@ _rule_cache: dict[str, Any] = {}
 _rule_cache_ts: dict[str, float] = {}
 
 _db_engine = None
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _get_sync_db():
@@ -190,7 +217,24 @@ async def load_features(tenant_id: str, player_id: str, redis_client) -> dict:
     return {}
 
 
-def _try_float(v: str) -> Any:
+def _try_float(v: Any) -> Any:
+    # Safe-guard: None and empty string → 0.0 so DSL comparisons never crash
+    if v is None or v == "":
+        return 0.0
+    if isinstance(v, bool):
+        return float(v)
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        lowered = v.lower()
+        if lowered in {"true", "false"}:
+            return lowered == "true"
+        try:
+            if any(ch in v for ch in (".", "e", "E")):
+                return float(v)
+            return int(v)
+        except ValueError:
+            return v  # preserve string feature values (e.g. cluster_id = "cluster:abc")
     try:
         return float(v)
     except (ValueError, TypeError):
@@ -236,7 +280,9 @@ async def evaluate_rules(
 
     ctx_player = {
         "pepFlag":               features.get("pep_flag", False),
+        "pep_flag":              features.get("pep_flag", False),
         "declaredIncomeMonthly": features.get("declared_income_monthly", 0),
+        "declared_income_monthly": features.get("declared_income_monthly", 0),
     }
 
     scope_map = {"TRANSACTION": "TRANSACTION", "BET": "BET"}
@@ -285,13 +331,7 @@ async def evaluate_rules(
                 "rule_weight":      rule_weight,
                 "context_snapshot": {k: v for k, v in ctx.items()
                                      if k not in ("features", "player_lists")},
-                "features_snapshot": {k: features.get(k) for k in [
-                    "deposit_sum_24h", "deposit_sum_7d",
-                    "zscore_current_deposit_vs_baseline",
-                    "deposit_count_24h", "new_payment_instrument_flag",
-                    "shared_device_count", "deposit_velocity",
-                    "night_activity_ratio", "chargeback_rate_30d",
-                ]},
+                "features_snapshot": {k: features.get(k) for k in FEATURE_EVIDENCE_KEYS if k in features},
             })
 
     # ── Compound rule evaluation ─────────────────────────────────────────────
@@ -362,7 +402,7 @@ async def publish_alert(
             "feature_snapshot":    match.get("features_snapshot", {}),
             "threshold_values":    rule.get("params", {}),
         },
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": _utcnow().isoformat(),
         "schema_version": 1,
     }
 
