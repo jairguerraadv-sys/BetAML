@@ -13,13 +13,19 @@ import os
 import json
 import hmac
 import hashlib
+import asyncio
+import importlib.util
 import time
 import uuid
+import sys
+from datetime import date
 import pytest
 import requests
 
 BASE_URL = os.getenv("API_URL", "http://localhost:8000")
 RUN_INTEGRATION = os.getenv("TEST_STACK_UP", "0") == "1"
+POSTGRES_DSN = os.getenv("BETAML_TEST_DB_URL", "postgresql://betaml:devpass@localhost:5432/betaml_dev")
+REDIS_URL = os.getenv("BETAML_TEST_REDIS_URL", "redis://:devpass@localhost:6379/0")
 
 skip_unless_stack = pytest.mark.skipif(
     not RUN_INTEGRATION,
@@ -40,6 +46,63 @@ def _login(username: str, password: str) -> dict:
 
 def _headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _load_api_main():
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    api_dir = os.path.join(root, "services", "api")
+    libs_dir = os.path.join(root, "libs")
+    for path in (api_dir, libs_dir):
+        while path in sys.path:
+            sys.path.remove(path)
+    sys.path.insert(0, libs_dir)
+    sys.path.insert(0, api_dir)
+
+    for key, module in list(sys.modules.items()):
+        module_file = getattr(module, "__file__", None)
+        if not module_file:
+            continue
+        module_file = os.path.abspath(module_file)
+        if module_file.startswith(api_dir) or module_file.startswith(libs_dir):
+            sys.modules.pop(key, None)
+
+    module_name = f"api_main_feature_store_integration_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(module_name, os.path.join(api_dir, "main.py"))
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+async def _pg_execute(statement: str, *args):
+    import asyncpg
+
+    conn = await asyncpg.connect(POSTGRES_DSN)
+    try:
+        return await conn.execute(statement, *args)
+    finally:
+        await conn.close()
+
+
+async def _pg_fetchval(statement: str, *args):
+    import asyncpg
+
+    conn = await asyncpg.connect(POSTGRES_DSN)
+    try:
+        return await conn.fetchval(statement, *args)
+    finally:
+        await conn.close()
+
+
+async def _redis_delete(key: str):
+    import redis.asyncio as aioredis
+
+    redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+    try:
+        await redis.delete(key)
+    finally:
+        await redis.aclose()
 
 
 def _make_txn_event(player_id: str | None = None) -> dict:
@@ -328,6 +391,25 @@ def test_reprocess_job_not_found(headers_a):
 
 
 @skip_unless_stack
+def test_replay_ingest_error_not_found(headers_a):
+    resp = api(
+        f"/ingest/errors/{uuid.uuid4()}/replay",
+        "POST",
+        headers=headers_a,
+        json={
+            "corrected_payload": {
+                "event_id": f"evt-{uuid.uuid4().hex[:8]}",
+                "external_player_id": "CPF123",
+                "transaction_type": "DEPOSIT",
+                "amount": 10.0,
+                "occurred_at": "2026-03-10T12:00:00Z",
+            }
+        },
+    )
+    assert resp.status_code == 404
+
+
+@skip_unless_stack
 def test_mapping_templates_endpoint(headers_a):
     resp = api("/mappings/templates", headers=headers_a)
     assert resp.status_code == 200
@@ -442,6 +524,69 @@ def test_mapping_versioning_and_rollback(headers_a):
     rollback_resp = api(f"/mappings/{mapping_id}/rollback?version_number=1", "POST", headers=headers_a)
     assert rollback_resp.status_code == 200
     assert rollback_resp.json().get("version_number") == 1
+
+
+@skip_unless_stack
+def test_ingest_error_replay_with_corrected_payload(headers_a):
+    xml_payload = """
+<Events>
+  <Transaction>
+    <EventId></EventId>
+    <PlayerId>CPF-REPLAY-01</PlayerId>
+    <Type>DEPOSIT</Type>
+    <Amount currency="BRL">100.00</Amount>
+    <Timestamp>2026-03-10T10:00:00Z</Timestamp>
+  </Transaction>
+</Events>
+""".strip()
+
+    parse_resp = api(
+        "/ingest/connectors/gamma/parse",
+        "POST",
+        headers=headers_a,
+        files={"file": ("gamma-invalid.xml", xml_payload.encode("utf-8"), "application/xml")},
+        data={"entity_type": "TRANSACTION"},
+    )
+    assert parse_resp.status_code == 202, parse_resp.text
+    job_id = parse_resp.json()["job_id"]
+
+    errors_resp = api(f"/ingest/errors?job_id={job_id}&limit=10", headers=headers_a)
+    assert errors_resp.status_code == 200, errors_resp.text
+    items = errors_resp.json()
+    assert items, items
+    error_id = items[0]["id"]
+
+    replay_resp = api(
+        f"/ingest/errors/{error_id}/replay",
+        "POST",
+        headers=headers_a,
+        json={
+            "corrected_payload": {
+                "event_id": f"evt-replay-{uuid.uuid4().hex[:8]}",
+                "external_player_id": "CPF-REPLAY-01",
+                "transaction_type": "DEPOSIT",
+                "amount": 100.0,
+                "occurred_at": "2026-03-10T10:00:00Z",
+                "currency": "BRL",
+            },
+            "entity_type": "TRANSACTION",
+            "note": "correção manual de payload",
+        },
+    )
+    assert replay_resp.status_code == 202, replay_resp.text
+    replay_body = replay_resp.json()
+    assert replay_body["status"] == "queued"
+    assert replay_body["ingest_error_id"] == error_id
+    assert replay_body["resolved"] is True
+
+    refreshed_errors = api(f"/ingest/errors?job_id={job_id}&limit=10", headers=headers_a)
+    assert refreshed_errors.status_code == 200
+    refreshed = next((item for item in refreshed_errors.json() if item.get("id") == error_id), None)
+    assert refreshed is not None
+    assert refreshed["resolved"] is True
+    assert isinstance(refreshed.get("error_detail"), dict)
+    assert isinstance(refreshed["error_detail"].get("replay"), dict)
+    assert refreshed["error_detail"]["replay"].get("note") == "correção manual de payload"
 
 
 @skip_unless_stack
@@ -975,6 +1120,249 @@ def test_feature_store_history_rejects_invalid_range(headers_a):
     assert resp.status_code in (400, 404)
 
 
+@skip_unless_stack
+def test_feature_store_current_endpoint(headers_a):
+    players_resp = api("/players?per_page=1", headers=headers_a)
+    body = players_resp.json()
+    players = body if isinstance(body, list) else body.get("items", [])
+    if not players:
+        pytest.skip("Sem players disponíveis")
+
+    player_id = players[0]["id"]
+    resp = api(f"/feature-store/players/{player_id}/current", headers=headers_a)
+    assert resp.status_code in (200, 404)
+    if resp.status_code == 200:
+        payload = resp.json()
+        assert payload["player_id"] == player_id
+        assert payload["source"] == "redis"
+        assert isinstance(payload.get("features"), dict)
+
+
+@skip_unless_stack
+def test_feature_store_current_legacy_matches_canonical(headers_a):
+    players_resp = api("/players?per_page=1", headers=headers_a)
+    body = players_resp.json()
+    players = body if isinstance(body, list) else body.get("items", [])
+    if not players:
+        pytest.skip("Sem players disponíveis")
+
+    player_id = players[0]["id"]
+    canonical = api(f"/feature-store/players/{player_id}/current", headers=headers_a)
+    legacy = api(f"/players/{player_id}/features/current", headers=headers_a)
+
+    assert canonical.status_code == legacy.status_code
+    if canonical.status_code == 200:
+        canonical_body = canonical.json()
+        legacy_body = legacy.json()
+        assert canonical_body["player_id"] == legacy_body["player_id"] == player_id
+        assert canonical_body["feature_version"] == legacy_body["feature_version"]
+        assert canonical_body["source"] == legacy_body["source"] == "redis"
+        assert canonical_body["features"] == legacy_body["features"]
+
+
+@skip_unless_stack
+def test_feature_store_history_endpoint_returns_contract(headers_a):
+    players_resp = api("/players?per_page=1", headers=headers_a)
+    body = players_resp.json()
+    players = body if isinstance(body, list) else body.get("items", [])
+    if not players:
+        pytest.skip("Sem players disponíveis")
+
+    player_id = players[0]["id"]
+    resp = api(f"/feature-store/players/{player_id}/history", headers=headers_a)
+    assert resp.status_code in (200, 404)
+    if resp.status_code == 200:
+        payload = resp.json()
+        assert payload["player_id"] == player_id
+        assert isinstance(payload.get("count"), int)
+        assert isinstance(payload.get("items"), list)
+        if payload["items"]:
+            item = payload["items"][0]
+            assert "snapshot_date" in item
+            assert isinstance(item.get("features"), dict)
+
+
+@skip_unless_stack
+def test_player_feature_history_legacy_contains_module2_aliases(headers_a):
+    players_resp = api("/players?per_page=1", headers=headers_a)
+    body = players_resp.json()
+    players = body if isinstance(body, list) else body.get("items", [])
+    if not players:
+        pytest.skip("Sem players disponíveis")
+
+    player_id = players[0]["id"]
+    resp = api(f"/players/{player_id}/feature-history?days=7", headers=headers_a)
+    assert resp.status_code in (200, 404, 503)
+    if resp.status_code == 200:
+        payload = resp.json()
+        assert payload["player_id"] == player_id
+        assert isinstance(payload.get("data"), list)
+        if payload["data"]:
+            row = payload["data"][0]
+            assert "feature_version" in row
+            assert "unique_instruments_used_7d" in row
+            assert "bonus_to_real_money_ratio_30d" in row
+
+
+@skip_unless_stack
+def test_feature_store_warm_cache_restores_current_from_snapshot(headers_a):
+    me = api("/me", headers=headers_a)
+    assert me.status_code == 200
+    me_body = me.json()
+
+    players_resp = api("/players?per_page=1", headers=headers_a)
+    body = players_resp.json()
+    players = body if isinstance(body, list) else body.get("items", [])
+    if not players:
+        pytest.skip("Sem players disponíveis")
+
+    player_id = players[0]["id"]
+    tenant_id = me_body["tenant_id"]
+    snapshot_id = str(uuid.uuid4())
+    snapshot_date = date(2099, 12, 30)
+    redis_key = f"betaml:{tenant_id}:features:{player_id}"
+    features = {
+        "player_id": player_id,
+        "tenant_id": tenant_id,
+        "feature_version": 2,
+        "shared_device_score": 0.77,
+        "warmed_test_marker": "warm-e2e",
+    }
+
+    asyncio.run(
+        _pg_execute(
+            "DELETE FROM feature_snapshots WHERE tenant_id = $1::uuid AND player_id = $2::uuid AND feature_date = $3::date",
+            tenant_id,
+            player_id,
+            snapshot_date,
+        )
+    )
+    asyncio.run(
+        _pg_execute(
+            """
+            INSERT INTO feature_snapshots
+                (id, tenant_id, player_id, feature_date, snapshot_date, features, created_at)
+            VALUES
+                ($1::uuid, $2::uuid, $3::uuid, $4::date, $5::date, $6::jsonb, NOW())
+            """,
+            snapshot_id,
+            tenant_id,
+            player_id,
+            snapshot_date,
+            snapshot_date,
+            json.dumps(features),
+        )
+    )
+    asyncio.run(_redis_delete(redis_key))
+
+    try:
+        asyncio.run(_load_api_main()._warm_feature_store_cache())
+        resp = api(f"/feature-store/players/{player_id}/current", headers=headers_a)
+        assert resp.status_code == 200, resp.text
+        payload = resp.json()
+        assert payload["player_id"] == player_id
+        assert payload["features"]["warmed_test_marker"] == "warm-e2e"
+        assert payload["features"]["warmed_from"] == "feature_snapshot"
+    finally:
+        asyncio.run(_redis_delete(redis_key))
+        asyncio.run(
+            _pg_execute(
+                "DELETE FROM feature_snapshots WHERE id = $1::uuid",
+                snapshot_id,
+            )
+        )
+
+
+@skip_unless_stack
+def test_feature_store_drift_check_creates_admin_notification(headers_a):
+    me = api("/me", headers=headers_a)
+    assert me.status_code == 200
+    me_body = me.json()
+
+    players_resp = api("/players?per_page=1", headers=headers_a)
+    body = players_resp.json()
+    players = body if isinstance(body, list) else body.get("items", [])
+    if not players:
+        pytest.skip("Sem players disponíveis")
+
+    player_id = players[0]["id"]
+    tenant_id = me_body["tenant_id"]
+    current_date = date(2099, 12, 31)
+    previous_date = date(2099, 12, 30)
+    title = f"Drift de features detectado em {current_date.isoformat()}"
+    snapshot_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+
+    asyncio.run(
+        _pg_execute(
+            "DELETE FROM notifications WHERE tenant_id = $1::uuid AND type = 'FEATURE_DRIFT' AND title = $2",
+            tenant_id,
+            title,
+        )
+    )
+    asyncio.run(
+        _pg_execute(
+            "DELETE FROM feature_snapshots WHERE tenant_id = $1::uuid AND feature_date IN ($2::date, $3::date)",
+            tenant_id,
+            current_date,
+            previous_date,
+        )
+    )
+
+    rows = [
+        (snapshot_ids[0], previous_date, {"deposit_velocity": 1.0, "shared_device_score": 0.1}),
+        (snapshot_ids[1], current_date, {"deposit_velocity": 100.0, "shared_device_score": 0.95}),
+    ]
+    for snapshot_id, snapshot_date, features in rows:
+        asyncio.run(
+            _pg_execute(
+                """
+                INSERT INTO feature_snapshots
+                    (id, tenant_id, player_id, feature_date, snapshot_date, features, created_at)
+                VALUES
+                    ($1::uuid, $2::uuid, $3::uuid, $4::date, $5::date, $6::jsonb, NOW())
+                """,
+                snapshot_id,
+                tenant_id,
+                player_id,
+                snapshot_date,
+                snapshot_date,
+                json.dumps(features),
+            )
+        )
+
+    try:
+        asyncio.run(_load_api_main()._run_feature_drift_check_once())
+        resp = api("/notifications?unread_only=true&limit=20", headers=headers_a)
+        assert resp.status_code == 200, resp.text
+        items = resp.json()
+        drift_items = [item for item in items if item.get("type") == "FEATURE_DRIFT" and item.get("title") == title]
+        assert drift_items, items
+        assert "deposit_velocity" in (drift_items[0].get("body") or "")
+        drift_score = asyncio.run(
+            _pg_fetchval(
+                "SELECT drift_score FROM feature_snapshots WHERE tenant_id = $1::uuid AND player_id = $2::uuid AND feature_date = $3::date",
+                tenant_id,
+                player_id,
+                current_date,
+            )
+        )
+        assert drift_score is not None
+    finally:
+        asyncio.run(
+            _pg_execute(
+                "DELETE FROM notifications WHERE tenant_id = $1::uuid AND type = 'FEATURE_DRIFT' AND title = $2",
+                tenant_id,
+                title,
+            )
+        )
+        asyncio.run(
+            _pg_execute(
+                "DELETE FROM feature_snapshots WHERE id = ANY($1::uuid[])",
+                snapshot_ids,
+            )
+        )
+
+
 # ── ReportPackage COAF ────────────────────────────────────────────────────────
 
 @skip_unless_stack
@@ -1150,6 +1538,10 @@ def test_audit_log_after_report_generation(headers_a):
     """
     Geração de ReportPackage deve criar entrada no audit log.
     """
+    me_resp = api("/me", headers=headers_a)
+    assert me_resp.status_code == 200
+    current_user = me_resp.json()
+
     # Pega o total de audit logs antes
     before_resp = api("/audit-log?limit=1", headers=headers_a)
     assert before_resp.status_code == 200
@@ -1164,7 +1556,8 @@ def test_audit_log_after_report_generation(headers_a):
     if case_resp.status_code not in (200, 201):
         pytest.skip("Criação de caso falhou")
     case_id = case_resp.json()["id"]
-    api(f"/cases/{case_id}/report-package", "POST", headers=headers_a, json={})
+    report_resp = api(f"/cases/{case_id}/report-package", "POST", headers=headers_a, json={})
+    assert report_resp.status_code == 201, report_resp.text
 
     # Verifica que houve incremento no audit log
     after_resp = api("/audit-log?limit=1", headers=headers_a)
@@ -1175,3 +1568,29 @@ def test_audit_log_after_report_generation(headers_a):
     assert "items" in after_body
     total_after = after_body.get("total", 0)
     assert total_after >= total_before, "AuditLog não foi incrementado após geração de relatório"
+
+    filtered_resp = api(
+        f"/audit-logs?action=GENERATE_REPORT&entity_type=Case&user_id={current_user['id']}&limit=20",
+        headers=headers_a,
+    )
+    assert filtered_resp.status_code == 200, filtered_resp.text
+    filtered_items = filtered_resp.json()
+    assert isinstance(filtered_items, list)
+    matching_items = [
+        item for item in filtered_items
+        if item.get("entity_id") == case_id and item.get("action") == "GENERATE_REPORT"
+    ]
+    assert matching_items, filtered_items
+    assert matching_items[0].get("user_id") == current_user["id"]
+    assert matching_items[0].get("actor_id") == current_user["id"]
+    assert isinstance(matching_items[0].get("after"), dict)
+    assert matching_items[0]["after"].get("decision") in (None, "PENDING")
+    assert matching_items[0]["after"].get("report_id")
+
+    legacy_filter_resp = api(
+        f"/audit-logs?action=GENERATE_REPORT&entity_type=Case&actor_id={current_user['id']}&page=1&per_page=20",
+        headers=headers_a,
+    )
+    assert legacy_filter_resp.status_code == 200, legacy_filter_resp.text
+    legacy_items = legacy_filter_resp.json()
+    assert any(item.get("entity_id") == case_id for item in legacy_items), legacy_items

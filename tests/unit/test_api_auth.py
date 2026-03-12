@@ -247,7 +247,7 @@ class TestRBAC:
 
     def test_roles_set_is_complete(self):
         from auth import ROLES
-        assert ROLES == {"ADMIN", "AML_ANALYST", "AUDITOR"}
+        assert ROLES == {"SUPER_ADMIN", "ADMIN", "AML_ANALYST", "AUDITOR"}
 
 
 # ────────────────────────────────────────────────────────────────────────────

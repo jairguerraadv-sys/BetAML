@@ -115,7 +115,13 @@ REQUIRED_KEYS = {
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -306,7 +312,7 @@ class TestFeatureSnapshotPersistence(unittest.TestCase):
             _run(compute_features("t1", "p1", redis, _ch_mock()))
 
         assert "_ch_insert_features" in calls
-        assert "_persist_feature_snapshot" in calls
+        assert calls.count("_persist_feature_snapshot") == 1
 
 
 if __name__ == "__main__":

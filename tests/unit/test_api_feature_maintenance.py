@@ -13,7 +13,7 @@ for path in (API_DIR, LIBS_DIR):
 sys.path.insert(0, LIBS_DIR)
 sys.path.insert(0, API_DIR)
 
-for key in ('models', 'libs.models', 'main'):
+for key in ('models', 'libs.models', 'main', 'database'):
     sys.modules.pop(key, None)
 
 spec = importlib.util.spec_from_file_location(

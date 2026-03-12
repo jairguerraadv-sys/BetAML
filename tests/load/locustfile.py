@@ -124,9 +124,9 @@ class ScoringTaskSet(SequentialTaskSet):
         if not self.player_id:
             return
         self.client.get(
-            f"/players/{self.player_id}/features/current",
+            f"/feature-store/players/{self.player_id}/current",
             headers=self.user._h(),
-            name="/players/{id}/features/current",
+            name="/feature-store/players/{id}/current",
         )
 
 

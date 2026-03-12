@@ -109,6 +109,26 @@ class TestFeaturesVector(unittest.TestCase):
         vec = ml._features_to_vector(feat, ml.FEATURE_COLS)
         self.assertAlmostEqual(float(vec[0, 0]), 42.5, places=4)
 
+    def test_alias_fields_are_normalized(self):
+        ml = _load_module()
+        feat = {
+            "unique_instruments_used_7d": 7,
+            "bonus_to_real_money_ratio_30d": "0.25",
+        }
+        normalized = ml._normalize_feature_aliases(feat)
+        self.assertEqual(normalized["unique_instruments_7d"], 7)
+        self.assertEqual(normalized["bonus_to_real_ratio_30d"], "0.25")
+
+    def test_vector_uses_alias_when_canonical_missing(self):
+        ml = _load_module()
+        feat = {
+            "unique_instruments_used_7d": 9,
+            "bonus_to_real_money_ratio_30d": 0.5,
+        }
+        vec = ml._features_to_vector(feat, ["unique_instruments_7d", "bonus_to_real_ratio_30d"])
+        self.assertEqual(float(vec[0, 0]), 9.0)
+        self.assertAlmostEqual(float(vec[0, 1]), 0.5, places=4)
+
 
 class TestTrainSyntheticData(unittest.TestCase):
     """

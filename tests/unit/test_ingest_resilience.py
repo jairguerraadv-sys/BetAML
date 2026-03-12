@@ -14,7 +14,7 @@ for p in (_services_api, _libs):
         sys.path.remove(p)
 sys.path.insert(0, _libs)
 sys.path.insert(0, _services_api)
-for key in ("models", "libs.models"):
+for key in ("models", "libs.models", "database"):
     sys.modules.pop(key, None)
 
 from routers import ingest

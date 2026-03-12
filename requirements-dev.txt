@@ -57,3 +57,4 @@ psycopg2-binary==2.9.9
 # Em produção os Dockerfiles fazem `pip install /app/libs`.
 -e ./libs
 
+apscheduler==3.10.4

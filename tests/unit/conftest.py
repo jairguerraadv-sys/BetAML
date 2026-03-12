@@ -23,9 +23,18 @@ def _fix_path() -> None:
             sys.path.remove(p)
     sys.path.insert(0, _libs)
     sys.path.insert(0, _services_api)
-    # Remove qualquer cache de "models" que possa apontar para libs/models.py
-    for key in ("models", "libs.models"):
-        sys.modules.pop(key, None)
+    # Remove "libs.models" se existir
+    sys.modules.pop("libs.models", None)
+    # Remove "models" SOMENTE se aponta para libs/models.py (versão errada).
+    # Nunca remover se já está corretamente mapeado para services/api/models.py,
+    # pois isso causaria re-importação sobre database.Base já populado (MetaData conflict).
+    _models_mod = sys.modules.get("models")
+    if _models_mod is not None:
+        src = getattr(_models_mod, "__file__", "") or ""
+        if _libs in src and _services_api not in src:
+            # Wrong version — remove both models and database so Base is recreated cleanly
+            sys.modules.pop("models", None)
+            sys.modules.pop("database", None)
 
 
 # Executa imediatamente ao importar o conftest (cobertura de coleta)

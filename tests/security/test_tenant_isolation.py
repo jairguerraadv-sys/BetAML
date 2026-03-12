@@ -159,7 +159,25 @@ def test_tenant_b_cannot_access_tenant_a_player(client_a, client_b):
     player_id = _first_id(client_a, "/players")
     if not player_id:
         pytest.skip("No players for tenant A")
-    resp = client_b.get(f"/players/{player_id}/features/current")
+    resp = client_b.get(f"/feature-store/players/{player_id}/current")
+    assert resp.status_code in (403, 404)
+
+
+@skip_unless_stack
+def test_tenant_b_cannot_access_tenant_a_feature_store_history(client_a, client_b):
+    player_id = _first_id(client_a, "/players")
+    if not player_id:
+        pytest.skip("No players for tenant A")
+    resp = client_b.get(f"/feature-store/players/{player_id}/history")
+    assert resp.status_code in (403, 404)
+
+
+@skip_unless_stack
+def test_tenant_b_cannot_access_tenant_a_legacy_feature_history(client_a, client_b):
+    player_id = _first_id(client_a, "/players")
+    if not player_id:
+        pytest.skip("No players for tenant A")
+    resp = client_b.get(f"/players/{player_id}/feature-history?days=7")
     assert resp.status_code in (403, 404)
 
 
@@ -223,6 +241,38 @@ def test_tenant_b_cannot_reprocess_tenant_a_job(client_a, client_b):
 
 
 @skip_unless_stack
+def test_tenant_b_cannot_replay_tenant_a_ingest_error(client_a, client_b):
+    job_id = _create_ingest_file_job(client_a)
+    if not job_id:
+        pytest.skip("Falha ao criar ingest job para tenant A")
+
+    errors_a = client_a.get(f"/ingest/errors?job_id={job_id}&limit=5")
+    if errors_a.status_code != 200:
+        pytest.skip("Não foi possível listar erros de ingest do tenant A")
+    items = errors_a.json()
+    if not items:
+        pytest.skip("Sem erros de ingest para validar replay cross-tenant")
+
+    error_id = items[0].get("id")
+    if not error_id:
+        pytest.skip("Erro de ingest sem id")
+
+    resp = client_b.post(
+        f"/ingest/errors/{error_id}/replay",
+        json={
+            "corrected_payload": {
+                "event_id": "evt-cross-tenant",
+                "external_player_id": "CPF123",
+                "transaction_type": "DEPOSIT",
+                "amount": 50,
+                "occurred_at": "2026-03-10T12:00:00Z",
+            }
+        },
+    )
+    assert resp.status_code in (403, 404)
+
+
+@skip_unless_stack
 def test_tenant_b_cannot_list_tenant_a_api_keys(client_b):
     """Admin endpoints must return only the caller's tenant keys."""
     resp_b = client_b.get("/admin/api-keys")
@@ -267,3 +317,110 @@ def test_expired_token_format_rejected():
         c.headers["Authorization"] = f"Bearer {fake}"
         r = c.get("/cases")
         assert r.status_code in (401, 403)
+
+
+# ── Cross-tenant: Notifications ───────────────────────────────────────────────
+
+@skip_unless_stack
+def test_tenant_b_cannot_read_tenant_a_notifications(client_a, client_b):
+    """Notifications from Tenant A must not be visible to Tenant B."""
+    resp_a = client_a.get("/notifications")
+    resp_b = client_b.get("/notifications")
+    assert resp_a.status_code == 200
+    assert resp_b.status_code == 200
+    ids_a = {n["id"] for n in resp_a.json()}
+    ids_b = {n["id"] for n in resp_b.json()}
+    assert ids_a.isdisjoint(ids_b), "Tenant B can see Tenant A notifications"
+
+
+@skip_unless_stack
+def test_tenant_b_cannot_mark_tenant_a_notification_read(client_a, client_b):
+    """Tenant B must not be able to mark Tenant A's notification as read."""
+    id_a = _first_id(client_a, "/notifications")
+    if not id_a:
+        pytest.skip("No notifications for Tenant A")
+    resp = client_b.post(f"/notifications/{id_a}/read")
+    assert resp.status_code in (403, 404), f"Expected 403/404, got {resp.status_code}"
+
+
+# ── Cross-tenant: Model Registry ──────────────────────────────────────────────
+
+@skip_unless_stack
+def test_tenant_b_cannot_see_tenant_a_models(client_a, client_b):
+    """Model registry entries of Tenant A must not appear in Tenant B's list."""
+    resp_a = client_a.get("/model-registry")
+    resp_b = client_b.get("/model-registry")
+    assert resp_a.status_code == 200
+    assert resp_b.status_code == 200
+    ids_a = {m["id"] for m in resp_a.json()}
+    ids_b = {m["id"] for m in resp_b.json()}
+    assert ids_a.isdisjoint(ids_b), "Tenant B can see Tenant A model registry entries"
+
+
+@skip_unless_stack
+def test_tenant_b_cannot_promote_tenant_a_model(client_a, client_b):
+    """Tenant B must get 403/404 when trying to promote Tenant A's model."""
+    id_a = _first_id(client_a, "/model-registry")
+    if not id_a:
+        pytest.skip("No models for Tenant A")
+    resp = client_b.post(f"/model-registry/{id_a}/promote")
+    assert resp.status_code in (403, 404), f"Expected 403/404, got {resp.status_code}"
+
+
+# ── Cross-tenant: Admin Flags ─────────────────────────────────────────────────
+
+@skip_unless_stack
+def test_tenant_b_flags_do_not_contain_tenant_a_data(client_a, client_b):
+    """Tenant A flags must not appear in Tenant B admin flag listing."""
+    resp_a = client_a.get("/admin/flags")
+    resp_b = client_b.get("/admin/flags")
+    if resp_a.status_code in (401, 403) and resp_b.status_code in (401, 403):
+        pytest.skip("Both tenants lack admin role — expected for analyst credentials")
+    assert resp_a.status_code in (200, 401, 403)
+    assert resp_b.status_code in (200, 401, 403)
+    if resp_a.status_code == 200 and resp_b.status_code == 200:
+        keys_a = {f["key"] for f in resp_a.json()}
+        keys_b = {f["key"] for f in resp_b.json()}
+        assert keys_a.isdisjoint(keys_b), "Tenant B can read Tenant A flag keys"
+
+
+# ── Role enforcement: Admin Tenant Creation ───────────────────────────────────
+
+@skip_unless_stack
+def test_non_admin_cannot_create_tenant(client_a):
+    """AML_ANALYST must receive 403 when attempting POST /admin/tenants."""
+    resp = client_a.post("/admin/tenants", json={
+        "name": "Hack Tenant",
+        "slug": "hack-tenant",
+        "admin_username": "hacker",
+        "admin_email": "hacker@evil.com",
+        "admin_password": "password123",
+    })
+    assert resp.status_code == 403, f"Non-admin should be rejected, got {resp.status_code}"
+
+
+@skip_unless_stack
+def test_duplicate_tenant_slug_returns_409():
+    """Creating a tenant with an existing slug must return 409 Conflict."""
+    if not RUN_INTEGRATION:
+        pytest.skip("Stack não disponível")
+    admin_creds = {
+        "username": os.getenv("SUPER_ADMIN_USER", "admin_a"),
+        "password": os.getenv("SUPER_ADMIN_PASS", "admin123"),
+    }
+    with httpx.Client(base_url=BASE_URL, timeout=10) as c:
+        r = c.post("/auth/login", json=admin_creds)
+        if r.status_code != 200:
+            pytest.skip(f"Admin login failed: {r.status_code}")
+        c.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
+        # First creation
+        slug = f"test-slug-{uuid.uuid4().hex[:8]}"
+        body = {"name": f"Test {slug}", "slug": slug,
+                "admin_username": f"u_{slug[:6]}", "admin_email": f"{slug}@test.com",
+                "admin_password": "securepass1"}
+        r1 = c.post("/admin/tenants", json=body)
+        if r1.status_code != 201:
+            pytest.skip(f"Could not create first tenant: {r1.status_code}")
+        # Duplicate
+        r2 = c.post("/admin/tenants", json=body)
+        assert r2.status_code == 409, f"Expected 409, got {r2.status_code}: {r2.text}"
