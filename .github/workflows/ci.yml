@@ -1,6 +1,6 @@
 name: CI
 
-on:
+"on":
   push:
     branches: [main]
   pull_request:
@@ -37,7 +37,8 @@ jobs:
       - name: Run tests with coverage
         env:
           JWT_SECRET: ci-test-secret-at-least-32-characters-long
-          PII_ENCRYPTION_KEY: ${{ secrets.PII_ENCRYPTION_KEY || 'ci-pii-key-32-characters-long!!' }}
+          PII_ENCRYPTION_KEY: ci-pii-test-key-32-characters-long!!
+          ENVIRONMENT: test
           DATABASE_URL: postgresql+asyncpg://betaml:betaml@localhost/betaml
           REDIS_URL: redis://localhost:6379/0
           KAFKA_BOOTSTRAP_SERVERS: localhost:9092
