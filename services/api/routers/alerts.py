@@ -1,21 +1,22 @@
-"""routers/alerts.py — Listagem, detalhe, triage, close, link-to-case, SSE stream."""
+"""routers/alerts.py — Listagem, detalhe, triage, close, link-to-case, SSE stream, labeling."""
 from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+import os
+from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator, Literal, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func as sqlfunc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user, require_roles
-from database import get_db
-from models import Alert, Bet, Case, FinancialTransaction, User
+from database import AsyncSessionLocal, get_db
+from models import Alert, Bet, Case, FinancialTransaction, Notification, User
 from utils import write_audit
 
 logger = structlog.get_logger(__name__)
@@ -293,3 +294,120 @@ async def get_alert_related_transactions(
             for b in bets
         ],
     }
+
+
+# ── Alert Labeling (M5 — feedback loop) ──────────────────────────────────────
+
+UTC = timezone.utc
+logger = structlog.get_logger(__name__)
+
+
+class AlertLabelIn(BaseModel):
+    label: Literal["TRUE_POSITIVE", "FALSE_POSITIVE", "NEED_REVIEW"]
+
+
+@router.post("/alerts/{alert_id}/label")
+async def label_alert(
+    alert_id: str,
+    body: AlertLabelIn,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Label an alert as TRUE_POSITIVE, FALSE_POSITIVE, or NEED_REVIEW."""
+    alert = (await db.execute(
+        select(Alert).where(
+            Alert.id == alert_id,
+            Alert.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if alert is None:
+        raise HTTPException(404, "Alert not found")
+
+    alert.label = body.label
+    alert.labeled_by = current_user.id
+    alert.labeled_at = datetime.now(UTC)
+    await write_audit(
+        db,
+        tenant_id=current_user.tenant_id,
+        actor_id=current_user.id,
+        action="LABEL_ALERT",
+        entity_type="Alert",
+        entity_id=alert_id,
+        after={"label": body.label},
+    )
+    await db.commit()
+    background_tasks.add_task(_enqueue_feedback_event, alert_id, body.label, current_user.tenant_id)
+    return {"status": "labeled", "label": body.label}
+
+
+async def _enqueue_feedback_event(alert_id: str, label: str, tenant_id: str) -> None:
+    """Publish labeled alert event to Kafka for ML retraining pipeline.
+
+    Retries up to 2 times on transient failures; on final failure stores
+    a Notification for every ADMIN user so the failure is visible in the UI.
+    """
+    MAX_RETRIES = 2
+    last_exc: Exception | None = None
+
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            from aiokafka import AIOKafkaProducer
+            producer = AIOKafkaProducer(
+                bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP", "redpanda:9092")
+            )
+            await producer.start()
+            try:
+                await producer.send_and_wait(
+                    "feedback.labels",
+                    json.dumps({
+                        "alert_id": alert_id,
+                        "label": label,
+                        "tenant_id": tenant_id,
+                        "ts": datetime.now(UTC).isoformat(),
+                    }).encode(),
+                )
+                return
+            finally:
+                await producer.stop()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(0.5 * (attempt + 1))
+
+    logger.warning(
+        "feedback_event_publish_failed",
+        alert_id=alert_id,
+        tenant_id=tenant_id,
+        label=label,
+        error=str(last_exc),
+        attempts=MAX_RETRIES + 1,
+    )
+
+    try:
+        async with AsyncSessionLocal() as _db:
+            admin_ids = list((
+                await _db.execute(
+                    select(User.id).where(
+                        User.tenant_id == tenant_id,
+                        User.role == "ADMIN",
+                        User.active == True,  # noqa: E712
+                    )
+                )
+            ).scalars().all())
+            for admin_id in admin_ids:
+                _db.add(Notification(
+                    tenant_id=tenant_id,
+                    user_id=admin_id,
+                    type="SYSTEM_ERROR",
+                    title="Falha na publicação de feedback label",
+                    body=(
+                        f"Feedback label para alert {alert_id} falhou ao publicar "
+                        f"após {MAX_RETRIES + 1} tentativas — revisão manual necessária."
+                    ),
+                    reference_type="alert",
+                    reference_id=alert_id,
+                ))
+            await _db.commit()
+    except Exception as db_exc:  # noqa: BLE001
+        logger.error("feedback_notification_store_failed", alert_id=alert_id, error=str(db_exc))

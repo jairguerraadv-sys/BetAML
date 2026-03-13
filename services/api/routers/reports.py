@@ -1,0 +1,329 @@
+"""routers/reports.py — Compliance reports: monthly summary + PDF download (M5)."""
+from __future__ import annotations
+
+import csv
+import io
+from datetime import datetime, timezone
+
+import structlog
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import and_, desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from auth import get_current_user
+from config import settings
+from database import AsyncSessionLocal, get_db
+from models import Alert, Bet, Case, FinancialTransaction, Player, ReportPackage, RuleDefinition, User
+
+router = APIRouter(tags=["reports"])
+
+UTC = timezone.utc
+logger = structlog.get_logger(__name__)
+
+
+# ── Pydantic in/out ───────────────────────────────────────────────────────────
+
+class MonthlyReportIn(BaseModel):
+    year: int = Field(..., ge=2020, le=2100)
+    month: int = Field(..., ge=1, le=12)
+
+
+# ── Core aggregation helper ───────────────────────────────────────────────────
+
+async def _build_monthly_report(
+    tenant_id: str,
+    date_from: datetime,
+    date_to: datetime,
+    db: AsyncSession,
+) -> dict:
+    """Aggregate compliance statistics for a given period and tenant."""
+    # 1. Alerts by severity
+    sev_rows = (await db.execute(
+        select(Alert.severity, func.count().label("cnt"))
+        .where(
+            Alert.tenant_id == tenant_id,
+            Alert.created_at >= date_from,
+            Alert.created_at <= date_to,
+        )
+        .group_by(Alert.severity)
+    )).all()
+    alerts_by_severity: dict[str, int] = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    for row in sev_rows:
+        if row.severity in alerts_by_severity:
+            alerts_by_severity[row.severity] = row.cnt
+
+    # 2. Cases summary
+    case_rows = (await db.execute(
+        select(Case.status, func.count().label("cnt"))
+        .where(
+            Case.tenant_id == tenant_id,
+            Case.created_at >= date_from,
+            Case.created_at <= date_to,
+        )
+        .group_by(Case.status)
+    )).all()
+    cases_summary: dict[str, int] = {}
+    for row in case_rows:
+        key = row.status.lower() if row.status else "unknown"
+        cases_summary[key] = row.cnt
+    for expected in ("open", "investigating", "closed", "reported"):
+        cases_summary.setdefault(expected, 0)
+
+    # 3. Top 10 rules by alert fires
+    rule_rows = (await db.execute(
+        select(
+            Alert.rule_id,
+            RuleDefinition.name.label("rule_name"),
+            func.count().label("fires"),
+        )
+        .join(RuleDefinition, RuleDefinition.id == Alert.rule_id, isouter=True)
+        .where(
+            Alert.tenant_id == tenant_id,
+            Alert.created_at >= date_from,
+            Alert.created_at <= date_to,
+            Alert.rule_id.isnot(None),
+        )
+        .group_by(Alert.rule_id, RuleDefinition.name)
+        .order_by(desc("fires"))
+        .limit(10)
+    )).all()
+    top_rules_by_fires = [
+        {
+            "rule_id": str(r.rule_id),
+            "rule_name": r.rule_name or "(desconhecido)",
+            "fires": r.fires,
+        }
+        for r in rule_rows
+    ]
+
+    # 4. Top 10 players by current risk score
+    player_rows = (await db.execute(
+        select(Player.id, Player.external_player_id, Player.risk_score)
+        .where(Player.tenant_id == tenant_id)
+        .order_by(Player.risk_score.desc())
+        .limit(10)
+    )).all()
+    top_players_by_risk = [
+        {
+            "player_id": str(r.id),
+            "external_id": r.external_player_id or "",
+            "avg_risk_score": float(r.risk_score or 0),
+        }
+        for r in player_rows
+    ]
+
+    # 5. Total ingested events
+    tx_count = (await db.execute(
+        select(func.count()).where(
+            and_(
+                FinancialTransaction.tenant_id == tenant_id,
+                FinancialTransaction.created_at >= date_from,
+                FinancialTransaction.created_at <= date_to,
+            )
+        )
+    )).scalar_one()
+    bet_count = (await db.execute(
+        select(func.count()).where(
+            and_(
+                Bet.tenant_id == tenant_id,
+                Bet.created_at >= date_from,
+                Bet.created_at <= date_to,
+            )
+        )
+    )).scalar_one()
+    total_ingested_events = (tx_count or 0) + (bet_count or 0)
+
+    # 6. False positive rate
+    label_rows = (await db.execute(
+        select(Alert.label, func.count().label("cnt"))
+        .where(
+            Alert.tenant_id == tenant_id,
+            Alert.labeled_at >= date_from,
+            Alert.labeled_at <= date_to,
+            Alert.label.isnot(None),
+        )
+        .group_by(Alert.label)
+    )).all()
+    total_labeled = sum(r.cnt for r in label_rows)
+    fp_count = sum(r.cnt for r in label_rows if r.label == "FALSE_POSITIVE")
+    false_positive_rate: float | None = (
+        round(fp_count / total_labeled, 4) if total_labeled > 0 else None
+    )
+
+    return {
+        "period": {"from": date_from.isoformat(), "to": date_to.isoformat()},
+        "alerts_by_severity": alerts_by_severity,
+        "cases_summary": cases_summary,
+        "top_rules_by_fires": top_rules_by_fires,
+        "top_players_by_risk": top_players_by_risk,
+        "total_ingested_events": total_ingested_events,
+        "false_positive_rate": false_positive_rate,
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+
+
+async def _build_monthly_report_background(tenant_id: str, year: int, month: int) -> None:
+    """Background wrapper: creates its own DB session and builds the monthly report."""
+    import calendar
+    date_from = datetime(year, month, 1, tzinfo=UTC)
+    last_day = calendar.monthrange(year, month)[1]
+    date_to = datetime(year, month, last_day, 23, 59, 59, tzinfo=UTC)
+    try:
+        async with AsyncSessionLocal() as _db:
+            report = await _build_monthly_report(tenant_id, date_from, date_to, _db)
+            logger.info(
+                "monthly_report_background_completed",
+                tenant_id=tenant_id,
+                year=year,
+                month=month,
+                total_alerts=sum(report["alerts_by_severity"].values()),
+                total_events=report["total_ingested_events"],
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "monthly_report_background_failed",
+            tenant_id=tenant_id,
+            year=year,
+            month=month,
+            error=str(exc),
+        )
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@router.get("/cases/{case_id}/report-package/pdf")
+async def download_report_pdf(
+    case_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stream the PDF of the latest report package for a case."""
+    case = (await db.execute(
+        select(Case).where(
+            Case.id == case_id,
+            Case.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if case is None:
+        raise HTTPException(404, "Case not found")
+
+    rp = (await db.execute(
+        select(ReportPackage).where(
+            ReportPackage.case_id == case_id,
+            ReportPackage.tenant_id == current_user.tenant_id,
+        ).order_by(desc(ReportPackage.created_at))
+    )).scalar_one_or_none()
+    if rp is None or not rp.pdf_path:
+        raise HTTPException(404, "No PDF report package found for this case")
+
+    try:
+        from libs.clients import get_minio_client
+        minio = get_minio_client()
+        bucket = settings.minio_bucket
+        response = minio.get_object(bucket, rp.pdf_path)
+        pdf_bytes = response.read()
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=report_{case_id}.pdf"},
+        )
+    except Exception as exc:
+        raise HTTPException(500, f"Could not retrieve PDF: {exc}") from exc
+
+
+@router.post("/reports/monthly-summary", status_code=202)
+async def generate_monthly_report(
+    body: MonthlyReportIn,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+):
+    """Trigger async generation of monthly compliance summary report (202 Accepted)."""
+    background_tasks.add_task(
+        _build_monthly_report_background,
+        current_user.tenant_id,
+        body.year,
+        body.month,
+    )
+    return {"status": "queued", "year": body.year, "month": body.month}
+
+
+@router.get("/reports/monthly-summary")
+async def get_monthly_summary(
+    date_from: str = Query(..., description="Data inicial YYYY-MM-DD (inclusivo)"),
+    date_to: str = Query(..., description="Data final YYYY-MM-DD (inclusivo)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return the monthly compliance summary synchronously."""
+    try:
+        df = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=UTC)
+        dt = datetime.strptime(date_to, "%Y-%m-%d").replace(
+            hour=23, minute=59, second=59, tzinfo=UTC
+        )
+    except ValueError:
+        raise HTTPException(400, "date_from e date_to devem estar no formato YYYY-MM-DD")
+    if df > dt:
+        raise HTTPException(400, "date_from não pode ser posterior a date_to")
+    return await _build_monthly_report(current_user.tenant_id, df, dt, db)
+
+
+@router.get("/reports/monthly-summary/csv")
+async def get_monthly_summary_csv(
+    date_from: str = Query(..., description="Data inicial YYYY-MM-DD"),
+    date_to: str = Query(..., description="Data final YYYY-MM-DD"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Export the monthly compliance summary as a UTF-8-BOM CSV for Excel."""
+    try:
+        df = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=UTC)
+        dt = datetime.strptime(date_to, "%Y-%m-%d").replace(
+            hour=23, minute=59, second=59, tzinfo=UTC
+        )
+    except ValueError:
+        raise HTTPException(400, "date_from e date_to devem estar no formato YYYY-MM-DD")
+    if df > dt:
+        raise HTTPException(400, "date_from não pode ser posterior a date_to")
+
+    report = await _build_monthly_report(current_user.tenant_id, df, dt, db)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow(["secao", "chave", "valor"])
+    writer.writerow(["Periodo", "de", report["period"]["from"]])
+    writer.writerow(["Periodo", "ate", report["period"]["to"]])
+    writer.writerow(["Periodo", "gerado_em", report["generated_at"]])
+
+    for sev, cnt in report["alerts_by_severity"].items():
+        writer.writerow(["AlertasPorSeveridade", sev, cnt])
+
+    for status_key, cnt in report["cases_summary"].items():
+        writer.writerow(["ResumoDeOcorrencias", status_key, cnt])
+
+    writer.writerow(["Totais", "eventos_ingeridos", report["total_ingested_events"]])
+    writer.writerow([
+        "Totais",
+        "taxa_falso_positivo",
+        report["false_positive_rate"] if report["false_positive_rate"] is not None else "N/D",
+    ])
+
+    writer.writerow([])
+    writer.writerow(["TopRegras", "rule_id", "rule_name", "disparos"])
+    for r in report["top_rules_by_fires"]:
+        writer.writerow(["TopRegras", r["rule_id"], r["rule_name"], r["fires"]])
+
+    writer.writerow([])
+    writer.writerow(["TopJogadores", "player_id", "external_id", "avg_risk_score"])
+    for p in report["top_players_by_risk"]:
+        writer.writerow(["TopJogadores", p["player_id"], p["external_id"], p["avg_risk_score"]])
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")
+    filename = f"monthly_summary_{date_from}_{date_to}.csv"
+    return StreamingResponse(
+        io.BytesIO(csv_bytes),
+        media_type="text/csv; charset=utf-8-sig",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

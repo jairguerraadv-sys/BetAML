@@ -6,7 +6,7 @@ import base64
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, AsyncGenerator, Optional
 
 import structlog
 from fastapi import (
@@ -22,6 +22,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.responses import StreamingResponse
 from jose import JWTError, jwt
 from pydantic import BaseModel
 from sqlalchemy import and_, desc, func, select
@@ -1033,3 +1034,41 @@ async def parse_connector_payload(
             errors=error_rows[:20],
         ).model_dump(),
     }
+
+
+# ── SSE ingest stream ─────────────────────────────────────────────────────────
+
+from auth import get_current_user  # noqa: E402  (avoid circular-import at module top)
+
+UTC_TZ = timezone.utc
+
+
+@router.get("/ingest/stream")
+async def ingest_sse_stream(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    """Server-Sent Events — streams real-time ingest heartbeat / status updates.
+
+    In production this would subscribe to a Redis pub/sub channel for live progress.
+    Currently emits a heartbeat every 5 s and disconnects when the client closes.
+    """
+    async def event_generator() -> AsyncGenerator[str, None]:
+        ping_count = 0
+        while True:
+            if await request.is_disconnected():
+                break
+            ping_count += 1
+            payload = json.dumps({
+                "type": "heartbeat",
+                "count": ping_count,
+                "ts": datetime.now(UTC_TZ).isoformat(),
+            })
+            yield f"data: {payload}\n\n"
+            await asyncio.sleep(5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

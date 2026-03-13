@@ -2,12 +2,14 @@
 BetAML API — FastAPI application
 Routes:
   /auth          - login, refresh, logout, /me
-  /ingest        - file, event, batch, jobs
-  /rules         - CRUD + simulate
-  /alerts        - list, detail, triage, close, link-to-case
+  /ingest        - file, event, batch, jobs, SSE stream
+  /rules         - CRUD + simulate + compound rules + macros
+  /alerts        - list, detail, triage, close, link-to-case, label
   /cases         - CRUD, assign, events, evidence, report-package
   /audit-logs    - listagem (ADMIN/AUDITOR)
-  /players       - listagem + perfil
+  /players       - listagem + perfil + LGPD erasure
+  /player-lists  - watchlists CRUD + CSV upload
+  /reports       - monthly summary + PDF download
   /mappings      - CRUD MappingConfig
 """
 from __future__ import annotations
@@ -541,10 +543,13 @@ async def health():
 
 from routers import auth, alerts, audit, cases, ingest, mappings, players, rules  # noqa: E402
 from routers.admin import router as admin_router                # noqa: E402
+from routers.compound_rules import router as compound_rules_router  # noqa: E402
 from routers.feature_store import router as feature_store_router  # noqa: E402
 from routers.ml import router as ml_router                     # noqa: E402
 from routers.notifications import router as notifications_router  # noqa: E402
 from routers.internal import router as internal_router            # noqa: E402
+from routers.player_lists import router as player_lists_router    # noqa: E402
+from routers.reports import router as reports_router              # noqa: E402
 from routers.search import router as search_router                # noqa: E402
 from routers.stats import router as stats_router                  # noqa: E402
 
@@ -552,9 +557,12 @@ app.include_router(auth.router)
 app.include_router(alerts.router)
 app.include_router(audit.router)
 app.include_router(cases.router)
+app.include_router(compound_rules_router)
 app.include_router(ingest.router)
 app.include_router(mappings.router)
+app.include_router(player_lists_router)
 app.include_router(players.router)
+app.include_router(reports_router)
 app.include_router(rules.router)
 app.include_router(admin_router)
 app.include_router(feature_store_router)
