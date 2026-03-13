@@ -457,6 +457,7 @@ export interface TenantCreatePayload {
   admin_email: string;
   admin_password: string;
   risk_score_threshold?: number;
+  cnpj?: string;
 }
 
 export interface TenantCreateResult {
@@ -484,3 +485,50 @@ export const fetchTenants = () =>
 
 export const updateTenant = (id: string, body: { name?: string; active?: boolean }) =>
   api.patch<TenantOut>(`/admin/tenants/${id}`, body).then((r) => r.data);
+
+// ── Admin: User Management ────────────────────────────────────────────────────
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  email: string;
+  role: string;
+  active: boolean;
+  created_at: string;
+}
+
+export interface AdminUserCreateIn {
+  username: string;
+  email: string;
+  password: string;
+  role: string;
+}
+
+export const fetchAdminUsers = () =>
+  api.get<AdminUser[]>('/admin/users').then((r) => r.data);
+
+export const createAdminUser = (body: AdminUserCreateIn) =>
+  api.post<AdminUser>('/admin/users', body).then((r) => r.data);
+
+export const updateAdminUser = (id: string, body: { role?: string; active?: boolean }) =>
+  api.patch<AdminUser>(`/admin/users/${id}`, body).then((r) => r.data);
+
+export const deleteAdminUser = (id: string) =>
+  api.delete(`/admin/users/${id}`);
+
+export const resetUserPassword = (id: string, new_password: string) =>
+  api.post(`/admin/users/${id}/reset-password`, { new_password });
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+export interface DashboardStats {
+  alerts_today:  number;
+  critical_open: number;
+  cases_open:    number;
+  sla_expired:   number;
+  auto_detected: number;
+  by_severity:   Record<string, number>;
+}
+
+export const fetchDashboardStats = () =>
+  api.get<DashboardStats>('/stats/dashboard').then((r) => r.data);

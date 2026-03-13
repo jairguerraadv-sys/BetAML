@@ -44,9 +44,8 @@ async def global_search(
             Player.status != "ERASED",
             or_(
                 Player.external_player_id.ilike(q_prefix),
-                # CPF is encrypted — we can't search it directly.
-                # Partial name search works if name is not anonymized.
-                Player.risk_band.ilike(q_like),
+                # full_name is the unencrypted display name populated during ingest
+                Player.full_name.ilike(q_like),
             ),
         )
         .limit(_MAX)
@@ -88,7 +87,7 @@ async def global_search(
             {
                 "id": str(p.id),
                 "external_id": p.external_player_id,
-                "name": p.external_player_id,  # name is PII-encrypted; use external_id as label
+                "name": p.full_name or p.external_player_id,
                 "risk_band": p.risk_band or "UNKNOWN",
             }
             for p in players_rows

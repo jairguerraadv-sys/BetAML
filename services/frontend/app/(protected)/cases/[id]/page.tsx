@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchCase, fetchPlayer, fetchPlayerEconCompat,
   generateReportPackage, CaseDetail, fetchAlertRelatedTransactions,
@@ -266,14 +266,36 @@ function TabProfile({ playerId }: { playerId: string | undefined }) {
 
 // ── Tab: Movimentações ────────────────────────────────────────────────────────
 function TabMovements({ alertIds }: { alertIds: string[] }) {
-  const firstAlertId = alertIds[0];
-  const { data: txns, isLoading } = useQuery({
-    queryKey: ['related-txns', firstAlertId],
-    queryFn:  () => fetchAlertRelatedTransactions(firstAlertId!),
-    enabled:  !!firstAlertId,
+  const results = useQueries({
+    queries: alertIds.map((id) => ({
+      queryKey: ['related-txns', id],
+      queryFn:  () => fetchAlertRelatedTransactions(id),
+      enabled:  !!id,
+    })),
   });
 
-  if (!firstAlertId) return (
+  const isLoading = results.some((r) => r.isLoading);
+  const allLoaded = results.every((r) => !r.isLoading);
+
+  // Merge + deduplicate transactions and bets across all alerts
+  const seenTxn = new Set<string>();
+  const seenBet = new Set<string>();
+  const transactions: NonNullable<typeof results[0]['data']>['transactions'] = [];
+  const bets:        NonNullable<typeof results[0]['data']>['bets'] = [];
+  let windowHours = 0;
+
+  for (const r of results) {
+    if (!r.data) continue;
+    windowHours = Math.max(windowHours, r.data.window_hours);
+    for (const t of r.data.transactions) {
+      if (!seenTxn.has(t.id)) { seenTxn.add(t.id); transactions.push(t); }
+    }
+    for (const b of r.data.bets) {
+      if (!seenBet.has(b.id)) { seenBet.add(b.id); bets.push(b); }
+    }
+  }
+
+  if (!alertIds.length) return (
     <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 py-16 text-center">
       <TrendingDown size={32} className="mx-auto mb-3 text-gray-300" />
       <p className="text-sm text-gray-400">Nenhum alerta vinculado para mostrar movimentações.</p>
@@ -281,15 +303,16 @@ function TabMovements({ alertIds }: { alertIds: string[] }) {
   );
 
   if (isLoading) return <p className="text-sm text-gray-400 p-5">Carregando movimentações...</p>;
-  if (!txns)     return <p className="text-sm text-red-500 p-5">Não foi possível carregar movimentações.</p>;
+  if (allLoaded && !transactions.length && !bets.length)
+    return <p className="text-sm text-gray-400 p-5">Nenhuma movimentação encontrada no período.</p>;
 
   return (
     <div className="space-y-5">
       {/* Transações */}
-      {txns.transactions.length > 0 && (
+      {transactions.length > 0 && (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h3 className="mb-3 text-sm font-semibold text-gray-700">
-            Transações ({txns.transactions.length}) — janela de {txns.window_hours}h
+            Transações ({transactions.length}) — janela de {windowHours}h
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -303,7 +326,7 @@ function TabMovements({ alertIds }: { alertIds: string[] }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {txns.transactions.map((t) => (
+                {transactions.map((t) => (
                   <tr key={t.id} className="hover:bg-gray-50">
                     <td className="py-2 pr-4 font-medium text-gray-700">{t.type}</td>
                     <td className="py-2 pr-4 font-mono font-semibold">
@@ -329,10 +352,10 @@ function TabMovements({ alertIds }: { alertIds: string[] }) {
       )}
 
       {/* Apostas */}
-      {txns.bets.length > 0 && (
+      {bets.length > 0 && (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h3 className="mb-3 text-sm font-semibold text-gray-700">
-            Apostas ({txns.bets.length}) — mesma janela
+            Apostas ({bets.length}) — mesma janela
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -346,7 +369,7 @@ function TabMovements({ alertIds }: { alertIds: string[] }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {txns.bets.map((b) => (
+                {bets.map((b) => (
                   <tr key={b.id} className="hover:bg-gray-50">
                     <td className="py-2 pr-4 font-medium text-gray-700">{b.bet_type}</td>
                     <td className="py-2 pr-4 font-mono font-semibold">
@@ -439,6 +462,14 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                 ⬇ Baixar PDF (COAF)
               </a>
             )}
+            <a
+              href={`/api-proxy/cases/${caseId}/report-package/${rpResult.report_package_id}/coaf-xml`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex items-center gap-1 rounded-lg border border-green-600 px-4 py-2 text-xs font-semibold text-green-700 hover:bg-green-50"
+            >
+              ⬇ Baixar XML (COAF Res. 36)
+            </a>
           </div>
         ) : (
           <div className="space-y-4">

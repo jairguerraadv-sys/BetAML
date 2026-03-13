@@ -82,6 +82,7 @@ class TenantCreateIn(BaseModel):
     admin_email: str
     admin_password: str = Field(..., min_length=8)
     risk_score_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    cnpj: Optional[str] = Field(default=None, pattern=r"^\d{14}$", description="14 dígitos sem formatação")
 
 
 class TenantCreateOut(BaseModel):
@@ -423,7 +424,7 @@ async def create_tenant(
         name=body.name,
         slug=body.slug,
         active=True,
-        settings={},
+        settings={"cnpj": body.cnpj} if body.cnpj else {},
         risk_score_threshold=body.risk_score_threshold,
     )
     db.add(tenant)

@@ -350,6 +350,7 @@ export default function OnboardingPage() {
         admin_username: s2.username,
         admin_email:    s2.email,
         admin_password: s2.senha,
+        cnpj:           s1.cnpj.replace(/\D/g, ''),
       }),
     onSuccess: (data) => { setTenantResult(data); setMutError(''); setStep(3); },
     onError:   (err)  => setMutError(extractError(err)),

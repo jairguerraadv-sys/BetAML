@@ -1,6 +1,6 @@
 'use client';
 import { useQuery } from '@tanstack/react-query';
-import { fetchAlerts, fetchCases } from '@/lib/api';
+import { fetchAlerts, fetchCases, fetchDashboardStats } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
@@ -81,41 +81,41 @@ export default function DashboardPage() {
     } catch {}
   }, []);
 
-  const { data: alertsData } = useQuery({
-    queryKey: ['alerts', 'dashboard'],
-    queryFn:  () => fetchAlerts({ per_page: '500' }),
-    refetchInterval: 30_000,
-  });
-  const alerts = alertsData?.items ?? [];
-
-  const { data: cases = [] } = useQuery({
-    queryKey: ['cases', 'dashboard'],
-    queryFn:  () => fetchCases({ per_page: '500' }),
+  // Pre-aggregated KPIs — single DB query, no 500-record pagination
+  const { data: stats } = useQuery({
+    queryKey: ['dashboard-stats'],
+    queryFn:  fetchDashboardStats,
     refetchInterval: 30_000,
   });
 
-  const today       = new Date(); today.setHours(0, 0, 0, 0);
-  const alertsHoje  = alerts.filter((a) => new Date(a.created_at) >= today).length;
-  const critAbertos = alerts.filter((a) => a.severity === 'CRITICAL' && a.status === 'OPEN').length;
-  const now         = new Date();
-  const casesUrgentes = cases.filter((c) => {
-    const due = (c as Record<string, unknown>).sla_due_at as string | undefined;
-    return due && new Date(due) < now && !['CLOSED', 'REPORTED', 'ARCHIVED'].includes(c.status);
-  }).length;
-  const casesAbertos  = cases.filter((c) => c.status === 'OPEN' || c.status === 'IN_REVIEW').length;
-  const autoCriados   = cases.filter((c) => (c as Record<string, unknown>).auto_created === true).length;
+  // Small targeted fetches for the detail list sections only
+  const { data: critAlertsData } = useQuery({
+    queryKey: ['alerts', 'dashboard-crit'],
+    queryFn:  () => fetchAlerts({ severity: 'CRITICAL', status: 'OPEN', per_page: '5' }),
+    refetchInterval: 30_000,
+  });
+  const { data: recentCasesData } = useQuery({
+    queryKey: ['cases', 'dashboard-sla'],
+    queryFn:  () => fetchCases({ per_page: '20' }),
+    refetchInterval: 30_000,
+  });
+
+  const alertsHoje  = stats?.alerts_today  ?? 0;
+  const critAbertos = stats?.critical_open ?? 0;
+  const casesAbertos  = stats?.cases_open  ?? 0;
+  const casesUrgentes = stats?.sla_expired ?? 0;
+  const autoCriados   = stats?.auto_detected ?? 0;
 
   const bySev = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((s) => ({
     name:  SEV_LABEL[s],
-    total: alerts.filter((a) => a.status === 'OPEN' && a.severity === s).length,
+    total: stats?.by_severity?.[s] ?? 0,
     key:   s,
   }));
 
-  const critRecentes = alerts
-    .filter((a) => a.severity === 'CRITICAL' && a.status === 'OPEN')
-    .slice(0, 5);
+  const critRecentes = critAlertsData?.items?.slice(0, 5) ?? [];
 
-  const slaProximo = cases
+  const now = new Date();
+  const slaProximo = (recentCasesData ?? [])
     .filter((c) => {
       const due = (c as Record<string, unknown>).sla_due_at as string | undefined;
       if (!due) return false;

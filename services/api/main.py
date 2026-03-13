@@ -546,6 +546,7 @@ from routers.ml import router as ml_router                     # noqa: E402
 from routers.notifications import router as notifications_router  # noqa: E402
 from routers.internal import router as internal_router            # noqa: E402
 from routers.search import router as search_router                # noqa: E402
+from routers.stats import router as stats_router                  # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(alerts.router)
@@ -561,6 +562,7 @@ app.include_router(ml_router)
 app.include_router(notifications_router)
 app.include_router(internal_router)
 app.include_router(search_router)
+app.include_router(stats_router)
 
 # Enterprise router is registered last; note that FastAPI resolves routes in
 # registration order (first match wins), so core router paths take precedence
