@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator, Literal, Optional
 
@@ -350,26 +349,23 @@ async def _enqueue_feedback_event(alert_id: str, label: str, tenant_id: str) -> 
     MAX_RETRIES = 2
     last_exc: Exception | None = None
 
+    payload = json.dumps({
+        "alert_id": alert_id,
+        "label": label,
+        "tenant_id": tenant_id,
+        "ts": datetime.now(UTC).isoformat(),
+    }).encode()
+
     for attempt in range(MAX_RETRIES + 1):
         try:
-            from aiokafka import AIOKafkaProducer
-            producer = AIOKafkaProducer(
-                bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP", "redpanda:9092")
-            )
-            await producer.start()
-            try:
-                await producer.send_and_wait(
-                    "feedback.labels",
-                    json.dumps({
-                        "alert_id": alert_id,
-                        "label": label,
-                        "tenant_id": tenant_id,
-                        "ts": datetime.now(UTC).isoformat(),
-                    }).encode(),
-                )
-                return
-            finally:
-                await producer.stop()
+            # Reuse the shared Kafka producer held by main.py; lazy-import to
+            # avoid circular dependency (routers are loaded after main).
+            from main import get_producer  # noqa: PLC0415
+            producer = await get_producer()
+            if producer is None:
+                raise RuntimeError("Kafka producer not available")
+            await producer.send("feedback.labels", payload)
+            return
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
             if attempt < MAX_RETRIES:

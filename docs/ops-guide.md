@@ -149,6 +149,18 @@ docker compose exec postgres psql -U betaml -d betaml -c \
 # Checar constraint de status (v9)
 docker compose exec postgres psql -U betaml -d betaml -c \
   "\d players" | grep chk_player_status
+
+# Checar coluna feature_version (v10)
+docker compose exec postgres psql -U betaml -d betaml -c \
+  "SELECT column_name, data_type, column_default
+   FROM information_schema.columns
+   WHERE table_name='feature_snapshots' AND column_name='feature_version';"
+
+# Checar índices de performance criados na v11
+docker compose exec postgres psql -U betaml -d betaml -c \
+  "SELECT indexname FROM pg_indexes WHERE schemaname='public'
+   AND indexname LIKE 'idx_%' ORDER BY indexname;" | wc -l
+# Deve retornar ≥ 30 índices
 ```
 
 ### Reverter Migration v2

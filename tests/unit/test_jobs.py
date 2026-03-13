@@ -671,3 +671,53 @@ class TestComputeFeaturePopulationStats:
 
         redis_mock.set.assert_called_once()
         assert redis_mock.set.call_args.kwargs["ex"] == 25 * 3600
+
+    @pytest.mark.asyncio
+    async def test_snapshots_with_feature_version_attribute_processed_correctly(self):
+        """
+        GAP-13: FeatureSnapshot rows gained a `feature_version` column in migration v10.
+        The population stats job must process snapshots that carry the new attribute
+        without errors, and the computed stats should only reflect values from the
+        `features` JSONB dict (not from `feature_version` itself).
+        """
+        import json as _json
+        from jobs import compute_feature_population_stats
+
+        tenant = _tenant("t1")
+
+        # Simulate snapshots with feature_version set (as migration v10 adds)
+        snap1 = MagicMock()
+        snap1.feature_version = 2
+        snap1.features = {"deposit_sum_30d": 500.0}
+
+        snap2 = MagicMock()
+        snap2.feature_version = 2
+        snap2.features = {"deposit_sum_30d": 1000.0}
+
+        calls: list[int] = []
+
+        async def execute(stmt):
+            result = MagicMock()
+            calls.append(len(calls))
+            if len(calls) == 1:
+                result.scalars.return_value.all.return_value = [tenant]
+            else:
+                result.scalars.return_value.all.return_value = [snap1, snap2]
+            return result
+
+        session = self._make_session(execute)
+        redis_mock = self._make_redis()
+
+        with patch("jobs.AsyncSessionLocal", return_value=session), \
+             patch("redis.asyncio.from_url", return_value=redis_mock):
+            await compute_feature_population_stats()
+
+        redis_mock.set.assert_called_once()
+        stored = _json.loads(redis_mock.set.call_args.args[1])
+
+        # feature_version is NOT a key in the features JSONB; it must not appear in stats
+        assert "feature_version" not in stored
+        assert "deposit_sum_30d" in stored
+        # mean([500, 1000]) == 750
+        assert stored["deposit_sum_30d"]["mean"] == pytest.approx(750.0, abs=0.01)
+

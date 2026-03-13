@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import {
   fetchMappingTemplates,
+  fetchRules,
   createMapping,
   createTenant,
   TenantCreateResult,
@@ -317,7 +318,7 @@ export default function OnboardingPage() {
   const [csvError, setCsvError]         = useState('');
 
   // ── Step 5 state ───────────────────────────────────────────────────────────
-  const [selRule, setSelRule] = useState<0 | 1 | null>(null);
+  const [selRule, setSelRule] = useState<number | null>(null);
 
   // ── Results / completion ───────────────────────────────────────────────────
   const [tenantResult, setTenantResult] = useState<TenantCreateResult | null>(null);
@@ -340,6 +341,26 @@ export default function OnboardingPage() {
       template: (match?.template && match.template.trim()) ? match.template : fb.template,
     } as ConnectorEntry;
   });
+
+  // ── API: existing rules (merged with fallback templates for step 5) ─────────
+  const { data: apiRules = [] } = useQuery({
+    queryKey: ['rules-onboarding'],
+    queryFn:  fetchRules,
+  });
+
+  // Present API rules first (so tenants see their own live rules), then append
+  // any fallback templates whose name doesn't already exist in the API set.
+  const apiRuleNames = new Set(apiRules.map((r) => r.name.toLowerCase()));
+  const rulesList = [
+    ...apiRules.map((r) => ({
+      name:          r.name,
+      description:   r.description ?? '',
+      condition_dsl: r.condition_dsl,
+      severity:      r.severity,
+      scope:         r.scope,
+    })),
+    ...RULE_TEMPLATES.filter((t) => !apiRuleNames.has(t.name.toLowerCase())),
+  ];
 
   // ── Mutations ──────────────────────────────────────────────────────────────
   const tenantMut = useMutation({
@@ -382,7 +403,7 @@ export default function OnboardingPage() {
 
   const ruleMut = useMutation({
     mutationFn: () => {
-      const tpl = RULE_TEMPLATES[selRule!];
+      const tpl = rulesList[selRule!];
       return createRule({
         name:          tpl.name,
         condition_dsl: tpl.condition_dsl,
@@ -887,13 +908,12 @@ export default function OnboardingPage() {
             </div>
 
             <div className="space-y-3">
-              {RULE_TEMPLATES.map((tpl, i) => {
-                const idx  = i as 0 | 1;
-                const sel  = selRule === idx;
+              {rulesList.map((tpl, i) => {
+                const sel  = selRule === i;
                 return (
                   <button
                     key={i}
-                    onClick={() => setSelRule(sel ? null : idx)}
+                    onClick={() => setSelRule(sel ? null : i)}
                     className={`w-full rounded-xl border-2 p-4 text-left transition-all ${
                       sel
                         ? 'border-brand bg-brand/5'
