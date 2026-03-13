@@ -303,6 +303,7 @@ def test_random_uuid_case_returns_404(client_a):
 
 # ── Token manipulation ────────────────────────────────────────────────────────
 
+@skip_unless_stack
 def test_tampered_jwt_rejected():
     with httpx.Client(base_url=BASE_URL, timeout=10) as c:
         c.headers["Authorization"] = "Bearer eyInvalidToken.tampered.signature"
@@ -310,6 +311,7 @@ def test_tampered_jwt_rejected():
         assert r.status_code in (401, 403)
 
 
+@skip_unless_stack
 def test_expired_token_format_rejected():
     """A well-formed but clearly invalid token must be rejected."""
     fake = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJoYWNrZXIifQ.badhash"
