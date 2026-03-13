@@ -136,47 +136,42 @@ def _load_routes_enterprise():
 
 
 class TestRightToErasureRBAC(unittest.TestCase):
-    """Verify that right-to-erasure enforces ADMIN role."""
+    """Verify that right-to-erasure enforces ADMIN role.
+
+    The canonical implementation lives in routers/players.py
+    (POST /players/{id}/erase + alias /right-to-erasure).
+    """
+
+    def _load_players_src(self) -> str:
+        route_file = os.path.join(_SERVICES_API, "routers", "players.py")
+        with open(route_file) as fh:
+            return fh.read()
 
     def test_require_roles_admin_used(self):
-        """
-        The right_to_erasure endpoint must call require_roles("ADMIN"),
-        not bare get_current_user.  We verify by inspecting the source.
-        """
-        route_file = os.path.join(_SERVICES_API, "routes_enterprise.py")
-        with open(route_file) as fh:
-            src = fh.read()
-
-        # Locate the right-to-erasure block
-        idx = src.find("right-to-erasure")
-        self.assertGreater(idx, 0, "right-to-erasure route not found")
-
-        # Extract ~20 lines after the decorator
-        snippet = src[idx: idx + 600]
-        self.assertIn('require_roles("ADMIN")', snippet,
-                      "right_to_erasure must use require_roles('ADMIN')")
+        """erase_player_data must call require_roles('ADMIN')."""
+        src = self._load_players_src()
+        idx = src.find("erase_player_data")
+        self.assertGreater(idx, 0, "erase_player_data function not found in routers/players.py")
+        snippet = src[idx: idx + 800]
+        # Allows require_roles("ADMIN") or require_roles("ADMIN", "SUPER_ADMIN")
+        self.assertIn('require_roles("ADMIN', snippet,
+                      "erase_player_data must use require_roles('ADMIN')")
 
     def test_cpf_encrypted_erased(self):
-        """right_to_erasure must zero-out cpf_encrypted (not just full_name)."""
-        route_file = os.path.join(_SERVICES_API, "routes_enterprise.py")
-        with open(route_file) as fh:
-            src = fh.read()
-
-        idx = src.find("right-to-erasure")
-        snippet = src[idx: idx + 800]
+        """erase_player_data must anonymise cpf_encrypted."""
+        src = self._load_players_src()
+        idx = src.find("erase_player_data")
+        snippet = src[idx: idx + 2000]
         self.assertIn("cpf_encrypted", snippet,
-                      "right_to_erasure must erase cpf_encrypted")
+                      "erase_player_data must erase cpf_encrypted")
 
     def test_status_set_to_erased(self):
-        """right_to_erasure must set player.status = 'ERASED'."""
-        route_file = os.path.join(_SERVICES_API, "routes_enterprise.py")
-        with open(route_file) as fh:
-            src = fh.read()
-
-        idx = src.find("right-to-erasure")
+        """erase_player_data must set player.status = 'ERASED'."""
+        src = self._load_players_src()
+        idx = src.find("erase_player_data")
         snippet = src[idx: idx + 1500]
         self.assertIn('"ERASED"', snippet,
-                      "right_to_erasure must set status to ERASED")
+                      "erase_player_data must set status to ERASED")
 
 
 class TestCreateTenantRBAC(unittest.TestCase):

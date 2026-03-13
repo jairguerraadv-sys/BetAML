@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_db
-from models import User
+from models import ApiKey, User
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -118,6 +118,72 @@ def require_roles(*roles: str):
             )
         return current_user
     return checker
+
+
+async def validate_api_key(
+    x_api_key: str = Header(..., alias="X-API-Key"),
+    db: AsyncSession = Depends(get_db),
+) -> ApiKey:
+    """
+    Valida o header X-API-Key comparando o SHA-256 contra a tabela api_keys.
+
+    Efeitos colaterais após validação bem-sucedida:
+    - Atualiza api_key.last_used_at no banco
+    - Incrementa contador Redis `apikey_usage:{key_prefix}:{YYYY-MM-DD}` (TTL 32 dias)
+
+    Levanta HTTP 401 se a chave for inválida, inativa ou expirada.
+    """
+    key_hash = hashlib.sha256(x_api_key.encode()).hexdigest()
+
+    result = await db.execute(
+        select(ApiKey).where(
+            ApiKey.key_hash == key_hash,
+            ApiKey.active.is_(True),
+        )
+    )
+    api_key = result.scalar_one_or_none()
+
+    if api_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key inválida ou inativa",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
+    # Verificar expiração
+    if api_key.expires_at is not None:
+        exp = api_key.expires_at
+        # Normaliza para aware datetime para comparação segura
+        if exp.tzinfo is None:
+            exp_ts = exp.timestamp()
+        else:
+            exp_ts = exp.timestamp()
+        if datetime.utcnow().timestamp() > exp_ts:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="API key expirada",
+                headers={"WWW-Authenticate": "ApiKey"},
+            )
+
+    # Atualizar last_used_at (best-effort — não bloqueia em caso de falha de commit)
+    try:
+        api_key.last_used_at = datetime.utcnow()
+        await db.commit()
+    except Exception:
+        await db.rollback()
+
+    # Incrementar contador de uso no Redis
+    try:
+        r = await _get_auth_redis()
+        if r:
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+            counter_key = f"apikey_usage:{api_key.key_prefix}:{today}"
+            await r.incr(counter_key)
+            await r.expire(counter_key, 32 * 24 * 3600)  # 32 dias
+    except Exception:
+        pass  # falha de Redis não bloqueia autenticação
+
+    return api_key
 
 
 # ── PII Encryption (Fernet = AES-128-CBC + HMAC-SHA-256) ─────────────────────

@@ -4,11 +4,17 @@ ml_trainer — Scheduled ML model retraining service.
 Roda diariamente via APScheduler às 03:00 UTC:
   1. Busca alerts com feedback labels (TRUE_POSITIVE / FALSE_POSITIVE) dos últimos 30 dias
   2. Extrai feature vectors do campo evidence JSONB
-  3. Treina IsolationForest com contamination proporcional aos positivos
-  4. Avalia métricas (precision, recall, F1)
-  5. Persiste modelo no MinIO (betaml-models/isolation_forest_v{version}.pkl)
-  6. Registra no model_registry (champion auto-promovido se F1 > 0.75)
-  7. Notifica ADMINs ativos via Notification
+  3. Modo SUPERVISIONADO (>= 50 amostras labeladas):
+       - Treina GradientBoostingClassifier usando X e y (TRUE_POSITIVE=1 / FALSE_POSITIVE=0)
+       - Registra model_type="GradientBoosting" no model_registry
+  4. Modo NÃO-SUPERVISIONADO (< 50 amostras labeladas — fallback):
+       - Busca todos os alerts recentes para montar X sem labels
+       - Treina IsolationForest com contamination proporcional
+       - Registra model_type="IsolationForest" no model_registry
+  5. Avalia métricas (precision, recall, F1)
+  6. Persiste modelo no MinIO (betaml-models/<tipo>_v{version}.pkl)
+  7. Registra no model_registry (champion auto-promovido se F1 > 0.75)
+  8. Notifica ADMINs ativos via Notification
 """
 from __future__ import annotations
 
@@ -22,7 +28,7 @@ from datetime import UTC, datetime, timedelta
 import numpy as np
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sklearn.ensemble import IsolationForest
+from sklearn.ensemble import GradientBoostingClassifier, IsolationForest
 from sklearn.metrics import f1_score, precision_score, recall_score
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -67,11 +73,29 @@ FEATURE_COLUMNS = [
 ]
 
 
+def _extract_feature_vector(alert) -> list[float] | None:
+    """Extrai vetor de features do campo evidence JSONB de um alert.
+
+    Retorna None se o alert não possui features válidas.
+    """
+    features = (alert.evidence or {}).get("features", {})
+    if not features:
+        return None
+    return [float(features.get(col, 0) or 0) for col in FEATURE_COLUMNS]
+
+
 async def retrain_isolation_forest() -> None:
     """
-    Retreinar IsolationForest com alerts labelados dos últimos 30 dias.
+    Retreinar modelo ML com alerts dos últimos 30 dias.
 
-    Pula se houver menos de 50 amostras com feature vectors válidos.
+    Modo SUPERVISIONADO (GradientBoosting): ativado quando há >= 50 alertas
+    com labels TRUE_POSITIVE / FALSE_POSITIVE e feature vectors válidos.
+    Constrói y (TRUE_POSITIVE=1 / FALSE_POSITIVE=0) e treina GradientBoostingClassifier.
+
+    Modo NÃO-SUPERVISIONADO (IsolationForest): fallback quando < 50 amostras
+    labeladas. Busca todos os alerts recentes (máx 5000) para compor X sem labels.
+    Pula se não houver feature vectors suficientes (< 50).
+
     Auto-promove a champion se F1 > 0.75.
     """
     try:
@@ -94,74 +118,152 @@ async def retrain_isolation_forest() -> None:
             # Importação lazy para evitar conflito com sys.path em outros módulos
             from models import Alert, ModelRegistry, Notification, User  # noqa: PLC0415
 
-            # 1. Buscar alerts com labels dos últimos 30 dias
             cutoff = datetime.now(UTC) - timedelta(days=30)
-            stmt = select(Alert).where(
+            version = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+
+            # ── 1. Buscar alerts LABELADOS dos últimos 30 dias ──────────────────
+            stmt_labeled = select(Alert).where(
                 Alert.label.in_(["TRUE_POSITIVE", "FALSE_POSITIVE"]),
                 Alert.created_at >= cutoff,
             )
-            alerts = (await db.execute(stmt)).scalars().all()
+            labeled_alerts = (await db.execute(stmt_labeled)).scalars().all()
 
-            if len(alerts) < 50:
-                logger.warning(
-                    "ml_training_skipped_insufficient_labels",
-                    count=len(alerts),
-                    minimum=50,
-                )
-                return
-
-            # 2. Extrair features + labels
-            X: list[list[float]] = []
-            y: list[int] = []
-            for alert in alerts:
-                features = (alert.evidence or {}).get("features", {})
-                if not features:
+            # ── 2. Extrair features + labels dos alerts labelados ───────────────
+            X_labeled: list[list[float]] = []
+            y_labeled: list[int] = []
+            for alert in labeled_alerts:
+                vec = _extract_feature_vector(alert)
+                if vec is None:
                     continue
-                vector = [float(features.get(col, 0) or 0) for col in FEATURE_COLUMNS]
-                X.append(vector)
-                y.append(1 if alert.label == "TRUE_POSITIVE" else 0)
+                X_labeled.append(vec)
+                y_labeled.append(1 if alert.label == "TRUE_POSITIVE" else 0)
 
-            if len(X) < 50:
-                logger.warning(
-                    "ml_training_skipped_not_enough_feature_vectors", count=len(X)
+            labeled_sample_count = len(X_labeled)
+
+            # ── 3. Decide training mode ─────────────────────────────────────────
+            if labeled_sample_count >= 50:
+                # ────────────────────────────────────────────────────────────────
+                # MODO SUPERVISIONADO: GradientBoostingClassifier
+                # Usa X e y com labels TRUE_POSITIVE=1 / FALSE_POSITIVE=0
+                # ────────────────────────────────────────────────────────────────
+                logger.info(
+                    "training_mode",
+                    mode="supervised",
+                    labeled_samples=labeled_sample_count,
                 )
-                return
 
-            X_arr = np.array(X, dtype=float)
-            y_arr = np.array(y, dtype=int)
+                X_arr = np.array(X_labeled, dtype=float)
+                y_arr = np.array(y_labeled, dtype=int)
 
-            # 3. Treinar IsolationForest
-            contamination = float(max(0.01, min(0.5, y_arr.sum() / len(y_arr))))
-            model = IsolationForest(
-                n_estimators=100,
-                contamination=contamination,
-                random_state=42,
-                n_jobs=-1,
-            )
-            model.fit(X_arr)
+                model = GradientBoostingClassifier(
+                    n_estimators=100,
+                    max_depth=3,
+                    learning_rate=0.1,
+                    random_state=42,
+                )
+                model.fit(X_arr, y_arr)
 
-            # 4. Avaliar métricas (treino in-sample — proxy para bootstrapping)
-            preds = model.predict(X_arr)           # -1 = anomaly, 1 = normal
-            preds_bin = np.where(preds == -1, 1, 0)
+                # Avaliação in-sample (proxy; produção deve usar validação cruzada)
+                preds_bin = model.predict(X_arr)
+                precision = float(precision_score(y_arr, preds_bin, zero_division=0))
+                recall = float(recall_score(y_arr, preds_bin, zero_division=0))
+                f1 = float(f1_score(y_arr, preds_bin, zero_division=0))
 
-            precision = float(precision_score(y_arr, preds_bin, zero_division=0))
-            recall = float(recall_score(y_arr, preds_bin, zero_division=0))
-            f1 = float(f1_score(y_arr, preds_bin, zero_division=0))
+                model_type = "GradientBoosting"
+                model_filename = f"gradient_boosting_v{version}.pkl"
+                training_metadata = {
+                    "n_estimators": 100,
+                    "max_depth": 3,
+                    "learning_rate": 0.1,
+                    "training_samples": labeled_sample_count,
+                    "true_positives": int(y_arr.sum()),
+                    "false_positives": int((y_arr == 0).sum()),
+                    "training_window_days": 30,
+                    "feature_columns": FEATURE_COLUMNS,
+                }
 
+            else:
+                # ────────────────────────────────────────────────────────────────
+                # MODO NÃO-SUPERVISIONADO: IsolationForest (fallback)
+                # Busca TODOS os alerts recentes (não só labelados) para compor X
+                # ────────────────────────────────────────────────────────────────
+                logger.info(
+                    "training_mode",
+                    mode="unsupervised",
+                    labeled_samples=labeled_sample_count,
+                )
+
+                stmt_all = (
+                    select(Alert)
+                    .where(Alert.created_at >= cutoff)
+                    .limit(5000)
+                )
+                all_alerts = (await db.execute(stmt_all)).scalars().all()
+
+                X_all: list[list[float]] = []
+                y_all: list[int] = []  # usado apenas para contamination estimate
+                for alert in all_alerts:
+                    vec = _extract_feature_vector(alert)
+                    if vec is None:
+                        continue
+                    X_all.append(vec)
+                    y_all.append(1 if alert.label == "TRUE_POSITIVE" else 0)
+
+                if len(X_all) < 50:
+                    logger.warning(
+                        "ml_training_skipped_not_enough_feature_vectors",
+                        count=len(X_all),
+                        labeled=labeled_sample_count,
+                        minimum=50,
+                    )
+                    return
+
+                X_arr = np.array(X_all, dtype=float)
+                y_arr = np.array(y_all, dtype=int)
+
+                # Contamination proporcional aos positivos conhecidos
+                contamination = float(
+                    max(0.01, min(0.5, y_arr.sum() / max(len(y_arr), 1)))
+                )
+
+                model = IsolationForest(
+                    n_estimators=100,
+                    contamination=contamination,
+                    random_state=42,
+                    n_jobs=-1,
+                )
+                model.fit(X_arr)
+
+                # Avaliação in-sample: -1 = anomaly, 1 = normal → binariza para 0/1
+                preds = model.predict(X_arr)
+                preds_bin = np.where(preds == -1, 1, 0)
+                precision = float(precision_score(y_arr, preds_bin, zero_division=0))
+                recall = float(recall_score(y_arr, preds_bin, zero_division=0))
+                f1 = float(f1_score(y_arr, preds_bin, zero_division=0))
+
+                model_type = "IsolationForest"
+                model_filename = f"isolation_forest_v{version}.pkl"
+                training_metadata = {
+                    "contamination": contamination,
+                    "n_estimators": 100,
+                    "training_samples": len(X_all),
+                    "true_positives": int(y_arr.sum()),
+                    "training_window_days": 30,
+                    "feature_columns": FEATURE_COLUMNS,
+                }
+
+            # ── 4. Log métricas ─────────────────────────────────────────────────
             logger.info(
                 "ml_training_metrics",
+                model_type=model_type,
                 precision=round(precision, 4),
                 recall=round(recall, 4),
                 f1=round(f1, 4),
-                samples=len(X),
-                contamination=round(contamination, 4),
+                samples=len(X_arr),
             )
 
-            # 5. Persiste modelo no MinIO
-            version = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-            model_filename = f"isolation_forest_v{version}.pkl"
+            # ── 5. Persiste modelo no MinIO ─────────────────────────────────────
             model_bytes = pickle.dumps(model)
-
             minio_client.put_object(
                 bucket_name=bucket,
                 object_name=model_filename,
@@ -171,20 +273,13 @@ async def retrain_isolation_forest() -> None:
             )
             logger.info("ml_model_persisted", filename=model_filename, bytes=len(model_bytes))
 
-            # 6. Registra no model_registry
+            # ── 6. Registra no model_registry ───────────────────────────────────
             is_champion = f1 > 0.75
             registry_entry = ModelRegistry(
-                model_type="IsolationForest",
+                model_type=model_type,
                 version=version,
                 artifact_uri=f"s3://{bucket}/{model_filename}",
-                metadata={
-                    "contamination": contamination,
-                    "n_estimators": 100,
-                    "training_samples": len(X),
-                    "true_positives": int(y_arr.sum()),
-                    "training_window_days": 30,
-                    "feature_columns": FEATURE_COLUMNS,
-                },
+                metadata=training_metadata,
                 metrics={
                     "precision": precision,
                     "recall": recall,
@@ -196,7 +291,7 @@ async def retrain_isolation_forest() -> None:
             db.add(registry_entry)
             await db.flush()  # gera ID antes de criar notificações
 
-            # 7. Notificar ADMINs
+            # ── 7. Notifica ADMINs ──────────────────────────────────────────────
             admins = (
                 await db.execute(
                     select(User).where(
@@ -207,12 +302,12 @@ async def retrain_isolation_forest() -> None:
             ).scalars().all()
 
             status_str = (
-                f"✓ Promovido a champion (F1={f1:.3f})"
+                f"Promovido a champion (F1={f1:.3f})"
                 if is_champion
-                else f"⚠️ Abaixo do threshold 0.75 (F1={f1:.3f})"
+                else f"Abaixo do threshold 0.75 (F1={f1:.3f})"
             )
             body = (
-                f"Modelo treinado com {len(X)} amostras. "
+                f"Modelo {model_type} treinado com {len(X_arr)} amostras. "
                 f"Precision={precision:.3f}, Recall={recall:.3f}, F1={f1:.3f}. "
                 f"{status_str}"
             )
@@ -223,7 +318,7 @@ async def retrain_isolation_forest() -> None:
                         tenant_id=admin.tenant_id,
                         user_id=admin.id,
                         type="ML_TRAINING_COMPLETED",
-                        title="Modelo ML retreinado automaticamente",
+                        title=f"Modelo {model_type} retreinado automaticamente",
                         body=body,
                         reference_type="ModelRegistry",
                         reference_id=str(registry_entry.id),
@@ -234,6 +329,7 @@ async def retrain_isolation_forest() -> None:
 
             logger.info(
                 "ml_training_completed",
+                model_type=model_type,
                 version=version,
                 f1=round(f1, 4),
                 is_champion=is_champion,

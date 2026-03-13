@@ -538,6 +538,38 @@ class SystemFlagUpdate(BaseModel):
     value: Any  # JSONB — new flag value (string, bool, int, or object)
 
 
+# ──────────────────────────────────────────────────
+# User management schemas (admin endpoints)
+# ──────────────────────────────────────────────────
+
+class UserOut(BaseModel):
+    id: str
+    username: str
+    email: str
+    role: str
+    active: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class UserCreateIn(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    email: str = Field(..., min_length=3, max_length=254)
+    role: str = Field(..., description="One of: ADMIN, AML_ANALYST, AUDITOR")
+    password: str = Field(..., min_length=8)
+
+
+class UserUpdateIn(BaseModel):
+    role: Optional[str] = Field(None, description="New role — cannot be SUPER_ADMIN")
+    active: Optional[bool] = None
+
+
+class InviteIn(BaseModel):
+    email: str = Field(..., min_length=3, max_length=254)
+    role: str = Field(..., description="Role for the invited user: ADMIN, AML_ANALYST, AUDITOR")
+
+
 class ReprocessJobIn(BaseModel):
     reason: str = "manual_reprocess"
 

@@ -474,8 +474,20 @@ async def startup():
             misfire_grace_time=600,
         )
 
+        # Feature Population Stats — todo dia às 06:00 UTC
+        from jobs import compute_feature_population_stats
+        scheduler.add_job(
+            compute_feature_population_stats,
+            trigger="cron",
+            hour=6,
+            minute=0,
+            id="feature_population_stats",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
         scheduler.start()
-        logger.info("scheduled_jobs_started", jobs=["risk_score_decay@04:00", "lgpd_data_expiration@05:00", "sla_violations_check@1h"])
+        logger.info("scheduled_jobs_started", jobs=["risk_score_decay@04:00", "lgpd_data_expiration@05:00", "sla_violations_check@1h", "feature_population_stats@06:00"])
     except ImportError:
         logger.warning("apscheduler_not_installed", hint="pip install apscheduler")
     except Exception as exc:
@@ -533,6 +545,7 @@ from routers.feature_store import router as feature_store_router  # noqa: E402
 from routers.ml import router as ml_router                     # noqa: E402
 from routers.notifications import router as notifications_router  # noqa: E402
 from routers.internal import router as internal_router            # noqa: E402
+from routers.search import router as search_router                # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(alerts.router)
@@ -547,6 +560,7 @@ app.include_router(feature_store_router)
 app.include_router(ml_router)
 app.include_router(notifications_router)
 app.include_router(internal_router)
+app.include_router(search_router)
 
 # Enterprise router is registered last; note that FastAPI resolves routes in
 # registration order (first match wins), so core router paths take precedence

@@ -1,17 +1,19 @@
 """routers/players.py — Listagem, perfil e compatibilidade econômica de players."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import uuid as _uuid_mod
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import func as sqlfunc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import decrypt_pii, encrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
-from models import FinancialTransaction, Player, ScoringConfig, User
+from models import Alert, Bet, Case, FinancialTransaction, Player, ScoringConfig, User
 from utils import write_audit
 
 logger = structlog.get_logger(__name__)
@@ -303,3 +305,174 @@ async def erase_player_data(
         "message": "Dados pessoais anonimizados com sucesso (LGPD Art. 18)",
         "erased_at": _utcnow().isoformat(),
     }
+
+
+@router.post("/players/{player_id}/right-to-erasure", status_code=200)
+async def right_to_erasure_alias(
+    player_id: str,
+    reason: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
+):
+    """
+    Backward-compatible alias for POST /players/{player_id}/erase.
+
+    LGPD Art. 18 — Direito ao Esquecimento.
+    Delegates to the canonical erasure implementation.
+    """
+    return await erase_player_data(
+        player_id=player_id,
+        reason=reason,
+        db=db,
+        current_user=current_user,
+    )
+
+
+# ── LGPD Data Export (Portabilidade) ─────────────────────────────────────────
+
+class PersonalDataOut(BaseModel):
+    name: Optional[str] = None
+    cpf: Optional[str] = None
+    birth_date: Optional[str] = None
+    email: Optional[str] = None
+    pep_flag: bool = False
+    registered_since: Optional[str] = None
+
+
+class FinancialSummaryOut(BaseModel):
+    total_transactions: int = 0
+    total_deposits: float = 0.0
+    total_withdrawals: float = 0.0
+    first_transaction: Optional[datetime] = None
+    last_transaction: Optional[datetime] = None
+
+
+class PlayerDataExportOut(BaseModel):
+    export_id: str
+    generated_at: datetime
+    player_id: str
+    personal_data: PersonalDataOut
+    financial_summary: FinancialSummaryOut
+    cases_count: int = 0
+    alerts_count: int = 0
+
+
+@router.get("/players/{player_id}/data-export", response_model=PlayerDataExportOut)
+async def export_player_data(
+    player_id: str,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    LGPD Art. 18 — Portabilidade de dados pessoais (Data Export Request).
+
+    Retorna todos os dados pessoais retidos para um player em formato estruturado.
+    Para players anonimizados (status=ERASED), retorna apenas os dados anonimizados.
+    Registra acesso em audit_log com ação LGPD_DATA_EXPORT (LGPD Art. 37).
+    """
+    p = await db.get(Player, player_id)
+    if not p or p.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Player não encontrado")
+
+    is_erased = p.status == "ERASED"
+
+    # Resolve personal data fields — respect erasure
+    if is_erased:
+        cpf_display = "[ANONIMIZADO]"
+        name_display = p.full_name or "[ANONIMIZADO]"
+    else:
+        cpf_display = decrypt_pii(p.cpf_encrypted)
+        name_display = p.full_name
+
+    # Financial summary — aggregate from FinancialTransaction table
+    total_txs = (await db.execute(
+        select(sqlfunc.count(FinancialTransaction.id)).where(
+            FinancialTransaction.tenant_id == current_user.tenant_id,
+            FinancialTransaction.player_id == player_id,
+        )
+    )).scalar_one()
+
+    total_deposits = float((await db.execute(
+        select(sqlfunc.coalesce(sqlfunc.sum(FinancialTransaction.amount), 0)).where(
+            FinancialTransaction.tenant_id == current_user.tenant_id,
+            FinancialTransaction.player_id == player_id,
+            FinancialTransaction.type == "DEPOSIT",
+        )
+    )).scalar() or 0)
+
+    total_withdrawals = float((await db.execute(
+        select(sqlfunc.coalesce(sqlfunc.sum(FinancialTransaction.amount), 0)).where(
+            FinancialTransaction.tenant_id == current_user.tenant_id,
+            FinancialTransaction.player_id == player_id,
+            FinancialTransaction.type == "WITHDRAWAL",
+        )
+    )).scalar() or 0)
+
+    first_tx = (await db.execute(
+        select(sqlfunc.min(FinancialTransaction.occurred_at)).where(
+            FinancialTransaction.tenant_id == current_user.tenant_id,
+            FinancialTransaction.player_id == player_id,
+        )
+    )).scalar()
+
+    last_tx = (await db.execute(
+        select(sqlfunc.max(FinancialTransaction.occurred_at)).where(
+            FinancialTransaction.tenant_id == current_user.tenant_id,
+            FinancialTransaction.player_id == player_id,
+        )
+    )).scalar()
+
+    # Cases count
+    cases_count = (await db.execute(
+        select(sqlfunc.count(Case.id)).where(
+            Case.tenant_id == current_user.tenant_id,
+            Case.player_id == player_id,
+        )
+    )).scalar_one()
+
+    # Alerts count
+    alerts_count = (await db.execute(
+        select(sqlfunc.count(Alert.id)).where(
+            Alert.tenant_id == current_user.tenant_id,
+            Alert.player_id == player_id,
+        )
+    )).scalar_one()
+
+    # Audit log — LGPD Art. 37 (PII accessed during export)
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "LGPD_DATA_EXPORT", "Player", player_id,
+        after={"pii_accessed": True, "is_erased": is_erased},
+    )
+    await db.commit()
+
+    logger.info(
+        "lgpd_data_export",
+        player_id=player_id,
+        tenant_id=current_user.tenant_id,
+        actor=current_user.id,
+        is_erased=is_erased,
+    )
+
+    return PlayerDataExportOut(
+        export_id=str(_uuid_mod.uuid4()),
+        generated_at=_utcnow(),
+        player_id=player_id,
+        personal_data=PersonalDataOut(
+            name=name_display,
+            cpf=cpf_display,
+            birth_date=p.birth_date.isoformat() if p.birth_date else None,
+            email=None,  # not stored in Player model
+            pep_flag=p.pep_flag,
+            registered_since=p.registered_since.isoformat() if p.registered_since else None,
+        ),
+        financial_summary=FinancialSummaryOut(
+            total_transactions=total_txs or 0,
+            total_deposits=total_deposits,
+            total_withdrawals=total_withdrawals,
+            first_transaction=first_tx,
+            last_transaction=last_tx,
+        ),
+        cases_count=cases_count or 0,
+        alerts_count=alerts_count or 0,
+    )

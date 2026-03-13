@@ -162,6 +162,11 @@ class RedisClient:
     async def scard_set(self, key: str) -> int:
         return await self._redis.scard(key)
 
+    async def sismember(self, key: str, member: str) -> bool:
+        """Returns True if `member` is already in the Redis Set at `key`."""
+        result = await self._redis.sismember(key, member)
+        return bool(result)
+
     def features_key(self, tenant_id: str, player_id: str) -> str:
         return f"betaml:{tenant_id}:features:{player_id}"
 
@@ -184,6 +189,10 @@ class RedisClient:
 
     def player_banks_key(self, tenant_id: str, player_id: str) -> str:
         return f"betaml:{tenant_id}:pbank:{player_id}"
+
+    def player_instruments_key(self, tenant_id: str, player_id: str) -> str:
+        """Redis Set key tracking all payment-instrument fingerprints seen for a player."""
+        return f"betaml:{tenant_id}:pinstr:{player_id}"
 
     def dedup_key(self, tenant_id: str, source_system: str, source_event_id: str) -> str:
         return f"betaml:{tenant_id}:dedup:{source_system}:{source_event_id}"

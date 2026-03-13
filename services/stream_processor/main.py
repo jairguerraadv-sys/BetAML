@@ -76,6 +76,8 @@ async def compute_features(
     player_id: str,
     redis_client,
     ch_client,
+    *,
+    current_event: dict | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     cutoff_1h = now - timedelta(hours=1)
@@ -116,7 +118,7 @@ async def compute_features(
     with_sum_7d  = sum(e["amount"] for e in withdrawal_7d)
     with_sum_90d = sum(e["amount"] for e in withdrawal_90d)
     bet_sum_24h  = sum(b["amount"] for b in bets_24h)
-    bet_sum_7d   = sum(b["amount"] for b in bets)
+    bet_sum_7d   = sum(b["amount"] for b in bets_7d)
 
     # Baseline (historical deposits — rolling mean/std)
     daily_deps: dict[str, float] = {}
@@ -256,8 +258,8 @@ async def compute_features(
         "baseline_avg_daily_deposit":           float(baseline_avg),
         "baseline_stddev_deposit":              float(baseline_std),
         "zscore_current_deposit_vs_baseline":   float(zscore),
-        "new_payment_instrument_flag":          False,
-        "new_device_flag":                      False,
+        "new_payment_instrument_flag":          bool(current_event.get("is_new_instrument", False)) if current_event else False,
+        "new_device_flag":                      bool(current_event.get("is_new_device", False)) if current_event else False,
         "shared_device_count":                  shared_device_count,
         "shared_bank_account_count":            shared_bank_count,
         "chargeback_count_30d":                 len(chargebacks_30d),
@@ -459,8 +461,24 @@ async def process_transaction(msg_value: dict, redis_client, ch_client, producer
         await redis_client.sadd_member(bank_key, player_id)
         await redis_client.sadd_member(pbank_key, holder_doc)
 
+    # Determine if this payment instrument is new for this player (before recording it)
+    instr_method = payload.get("method", "")
+    instr_parts = [instr_method]
+    if isinstance(instrument, dict):
+        for k in sorted(instrument.keys()):
+            v = instrument[k]
+            if v is not None:
+                instr_parts.append(f"{k}={v}")
+    instr_fingerprint = hashlib.sha256("|".join(instr_parts).encode()).hexdigest()[:24]
+    pinstr_key = redis_client.player_instruments_key(tenant_id, player_id)
+    is_new_instrument = not await redis_client.sismember(pinstr_key, instr_fingerprint)
+    await redis_client.sadd_member(pinstr_key, instr_fingerprint)
+
     # Compute + store features
-    features = await compute_features(tenant_id, player_id, redis_client, ch_client)
+    features = await compute_features(
+        tenant_id, player_id, redis_client, ch_client,
+        current_event={"is_new_instrument": is_new_instrument},
+    )
 
     # Publish features.player_daily
     await producer.send("features.player_daily", {
@@ -566,10 +584,15 @@ async def process_device_event(msg_value: dict, redis_client, ch_client, produce
         # Track device→players and player→devices in Redis Sets
         dev_key  = redis_client.device_members_key(tenant_id, device_id)
         pdev_key = redis_client.player_devices_key(tenant_id, player_id)
+        # Check if this device is new for the player BEFORE recording it
+        is_new_device = not await redis_client.sismember(pdev_key, device_id)
         await redis_client.sadd_member(dev_key, player_id)
         await redis_client.sadd_member(pdev_key, device_id)
-        # Recompute features if shared device
-        await compute_features(tenant_id, player_id, redis_client, ch_client)
+        # Recompute features, passing the new-device signal
+        await compute_features(
+            tenant_id, player_id, redis_client, ch_client,
+            current_event={"is_new_device": is_new_device},
+        )
 
 
 async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer) -> None:

@@ -8,6 +8,7 @@ tenant isolation enforced by current_user.tenant_id.
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
 import io
 import json
@@ -36,7 +37,7 @@ import structlog
 
 # local imports (same package as main.py)
 from config import settings               # app settings (env-backed)
-from database import get_db               # async session factory
+from database import AsyncSessionLocal, get_db               # async session factory
 from auth import get_current_user, require_roles, User   # JWT dep
 
 from libs.schemas import (
@@ -71,9 +72,11 @@ from libs.models import (
     Alert,
     ApiKey,
     AuditLog,
+    Bet,
     Case,
     CompoundRule,
     FeatureSnapshot,
+    FinancialTransaction,
     IngestError,
     IngestJob,
     MappingConfig,
@@ -473,21 +476,87 @@ async def label_alert(
     return {"status": "labeled", "label": body.label}
 
 
-async def _enqueue_feedback_event(alert_id: str, label: str, tenant_id: str):
-    """Publish labeled event to Kafka for ML retraining pipeline."""
+async def _enqueue_feedback_event(alert_id: str, label: str, tenant_id: str) -> None:
+    """Publish labeled event to Kafka for ML retraining pipeline.
+
+    Retries up to 2 times on transient failures.  On final failure:
+    - Logs a WARNING via structlog (includes alert_id, tenant_id, error)
+    - Stores a Notification record for every ADMIN user of the tenant so the
+      failure is visible in the UI and can trigger manual remediation.
+    """
+    MAX_RETRIES = 2
+    last_exc: Exception | None = None
+
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            from aiokafka import AIOKafkaProducer
+            producer = AIOKafkaProducer(
+                bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP", "redpanda:9092")
+            )
+            await producer.start()
+            try:
+                await producer.send_and_wait(
+                    "feedback.labels",
+                    json.dumps({
+                        "alert_id": alert_id,
+                        "label": label,
+                        "tenant_id": tenant_id,
+                        "ts": datetime.now(UTC).isoformat(),
+                    }).encode(),
+                )
+                return  # success — exit immediately
+            finally:
+                await producer.stop()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(0.5 * (attempt + 1))
+
+    # All retries exhausted — log warning and store in-app notification
+    logger.warning(
+        "feedback_event_publish_failed",
+        alert_id=alert_id,
+        tenant_id=tenant_id,
+        label=label,
+        error=str(last_exc),
+        attempts=MAX_RETRIES + 1,
+    )
+
     try:
-        from aiokafka import AIOKafkaProducer
-        import os
-        producer = AIOKafkaProducer(bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP", "redpanda:9092"))
-        await producer.start()
-        await producer.send_and_wait(
-            "feedback.labels",
-            json.dumps({"alert_id": alert_id, "label": label,
-                        "tenant_id": tenant_id, "ts": datetime.now(UTC).isoformat()}).encode(),
+        async with AsyncSessionLocal() as _db:
+            admin_ids = list(
+                (
+                    await _db.execute(
+                        select(User.id).where(
+                            User.tenant_id == tenant_id,
+                            User.role == "ADMIN",
+                            User.active == True,  # noqa: E712
+                        )
+                    )
+                ).scalars().all()
+            )
+            for admin_id in admin_ids:
+                _db.add(
+                    Notification(
+                        tenant_id=tenant_id,
+                        user_id=admin_id,
+                        type="SYSTEM_ERROR",
+                        title="Falha na publicação de feedback label",
+                        body=(
+                            f"Feedback label para alert {alert_id} falhou ao publicar "
+                            f"após {MAX_RETRIES + 1} tentativas — revisão manual necessária."
+                        ),
+                        reference_type="alert",
+                        reference_id=alert_id,
+                    )
+                )
+            await _db.commit()
+    except Exception as db_exc:  # noqa: BLE001
+        logger.error(
+            "feedback_notification_store_failed",
+            alert_id=alert_id,
+            error=str(db_exc),
         )
-        await producer.stop()
-    except Exception:
-        pass  # non-critical background task
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -533,6 +602,189 @@ async def download_report_pdf(
         raise HTTPException(500, f"Could not retrieve PDF: {exc}") from exc
 
 
+async def _build_monthly_report(
+    tenant_id: str,
+    date_from: datetime,
+    date_to: datetime,
+    db: AsyncSession,
+) -> dict:
+    """Aggregate compliance statistics for a given period and tenant.
+
+    All queries enforce tenant isolation via tenant_id filter.
+
+    Returns a dict with:
+      - period: {"from", "to"}
+      - alerts_by_severity: {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
+      - cases_summary: {status_key: count, ...}  (includes open/investigating/closed/reported)
+      - top_rules_by_fires: [{rule_id, rule_name, fires}]  — top 10
+      - top_players_by_risk: [{player_id, external_id, avg_risk_score}]  — top 10
+      - total_ingested_events: int (FinancialTransaction + Bet in period)
+      - false_positive_rate: float | None
+      - generated_at: ISO string
+    """
+    # ── 1. Alerts by severity ──────────────────────────────────────────────────
+    sev_rows = (await db.execute(
+        select(Alert.severity, func.count().label("cnt"))
+        .where(
+            Alert.tenant_id == tenant_id,
+            Alert.created_at >= date_from,
+            Alert.created_at <= date_to,
+        )
+        .group_by(Alert.severity)
+    )).all()
+    alerts_by_severity: dict[str, int] = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    for row in sev_rows:
+        if row.severity in alerts_by_severity:
+            alerts_by_severity[row.severity] = row.cnt
+
+    # ── 2. Cases summary ───────────────────────────────────────────────────────
+    case_rows = (await db.execute(
+        select(Case.status, func.count().label("cnt"))
+        .where(
+            Case.tenant_id == tenant_id,
+            Case.created_at >= date_from,
+            Case.created_at <= date_to,
+        )
+        .group_by(Case.status)
+    )).all()
+    cases_summary: dict[str, int] = {}
+    for row in case_rows:
+        key = row.status.lower() if row.status else "unknown"
+        cases_summary[key] = row.cnt
+    # Ensure expected keys are always present
+    for expected in ("open", "investigating", "closed", "reported"):
+        cases_summary.setdefault(expected, 0)
+
+    # ── 3. Top 10 rules by alert fires ────────────────────────────────────────
+    rule_rows = (await db.execute(
+        select(
+            Alert.rule_id,
+            RuleDefinition.name.label("rule_name"),
+            func.count().label("fires"),
+        )
+        .join(RuleDefinition, RuleDefinition.id == Alert.rule_id, isouter=True)
+        .where(
+            Alert.tenant_id == tenant_id,
+            Alert.created_at >= date_from,
+            Alert.created_at <= date_to,
+            Alert.rule_id.isnot(None),
+        )
+        .group_by(Alert.rule_id, RuleDefinition.name)
+        .order_by(desc("fires"))
+        .limit(10)
+    )).all()
+    top_rules_by_fires = [
+        {
+            "rule_id": str(r.rule_id),
+            "rule_name": r.rule_name or "(desconhecido)",
+            "fires": r.fires,
+        }
+        for r in rule_rows
+    ]
+
+    # ── 4. Top 10 players by current risk score ───────────────────────────────
+    player_rows = (await db.execute(
+        select(Player.id, Player.external_id, Player.risk_score)
+        .where(Player.tenant_id == tenant_id)
+        .order_by(Player.risk_score.desc())
+        .limit(10)
+    )).all()
+    top_players_by_risk = [
+        {
+            "player_id": str(r.id),
+            "external_id": r.external_id or "",
+            "avg_risk_score": float(r.risk_score or 0),
+        }
+        for r in player_rows
+    ]
+
+    # ── 5. Total ingested events (FinancialTransaction + Bet) ─────────────────
+    tx_count = (await db.execute(
+        select(func.count()).where(
+            and_(
+                FinancialTransaction.tenant_id == tenant_id,
+                FinancialTransaction.created_at >= date_from,
+                FinancialTransaction.created_at <= date_to,
+            )
+        )
+    )).scalar_one()
+    bet_count = (await db.execute(
+        select(func.count()).where(
+            and_(
+                Bet.tenant_id == tenant_id,
+                Bet.created_at >= date_from,
+                Bet.created_at <= date_to,
+            )
+        )
+    )).scalar_one()
+    total_ingested_events = (tx_count or 0) + (bet_count or 0)
+
+    # ── 6. False positive rate ─────────────────────────────────────────────────
+    label_rows = (await db.execute(
+        select(Alert.label, func.count().label("cnt"))
+        .where(
+            Alert.tenant_id == tenant_id,
+            Alert.labeled_at >= date_from,
+            Alert.labeled_at <= date_to,
+            Alert.label.isnot(None),
+        )
+        .group_by(Alert.label)
+    )).all()
+    total_labeled = sum(r.cnt for r in label_rows)
+    fp_count = sum(r.cnt for r in label_rows if r.label == "FALSE_POSITIVE")
+    false_positive_rate: float | None = (
+        round(fp_count / total_labeled, 4) if total_labeled > 0 else None
+    )
+
+    return {
+        "period": {
+            "from": date_from.isoformat(),
+            "to": date_to.isoformat(),
+        },
+        "alerts_by_severity": alerts_by_severity,
+        "cases_summary": cases_summary,
+        "top_rules_by_fires": top_rules_by_fires,
+        "top_players_by_risk": top_players_by_risk,
+        "total_ingested_events": total_ingested_events,
+        "false_positive_rate": false_positive_rate,
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+
+
+async def _build_monthly_report_background(
+    tenant_id: str,
+    year: int,
+    month: int,
+) -> None:
+    """Background wrapper: creates its own DB session and runs _build_monthly_report.
+
+    Computes date_from / date_to from year + month (full calendar month, UTC).
+    """
+    import calendar
+    date_from = datetime(year, month, 1, tzinfo=UTC)
+    last_day = calendar.monthrange(year, month)[1]
+    date_to = datetime(year, month, last_day, 23, 59, 59, tzinfo=UTC)
+    try:
+        async with AsyncSessionLocal() as _db:
+            report = await _build_monthly_report(tenant_id, date_from, date_to, _db)
+            logger.info(
+                "monthly_report_background_completed",
+                tenant_id=tenant_id,
+                year=year,
+                month=month,
+                total_alerts=sum(report["alerts_by_severity"].values()),
+                total_events=report["total_ingested_events"],
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "monthly_report_background_failed",
+            tenant_id=tenant_id,
+            year=year,
+            month=month,
+            error=str(exc),
+        )
+
+
 @enterprise_router.post("/reports/monthly-summary", status_code=202, tags=["reports"])
 async def generate_monthly_report(
     body: MonthlyReportIn,
@@ -540,52 +792,125 @@ async def generate_monthly_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Trigger async generation of monthly compliance summary report."""
+    """Trigger async generation of monthly compliance summary report (202 Accepted).
+
+    The report is built in a background task.  Use GET /reports/monthly-summary
+    with date_from / date_to query params to fetch the result synchronously.
+    """
     background_tasks.add_task(
-        _build_monthly_report, body.year, body.month,
-        current_user.tenant_id, body.include_pdf,
+        _build_monthly_report_background,
+        current_user.tenant_id,
+        body.year,
+        body.month,
     )
     return {"status": "queued", "year": body.year, "month": body.month}
 
 
-async def _build_monthly_report(year: int, month: int, tenant_id: str, include_pdf: bool):
-    """Background task: aggregate stats and optionally generate PDF."""
-    pass  # implement with reportlab / weasyprint in production
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# M6 — LGPD: right to erasure
-# ──────────────────────────────────────────────────────────────────────────────
-
-@enterprise_router.post("/players/{player_id}/right-to-erasure", tags=["players"])
-async def right_to_erasure(
-    player_id: str,
+@enterprise_router.get("/reports/monthly-summary", tags=["reports"])
+async def get_monthly_summary(
+    date_from: str = Query(..., description="Data inicial YYYY-MM-DD (inclusivo)"),
+    date_to: str = Query(..., description="Data final YYYY-MM-DD (inclusivo)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles("ADMIN")),
+    current_user: User = Depends(get_current_user),
 ):
+    """Retorna o sumário mensal de compliance de forma síncrona.
+
+    Parâmetros de query:
+        date_from: YYYY-MM-DD — início do período (00:00:00 UTC)
+        date_to:   YYYY-MM-DD — fim do período (23:59:59 UTC)
+
+    Returns:
+        JSON com alerts_by_severity, cases_summary, top_rules_by_fires,
+        top_players_by_risk, total_ingested_events, false_positive_rate e período.
     """
-    LGPD Art. 18 — erase personally identifiable data for a player.
-    Anonymises CPF, name, email, phone while preserving anonymised transaction records.
-    """
-    player = (await db.execute(
-        select(Player).where(
-            Player.id == player_id,
-            _tenant_filter(Player, current_user.tenant_id),
+    try:
+        df = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=UTC)
+        dt = datetime.strptime(date_to, "%Y-%m-%d").replace(
+            hour=23, minute=59, second=59, tzinfo=UTC
         )
-    )).scalar_one_or_none()
-    if player is None:
-        raise HTTPException(404, "Player not found")
+    except ValueError:
+        raise HTTPException(400, "date_from e date_to devem estar no formato YYYY-MM-DD")
+    if df > dt:
+        raise HTTPException(400, "date_from não pode ser posterior a date_to")
+    return await _build_monthly_report(current_user.tenant_id, df, dt, db)
 
-    anon_suffix = hashlib.sha256(str(player_id).encode()).hexdigest()[:12]
-    player.full_name      = f"ERASURE_{anon_suffix}"
-    player.cpf_encrypted  = f"ERASURE_{anon_suffix}".encode()
-    player.name_encrypted = f"ERASURE_{anon_suffix}".encode()
-    player.status         = "ERASED"
 
-    await _write_audit(
-        db, current_user.tenant_id, current_user.id,
-        "LGPD_ERASURE", "Player", player_id,
-        {"reason": "right_to_erasure", "anon_suffix": anon_suffix},
+@enterprise_router.get("/reports/monthly-summary/csv", tags=["reports"])
+async def get_monthly_summary_csv(
+    date_from: str = Query(..., description="Data inicial YYYY-MM-DD"),
+    date_to: str = Query(..., description="Data final YYYY-MM-DD"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Exporta o sumário mensal como arquivo CSV para download.
+
+    Parâmetros de query:
+        date_from: YYYY-MM-DD
+        date_to:   YYYY-MM-DD
+
+    Returns:
+        text/csv — UTF-8 com BOM para compatibilidade com Microsoft Excel.
+    """
+    try:
+        df = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=UTC)
+        dt = datetime.strptime(date_to, "%Y-%m-%d").replace(
+            hour=23, minute=59, second=59, tzinfo=UTC
+        )
+    except ValueError:
+        raise HTTPException(400, "date_from e date_to devem estar no formato YYYY-MM-DD")
+    if df > dt:
+        raise HTTPException(400, "date_from não pode ser posterior a date_to")
+
+    report = await _build_monthly_report(current_user.tenant_id, df, dt, db)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Metadata rows
+    writer.writerow(["secao", "chave", "valor"])
+    writer.writerow(["Periodo", "de", report["period"]["from"]])
+    writer.writerow(["Periodo", "ate", report["period"]["to"]])
+    writer.writerow(["Periodo", "gerado_em", report["generated_at"]])
+
+    # Alerts by severity
+    for sev, cnt in report["alerts_by_severity"].items():
+        writer.writerow(["AlertasPorSeveridade", sev, cnt])
+
+    # Cases summary
+    for status_key, cnt in report["cases_summary"].items():
+        writer.writerow(["ResumoDeOcorrencias", status_key, cnt])
+
+    # Totals
+    writer.writerow(["Totais", "eventos_ingeridos", report["total_ingested_events"]])
+    writer.writerow([
+        "Totais",
+        "taxa_falso_positivo",
+        report["false_positive_rate"]
+        if report["false_positive_rate"] is not None
+        else "N/D",
+    ])
+
+    # Top rules
+    writer.writerow([])
+    writer.writerow(["TopRegras", "rule_id", "rule_name", "disparos"])
+    for r in report["top_rules_by_fires"]:
+        writer.writerow(["TopRegras", r["rule_id"], r["rule_name"], r["fires"]])
+
+    # Top players
+    writer.writerow([])
+    writer.writerow(["TopJogadores", "player_id", "external_id", "avg_risk_score"])
+    for p in report["top_players_by_risk"]:
+        writer.writerow(["TopJogadores", p["player_id"], p["external_id"], p["avg_risk_score"]])
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")  # BOM for Excel compatibility
+    filename = f"monthly_summary_{date_from}_{date_to}.csv"
+    return StreamingResponse(
+        io.BytesIO(csv_bytes),
+        media_type="text/csv; charset=utf-8-sig",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-    await db.commit()
-    return {"status": "erased", "player_id": player_id}
+
+
+# NOTE: M6 — LGPD right to erasure was removed from this file.
+# The canonical implementation lives in routers/players.py (POST /players/{id}/erase).
+# A backward-compatible alias at /players/{id}/right-to-erasure is also in that router.

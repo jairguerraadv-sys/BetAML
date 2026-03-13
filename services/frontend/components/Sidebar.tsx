@@ -8,8 +8,9 @@ import {
   FileBarChart2, Bell, LogOut, SlidersHorizontal,
   ChevronDown, BookOpen, Users, Plug, ScrollText,
   Shield, List, BrainCircuit, Database, GitBranch, Wand2,
-  Settings, HelpCircle,
+  Settings, HelpCircle, Search, Moon, Sun,
 } from 'lucide-react';
+import { useTheme } from './ThemeProvider';
 
 // ── Jornadas principais do analista ──────────────────────────────────────────
 const MAIN_NAV = [
@@ -67,6 +68,7 @@ function NavItem({ href, label, icon: Icon, tooltip, active }: {
 export default function Sidebar() {
   const pathname = usePathname();
   const router   = useRouter();
+  const { theme, toggle: toggleTheme } = useTheme();
   const [role, setRole]         = useState<string>('analyst');
   const [userName, setUserName] = useState<string>('');
   const [advOpen, setAdvOpen]   = useState(false);
@@ -93,16 +95,28 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="flex h-screen w-60 flex-col border-r border-gray-200 bg-white">
+    <aside className="flex h-screen w-60 flex-col border-r border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
       {/* Logo + usuário */}
-      <div className="px-4 py-4 border-b border-gray-100">
+      <div className="px-4 py-4 border-b border-gray-100 dark:border-gray-700">
         <span className="text-lg font-extrabold text-brand">BetAML</span>
         <p className="text-[10px] font-medium uppercase tracking-widest text-gray-400">PLD/FT Intelligence</p>
         {userName && (
-          <p className="mt-1.5 text-[11px] text-gray-500 truncate">
+          <p className="mt-1.5 text-[11px] text-gray-500 truncate dark:text-gray-400">
             👤 {userName} · <span className="capitalize">{role.replace('_', ' ')}</span>
           </p>
         )}
+      </div>
+
+      {/* Busca rápida */}
+      <div className="px-2 pt-3">
+        <button
+          onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))}
+          className="flex w-full items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-400 transition hover:border-gray-300 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-500 dark:hover:bg-gray-700"
+        >
+          <Search size={12} />
+          <span className="flex-1 text-left">Buscar…</span>
+          <kbd className="rounded bg-gray-200 px-1 text-[10px] dark:bg-gray-600">⌘K</kbd>
+        </button>
       </div>
 
       {/* Jornadas principais */}
@@ -147,11 +161,18 @@ export default function Sidebar() {
         )}
       </nav>
 
-      {/* Sign out */}
-      <div className="border-t border-gray-100 px-2 py-3">
+      {/* Footer: dark mode + sign out */}
+      <div className="border-t border-gray-100 px-2 py-3 space-y-1 dark:border-gray-700">
+        <button
+          onClick={toggleTheme}
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 transition-colors dark:text-gray-400 dark:hover:bg-gray-800"
+        >
+          {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+          {theme === 'dark' ? 'Modo claro' : 'Modo escuro'}
+        </button>
         <button
           onClick={logout}
-          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 transition-colors"
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 transition-colors dark:text-gray-400 dark:hover:bg-gray-800"
         >
           <LogOut size={15} />
           Sair da conta

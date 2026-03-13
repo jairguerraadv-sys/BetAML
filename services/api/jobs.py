@@ -2,10 +2,13 @@
 jobs.py — Background jobs para tarefas agendadas:
   - Risk Score Decay: recalcula risk_score diariamente como weighted average dos últimos 30d
   - LGPD Data Expiration: deleta/anonimiza dados conforme data_retention_days
+  - Feature Population Stats: computa estatísticas de população por tenant (06:00 UTC)
 """
 from __future__ import annotations
 
 import hashlib
+import json
+import statistics as _statistics
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -15,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import AsyncSessionLocal
-from models import Alert, AuditLog, Notification, Player, ScoringConfig, Tenant, User
+from models import Alert, AuditLog, FeatureSnapshot, Notification, Player, ScoringConfig, Tenant, User
 
 logger = structlog.get_logger(__name__)
 
@@ -327,3 +330,106 @@ async def check_sla_violations() -> None:
     except Exception as exc:
         logger.error("check_sla_violations_failed", error=str(exc))
         await _notify_admins_job_failure("check_sla_violations", str(exc))
+
+
+async def compute_feature_population_stats() -> None:
+    """
+    Feature Population Stats Job.
+
+    For each active tenant, queries the last 30 days of feature_snapshots and
+    computes population-level statistics (mean, std, p10, p25, p50, p75, p90)
+    for every numeric feature column found in the JSONB `features` field.
+
+    Results are stored in Redis:
+      Key:   feature_stats:{tenant_id}
+      Value: JSON dict {"deposit_sum_30d": {"mean": ..., "std": ..., "p50": ..., ...}, ...}
+      TTL:   25 hours (refreshed each run)
+
+    These statistics are consumed by eval_dsl's zscore() and percentile_rank() functions.
+    Runs once per day at 06:00 UTC.
+    """
+    try:
+        import redis.asyncio as aioredis
+
+        redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+
+        try:
+            async with AsyncSessionLocal() as db:
+                tenants = (
+                    await db.execute(select(Tenant).where(Tenant.active == True))
+                ).scalars().all()
+
+                since = datetime.now(UTC) - timedelta(days=30)
+
+                for tenant in tenants:
+                    snapshots = (
+                        await db.execute(
+                            select(FeatureSnapshot).where(
+                                FeatureSnapshot.tenant_id == tenant.id,
+                                FeatureSnapshot.created_at >= since,
+                            )
+                        )
+                    ).scalars().all()
+
+                    if not snapshots:
+                        continue
+
+                    # Accumulate numeric values per feature key
+                    feature_values: dict[str, list[float]] = {}
+                    for snap in snapshots:
+                        for key, raw_val in (snap.features or {}).items():
+                            # Skip non-numeric and sentinel values
+                            if raw_val is None or raw_val == "" or isinstance(raw_val, bool):
+                                continue
+                            try:
+                                val = float(raw_val)
+                            except (TypeError, ValueError):
+                                continue
+                            feature_values.setdefault(key, []).append(val)
+
+                    def _percentile(sorted_list: list[float], p: float) -> float:
+                        """Linear interpolation percentile over a pre-sorted list."""
+                        n = len(sorted_list)
+                        if n == 1:
+                            return sorted_list[0]
+                        idx = (p / 100.0) * (n - 1)
+                        lo = int(idx)
+                        hi = min(lo + 1, n - 1)
+                        frac = idx - lo
+                        return sorted_list[lo] * (1.0 - frac) + sorted_list[hi] * frac
+
+                    stats_out: dict[str, dict] = {}
+                    for feat_name, vals in feature_values.items():
+                        if not vals:
+                            continue
+                        sorted_vals = sorted(vals)
+                        n = len(sorted_vals)
+                        stats_out[feat_name] = {
+                            "mean":  round(_statistics.mean(vals), 4),
+                            "std":   round(_statistics.pstdev(vals), 4) if n > 1 else 0.0,
+                            "p10":   round(_percentile(sorted_vals, 10), 4),
+                            "p25":   round(_percentile(sorted_vals, 25), 4),
+                            "p50":   round(_percentile(sorted_vals, 50), 4),
+                            "p75":   round(_percentile(sorted_vals, 75), 4),
+                            "p90":   round(_percentile(sorted_vals, 90), 4),
+                        }
+
+                    redis_key = f"feature_stats:{tenant.id}"
+                    await redis_client.set(
+                        redis_key,
+                        json.dumps(stats_out, ensure_ascii=False),
+                        ex=25 * 3600,   # 25h TTL — outlasts a missed daily run
+                    )
+
+                    logger.info(
+                        "feature_population_stats_computed",
+                        tenant_id=tenant.id,
+                        features_computed=len(stats_out),
+                        snapshots_processed=len(snapshots),
+                    )
+        finally:
+            await redis_client.aclose()
+
+    except Exception as exc:
+        logger.error("compute_feature_population_stats_failed", error=str(exc))
+        await _notify_admins_job_failure("compute_feature_population_stats", str(exc))

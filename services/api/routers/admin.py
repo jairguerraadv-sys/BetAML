@@ -1,26 +1,29 @@
 """
 routers/admin.py — Endpoints administrativos do tenant:
   - Maintenance mode
-  - API Keys CRUD
+  - API Keys CRUD + usage stats
   - System Flags CRUD
   - Scoring Config
   - POST /admin/tenants (onboarding de novo tenant via API)
+  - User management (GET/POST/PATCH/DELETE /admin/users, reset-password, invite)
 """
 from __future__ import annotations
 
 import hashlib
 import secrets
+import string
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, func as sqlfunc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import get_current_user, hash_password, require_roles
+from auth import create_access_token, get_current_user, hash_password, require_roles
+from config import settings
 from database import get_db
 from libs.models import (
     ApiKey,
@@ -36,18 +39,25 @@ from libs.schemas import (
     ApiKeyCreate,
     ApiKeyCreateResponse,
     ApiKeyOut,
+    InviteIn,
     ScoringConfigOut,
     ScoringConfigUpdate,
     ScoringPreviewIn,
     ScoringPreviewOut,
     SystemFlagOut,
     SystemFlagUpdate,
+    UserCreateIn,
+    UserOut,
+    UserUpdateIn,
     PreviewBandCount,
 )
 from libs.models import Alert
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["admin"])
+
+# Roles that non-SUPER_ADMIN admins are permitted to assign
+_ASSIGNABLE_ROLES = frozenset({"ADMIN", "AML_ANALYST", "AUDITOR"})
 
 
 def _tenant_filter(model, tenant_id: str):
@@ -171,6 +181,48 @@ async def revoke_api_key(
     await _write_audit(db, current_user.tenant_id, current_user.id,
                        "REVOKE_API_KEY", "ApiKey", key_id)
     await db.commit()
+
+
+@router.get("/admin/api-keys/{key_id}/usage", tags=["admin"])
+async def get_api_key_usage(
+    key_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("ADMIN")),
+):
+    """Retorna os últimos 30 dias de contadores de uso diário da API key (via Redis)."""
+    from datetime import date, timedelta as _td
+
+    row = (await db.execute(
+        select(ApiKey).where(
+            ApiKey.id == key_id,
+            _tenant_filter(ApiKey, current_user.tenant_id),
+        )
+    )).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "API key not found")
+
+    try:
+        import redis.asyncio as aioredis
+        r = aioredis.from_url(settings.redis_url, decode_responses=True)
+        today = date.today()
+        usage: dict[str, int] = {}
+        for i in range(30):
+            d = (today - _td(days=i)).strftime("%Y-%m-%d")
+            counter_key = f"apikey_usage:{row.key_prefix}:{d}"
+            count = await r.get(counter_key)
+            usage[d] = int(count) if count else 0
+        await r.aclose()
+    except Exception as exc:
+        logger.warning("api_key_usage_redis_error", error=str(exc))
+        usage = {}
+
+    return {
+        "key_id": key_id,
+        "key_prefix": row.key_prefix,
+        "name": row.name,
+        "last_used_at": row.last_used_at,
+        "days": usage,
+    }
 
 
 # ── System Flags ───────────────────────────────────────────────────────────────
@@ -512,3 +564,247 @@ async def update_tenant(
         created_at=t.created_at,
         user_count=count_result.scalar_one(),
     )
+
+
+# ── User Management (ADMIN, tenant-scoped) ──────────────────────────────────
+
+@router.get("/admin/users", response_model=list[UserOut], tags=["admin"])
+async def list_users(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("ADMIN")),
+):
+    """Lista todos os usuários do tenant atual. Senha não é exposta."""
+    result = await db.execute(
+        select(User)
+        .where(_tenant_filter(User, current_user.tenant_id))
+        .order_by(User.created_at.asc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/admin/users", response_model=UserOut, status_code=201, tags=["admin"])
+async def create_user(
+    body: UserCreateIn,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("ADMIN")),
+):
+    """
+    Cria um novo usuário no tenant.
+
+    Restrições:
+    - role não pode ser SUPER_ADMIN
+    - username deve ser único no tenant
+    """
+    if body.role not in _ASSIGNABLE_ROLES:
+        raise HTTPException(
+            422,
+            f"Role inválida. Permitidas: {sorted(_ASSIGNABLE_ROLES)}. "
+            "SUPER_ADMIN não pode ser atribuído via este endpoint."
+        )
+
+    # Verificar unicidade de username dentro do tenant
+    existing = (await db.execute(
+        select(User).where(
+            User.tenant_id == current_user.tenant_id,
+            User.username == body.username,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, f"Username '{body.username}' já existe neste tenant.")
+
+    new_user = User(
+        id=str(uuid.uuid4()),
+        tenant_id=current_user.tenant_id,
+        username=body.username,
+        email=body.email,
+        password_hash=hash_password(body.password),
+        role=body.role,
+        active=True,
+    )
+    db.add(new_user)
+    await db.flush()
+
+    await _write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "CREATE_USER", "User", new_user.id,
+        {"username": body.username, "email": body.email, "role": body.role},
+    )
+    await db.commit()
+    await db.refresh(new_user)
+
+    logger.info("user_created", user_id=new_user.id, username=new_user.username,
+                role=new_user.role, by=current_user.id)
+    return new_user
+
+
+@router.patch("/admin/users/{user_id}", response_model=UserOut, tags=["admin"])
+async def update_user(
+    user_id: str,
+    body: UserUpdateIn,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("ADMIN")),
+):
+    """
+    Atualiza role ou status ativo de um usuário.
+
+    Restrições:
+    - Não pode editar o próprio role
+    - role não pode ser SUPER_ADMIN
+    """
+    target = (await db.execute(
+        select(User).where(
+            User.id == user_id,
+            _tenant_filter(User, current_user.tenant_id),
+        )
+    )).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(404, "Usuário não encontrado")
+
+    if body.role is not None and user_id == current_user.id:
+        raise HTTPException(422, "Não é possível editar o próprio role.")
+
+    if body.role is not None and body.role not in _ASSIGNABLE_ROLES:
+        raise HTTPException(
+            422,
+            f"Role inválida. Permitidas: {sorted(_ASSIGNABLE_ROLES)}."
+        )
+
+    before = {"role": target.role, "active": target.active}
+
+    if body.role is not None:
+        target.role = body.role
+    if body.active is not None:
+        target.active = body.active
+
+    after = {"role": target.role, "active": target.active}
+
+    db.add(AuditLog(
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+        action="UPDATE_USER",
+        entity_type="User",
+        entity_id=user_id,
+        before=before,
+        after=after,
+    ))
+    await db.commit()
+    await db.refresh(target)
+
+    logger.info("user_updated", user_id=user_id, before=before, after=after, by=current_user.id)
+    return target
+
+
+@router.delete("/admin/users/{user_id}", status_code=204, tags=["admin"])
+async def deactivate_user(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("ADMIN")),
+):
+    """
+    Desativa (soft-delete) um usuário. Não realiza deleção física.
+
+    Restrição: não pode desativar a própria conta.
+    """
+    if user_id == current_user.id:
+        raise HTTPException(422, "Não é possível desativar a própria conta.")
+
+    target = (await db.execute(
+        select(User).where(
+            User.id == user_id,
+            _tenant_filter(User, current_user.tenant_id),
+        )
+    )).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(404, "Usuário não encontrado")
+
+    target.active = False
+
+    await _write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "DEACTIVATE_USER", "User", user_id,
+        {"username": target.username, "active": False},
+    )
+    await db.commit()
+    logger.info("user_deactivated", user_id=user_id, by=current_user.id)
+
+
+@router.post("/admin/users/{user_id}/reset-password", tags=["admin"])
+async def reset_user_password(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("ADMIN")),
+):
+    """
+    Gera uma nova senha aleatória (16 chars) para o usuário e a salva como hash.
+    Retorna a senha em plaintext UMA ÚNICA VEZ — não é possível recuperá-la depois.
+    Sem envio de e-mail em MVP.
+    """
+    target = (await db.execute(
+        select(User).where(
+            User.id == user_id,
+            _tenant_filter(User, current_user.tenant_id),
+        )
+    )).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(404, "Usuário não encontrado")
+
+    # Gera senha aleatória segura de 16 caracteres (letras + dígitos + símbolos)
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    new_password = "".join(secrets.choice(alphabet) for _ in range(16))
+    target.password_hash = hash_password(new_password)
+
+    await _write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "RESET_USER_PASSWORD", "User", user_id,
+        {"username": target.username, "reset_by": current_user.username},
+    )
+    await db.commit()
+
+    logger.info("user_password_reset", user_id=user_id, by=current_user.id)
+    return {
+        "user_id": user_id,
+        "username": target.username,
+        "new_password": new_password,
+        "message": "Senha redefinida. Guarde-a agora — não será exibida novamente.",
+    }
+
+
+@router.post("/admin/invite", tags=["admin"])
+async def generate_invite(
+    body: InviteIn,
+    current_user = Depends(require_roles("ADMIN")),
+):
+    """
+    Gera um token de convite JWT (48h de validade) contendo tenant_id, email e role.
+    Retorna o link de aceite com o token embutido.
+    Sem envio de e-mail em MVP — o link deve ser compartilhado manualmente.
+    """
+    if body.role not in _ASSIGNABLE_ROLES:
+        raise HTTPException(
+            422,
+            f"Role inválida. Permitidas: {sorted(_ASSIGNABLE_ROLES)}."
+        )
+
+    token = create_access_token(
+        data={
+            "type": "invite",
+            "tenant_id": current_user.tenant_id,
+            "email": body.email,
+            "role": body.role,
+        },
+        expires_delta=timedelta(hours=48),
+    )
+
+    logger.info(
+        "invite_generated",
+        email=body.email,
+        role=body.role,
+        tenant_id=current_user.tenant_id,
+        by=current_user.id,
+    )
+    return {
+        "invite_link": f"/accept-invite?token={token}",
+        "email": body.email,
+        "role": body.role,
+        "expires_in_hours": 48,
+    }

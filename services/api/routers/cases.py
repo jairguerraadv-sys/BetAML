@@ -15,12 +15,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import decrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
-from models import Alert, Case, CaseEvent, Player, ReportPackage, User
+from models import Alert, Case, CaseEvent, Player, ReportPackage, Tenant, User
 from utils import write_audit
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["cases"])
+
+# ── Case status transition graph ─────────────────────────────────────────────
+# Maps each status to the list of valid next statuses.
+# REPORTED is terminal: no outbound transitions allowed.
+_STATUS_TRANSITIONS: dict[str, list[str]] = {
+    "OPEN":           ["INVESTIGATING", "CLOSED"],
+    "INVESTIGATING":  ["PENDING_REVIEW", "CLOSED", "OPEN"],
+    "PENDING_REVIEW": ["INVESTIGATING", "CLOSED", "REPORTED"],
+    "CLOSED":         ["OPEN"],    # allow re-opening
+    "REPORTED":       [],          # terminal — no further transitions
+}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -237,6 +248,14 @@ async def add_case_event(
     if body.event_type == "STATUS_CHANGE":
         new_status = body.content.get("new_status")
         if new_status:
+            allowed = _STATUS_TRANSITIONS.get(c.status, [])
+            if new_status not in allowed:
+                raise HTTPException(
+                    400,
+                    f"Transição de status inválida: '{c.status}' → '{new_status}'. "
+                    f"Transições permitidas de '{c.status}': "
+                    f"{allowed if allowed else ['nenhuma (status terminal)']}",
+                )
             c.status = new_status
     evt = CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,
@@ -494,12 +513,67 @@ async def submit_report_package(
         ),
     }
 
+
+@router.get("/cases/{case_id}/report-packages")
+async def list_report_packages(
+    case_id: str,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lista todos os ReportPackages para um caso, ordenados por data de criação decrescente.
+
+    Cada item inclui: id, status, format, decision, created_at, generated_by (user_id)
+    e se o PDF está disponível (bool).
+
+    Returns:
+        Lista de dicionários com metadados de cada ReportPackage.
+    """
+    c = await db.get(Case, case_id)
+    if not c or c.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Caso não encontrado")
+
+    rps = (await db.execute(
+        select(ReportPackage)
+        .where(
+            ReportPackage.case_id == case_id,
+            ReportPackage.tenant_id == current_user.tenant_id,
+        )
+        .order_by(ReportPackage.created_at.desc())
+    )).scalars().all()
+
+    return [
+        {
+            "id": rp.id,
+            "status": rp.status,
+            "format": rp.format,
+            "decision": (
+                (rp.payload or {}).get("decision", rp.decision)
+                if rp.payload
+                else rp.decision
+            ),
+            "created_at": rp.created_at,
+            "generated_by": rp.created_by,
+            "pdf_available": rp.pdf_path is not None,
+        }
+        for rp in rps
+    ]
+
+
+@router.get("/cases/{case_id}/report-package/pdf", response_class=StreamingResponse)
 async def download_report_pdf(
     case_id: str,
     rp_id: str,
     current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
     db: AsyncSession = Depends(get_db),
 ):
+    """Baixa o PDF de um ReportPackage específico.
+
+    Parâmetros de query:
+        rp_id: UUID do ReportPackage (obrigatório).
+
+    Returns:
+        application/pdf — bytes do relatório COAF.
+    """
     rp = await db.get(ReportPackage, rp_id)
     if not rp or rp.tenant_id != current_user.tenant_id or rp.case_id != case_id:
         raise HTTPException(404, "ReportPackage não encontrado")
@@ -536,9 +610,14 @@ async def download_coaf_xml(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_roles("ADMIN", "AML_ANALYST")),
 ):
-    """
-    Gera XML de Comunicação ao COAF conforme Resolução COAF 36/2021.
-    Retorna application/xml para download direto.
+    """Gera XML de Comunicação ao COAF conforme Resolução COAF 36/2021.
+
+    Busca o ReportPackage mais recente do caso para obter a narrativa do analista.
+    O CNPJ do operador é lido de Tenant.settings["cnpj"]; se ausente, usa
+    "00000000000000" e registra warning no log.
+
+    Returns:
+        application/xml — arquivo para download.
     """
     from xml.etree.ElementTree import Element, SubElement, tostring
     from xml.dom import minidom
@@ -546,29 +625,68 @@ async def download_coaf_xml(
     case = await db.get(Case, case_id)
     if not case or case.tenant_id != current_user.tenant_id:
         raise HTTPException(404, "Case não encontrado")
-    if case.status not in ("FILED", "CLOSED"):
-        raise HTTPException(400, "Relatório COAF só pode ser gerado para cases FILED ou CLOSED")
-    if not getattr(case, "analyst_narrative", None):
-        raise HTTPException(422, "analyst_narrative obrigatório para geração do XML COAF")
+    if case.status not in ("CLOSED", "REPORTED"):
+        raise HTTPException(400, "Relatório COAF só pode ser gerado para cases CLOSED ou REPORTED")
 
-    # Buscar player
+    # ── Buscar o ReportPackage mais recente para extrair a narrativa ──────────
+    rp = (await db.execute(
+        select(ReportPackage)
+        .where(
+            ReportPackage.case_id == case_id,
+            ReportPackage.tenant_id == current_user.tenant_id,
+        )
+        .order_by(ReportPackage.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+    # Narrativa: preferir payload["analystNarrative"] → payload["analyst_narrative"] → coluna direta
+    analyst_narrative = ""
+    if rp is not None:
+        analyst_narrative = (
+            (rp.payload or {}).get("analystNarrative")
+            or (rp.payload or {}).get("analyst_narrative")
+            or rp.analyst_narrative
+            or ""
+        )
+
+    # ── Obter CNPJ do Tenant ──────────────────────────────────────────────────
+    tenant = await db.get(Tenant, case.tenant_id)
+    cnpj = "00000000000000"
+    if tenant:
+        cnpj = (
+            getattr(tenant, "cnpj", None)
+            or (tenant.settings or {}).get("cnpj")
+            or "00000000000000"
+        )
+        if cnpj == "00000000000000":
+            logger.warning(
+                "tenant_cnpj_not_configured",
+                tenant_id=case.tenant_id,
+                hint="Configure settings['cnpj'] no cadastro do operador (COAF Res. 36/2021)",
+            )
+
+    # ── Buscar player ─────────────────────────────────────────────────────────
     player = await db.get(Player, case.player_id) if case.player_id else None
 
-    # ── Montar XML conforme schema COAF RIF ──────────────────────────────
+    # ── Montar XML conforme schema COAF RIF ───────────────────────────────────
     root = Element("ComunicacaoMifd")
     root.set("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
     root.set("versao", "3.0")
 
     # Cabeçalho
     cabecalho = SubElement(root, "Cabecalho")
-    SubElement(cabecalho, "NumeroSequencial").text = str(getattr(case, "reference_number", case_id[-8:]))
+    SubElement(cabecalho, "NumeroSequencial").text = str(
+        getattr(case, "reference_number", None) or case_id[-8:]
+    )
     SubElement(cabecalho, "DataHoraEnvio").text = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
     SubElement(cabecalho, "TipoOperacao").text = "I"  # Inclusão
 
     # Comunicante (Operador)
     comunicante = SubElement(root, "Comunicante")
-    SubElement(comunicante, "CnpjOuCpfComunicante").text = "00000000000000"  # CNPJ do operador
-    SubElement(comunicante, "NomeComunicante").text = current_user.tenant_id
+    SubElement(comunicante, "CnpjOuCpfComunicante").text = cnpj
+    SubElement(comunicante, "NomeComunicante").text = (
+        (tenant.name if tenant else None) or current_user.tenant_id
+    )
     SubElement(comunicante, "TipoAtividade").text = "APOSTAS"
 
     # Parte Envolvida
@@ -576,7 +694,7 @@ async def download_coaf_xml(
         partes = SubElement(root, "PartesEnvolvidas")
         parte = SubElement(partes, "Parte")
         SubElement(parte, "TipoPessoa").text = "F"  # Física
-        SubElement(parte, "NomePessoa").text = "CONFIDENCIAL"  # PII protegida
+        SubElement(parte, "NomePessoa").text = "CONFIDENCIAL"  # PII protegida por LGPD
         SubElement(parte, "TipoPapel").text = "COMUNICADO"
 
     # Operação Suspeita
@@ -585,7 +703,7 @@ async def download_coaf_xml(
     SubElement(operacao, "NumeroOperacao").text = str(case_id[-8:])
     SubElement(operacao, "DataOperacao").text = case.created_at.strftime("%Y-%m-%d")
     SubElement(operacao, "NaturezaOperacao").text = "APOSTA_ESPORTIVA"
-    SubElement(operacao, "DescricaoSuspeita").text = case.analyst_narrative or ""
+    SubElement(operacao, "DescricaoSuspeita").text = analyst_narrative
 
     # Serializar com pretty print
     raw = tostring(root, encoding="unicode")
