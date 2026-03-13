@@ -25,6 +25,12 @@ Redpanda (Kafka)   (port 9092)
 Observability:
   Prometheus  (port 9090)
   Grafana     (port 3001)
+
+Dashboards provisionados:
+- `betaml-overview`
+- `betaml-business`
+- `betaml-infrastructure`
+- `betaml-reliability-slo`
 ```
 
 ## 2. Pré-requisitos
@@ -35,6 +41,20 @@ Observability:
 | Docker Compose | v2.24         |
 | RAM disponível | 8 GB         |
 | Disco livre   | 20 GB         |
+
+## 2.1 Gate de Readiness (pre-release)
+
+Existe um workflow manual de readiness completo em `.github/workflows/release-readiness.yml`.
+Ele valida em sequencia:
+
+1. Cadeia Alembic (`heads` e `history`)
+2. Subida da stack minima para smoke (postgres, redis, redpanda, topic-init, api, frontend)
+3. Dry-run de migracoes legadas (`scripts/postgres_migrate_existing.sh --dry-run`)
+4. Smoke E2E (`auth` e `cases`)
+
+Requer secrets/vars no repositorio:
+- `workflow_dispatch input: e2e_username`
+- `workflow_dispatch input: e2e_password`
 
 ## 3. Inicialização do Ambiente
 
@@ -111,8 +131,25 @@ bash scripts/postgres_migrate_existing.sh --dry-run
 ### Roadmap (Migrations)
 
 - O script `scripts/postgres_migrate_existing.sh` cobre o cenário atual de recuperação e drift em ambientes legados.
-- Proximo passo recomendado: adotar Alembic para trilha transacional formal (upgrade/downgrade versionado por revisao).
+- Alembic baseline disponivel em `services/api/alembic/` para trilha transacional formal.
 - Durante a transicao, mantenha o script como fallback operacional para ambientes ja existentes.
+
+### Alembic (Bootstrap Operacional)
+
+```bash
+cd services/api
+
+# Valida revisoes
+alembic -c alembic.ini heads
+
+# Banco novo: aplica baseline
+alembic -c alembic.ini upgrade head
+
+# Banco existente: marca baseline sem executar DDL
+alembic -c alembic.ini stamp 20260313_000001
+```
+
+Use `stamp` somente quando o schema ja estiver sincronizado (ex.: ambiente legado com migracoes SQL aplicadas).
 
 ### Resumo de Cada Migration
 

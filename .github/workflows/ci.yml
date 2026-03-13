@@ -221,3 +221,29 @@ jobs:
       - name: Stop services
         if: always()
         run: docker compose -f infra/docker-compose.yml down -v
+
+  # ── Migrations: validar trilha formal Alembic ─────────────────────────────
+  alembic-smoke:
+    name: Alembic Baseline Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: services/api/requirements.txt
+
+      - name: Install API dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r services/api/requirements.txt
+
+      - name: Validate Alembic baseline metadata
+        working-directory: services/api
+        run: |
+          alembic -c alembic.ini heads
+          alembic -c alembic.ini history

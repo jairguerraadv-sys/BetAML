@@ -73,6 +73,16 @@ BetAML/
         └── test_pipeline.py  # Smoke tests E2E + File Ingest + COAF + Logout/Blacklist
 ```
 
+      ## Documentacao Operacional
+
+      - `docs/ops-guide.md` - operacao da stack, migracoes e troubleshooting base
+      - `docs/go-live-checklist.md` - checklist de release e validacao pos-deploy
+      - `docs/slo-sli.md` - objetivos de confiabilidade e error budget
+      - `docs/runbook-incidentes.md` - procedimentos de resposta a incidentes
+      - `docs/aml-scorecard.md` - scorecard operacional AML (triagem, qualidade e SLA)
+      - `infra/grafana/provisioning/dashboards/betaml-reliability-slo.json` - painel de acompanhamento de SLO/SLI
+      - `.github/workflows/release-readiness.yml` - gate manual de readiness com Alembic + migracao legada + E2E smoke
+
 ---
 
 ## Quickstart
@@ -105,6 +115,25 @@ docker compose -f infra/docker-compose.yml up -d
 > Para apenas visualizar o plano sem aplicar:
 >
 > `bash scripts/postgres_migrate_existing.sh --dry-run`
+
+### Trilha formal com Alembic (baseline)
+
+O projeto agora inclui baseline Alembic em `services/api/alembic/` para evolucao transacional de schema.
+
+```bash
+cd services/api
+
+# Ver revisoes disponiveis
+alembic -c alembic.ini heads
+
+# Base nova (vazia): aplica ate o baseline
+alembic -c alembic.ini upgrade head
+
+# Base existente (ja com schema aplicado por SQL): apenas marca baseline
+alembic -c alembic.ini stamp 20260313_000001
+```
+
+Durante a transicao, mantenha `scripts/postgres_migrate_existing.sh` como fallback para ambientes legados.
 
 ### 2. Verificar saúde (aguardar ~20s)
 

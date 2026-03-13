@@ -1,4 +1,66 @@
 groups:
+  - name: betaml.slo
+    interval: 30s
+    rules:
+      - record: api:availability:ratio5m
+        expr: |
+          sum(rate(http_requests_total{job="betaml-api",status!~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total{job="betaml-api"}[5m]))
+
+      - record: api:error_rate:ratio5m
+        expr: |
+          sum(rate(http_requests_total{job="betaml-api",status=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total{job="betaml-api"}[5m]))
+
+      - record: api:latency_p95_seconds5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="betaml-api"}[5m])) by (le)
+          )
+
+      - alert: SLOAvailabilityBurnWarning
+        expr: api:availability:ratio5m < 0.995
+        for: 15m
+        labels:
+          severity: warning
+          slo: availability
+        annotations:
+          summary: "SLO de disponibilidade em risco (warning)"
+          description: "Disponibilidade API em 5m abaixo de 99.5% (valor atual: {{ $value | humanizePercentage }})."
+
+      - alert: SLOAvailabilityBurnCritical
+        expr: api:availability:ratio5m < 0.99
+        for: 5m
+        labels:
+          severity: critical
+          slo: availability
+        annotations:
+          summary: "SLO de disponibilidade violado (critical)"
+          description: "Disponibilidade API em 5m abaixo de 99.0% (valor atual: {{ $value | humanizePercentage }})."
+
+      - alert: SLOLatencyP95Violation
+        expr: api:latency_p95_seconds5m > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          slo: latency
+        annotations:
+          summary: "SLO de latencia p95 violado"
+          description: "Latencia p95 da API acima de 500ms por 10 minutos (valor atual: {{ $value | humanizeDuration }})."
+
+      - alert: SLOErrorRateViolation
+        expr: api:error_rate:ratio5m > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          slo: errors
+        annotations:
+          summary: "SLO de erro acima do limite"
+          description: "Taxa de erro 5xx acima de 1% por 10 minutos (valor atual: {{ $value | humanizePercentage }})."
+
   - name: betaml.api
     interval: 30s
     rules:
@@ -105,7 +167,7 @@ groups:
 
       - alert: IngestPipelineStalled
         expr: |
-          rate(http_requests_total{job="betaml-api",handler="/ingest/event"}[15m]) == 0
+          sum(rate(http_requests_total{job="betaml-api",handler=~"/ingest.*",method="POST"}[15m])) == 0
         for: 15m
         labels:
           severity: warning

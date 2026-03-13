@@ -19,6 +19,7 @@ Endpoints cobertos:
   - GET/POST/DELETE /rules/compound             (TestCompoundRulesAndMacros)
   - GET/POST/DELETE /rules/macros               (TestCompoundRulesAndMacros)
   - GET/POST/DELETE /player-lists               (TestPlayerLists)
+    - GET  /admin/kpis/aml                         (TestAdminAmlKpis)
 """
 import os
 import json
@@ -329,6 +330,38 @@ class TestAdminUsersCRUD:
         assert delete_resp.status_code == 204, (
             f"Expected 204 on user deletion, got {delete_resp.status_code}: {delete_resp.text}"
         )
+
+
+@skip_unless_stack
+class TestAdminAmlKpis:
+    """Covers GET /admin/kpis/aml."""
+
+    def test_admin_kpis_aml_returns_expected_shape(self):
+        admin_token = _login("admin_a", "admin123")["access_token"]
+        resp = api("/admin/kpis/aml", headers=_headers(admin_token))
+        assert resp.status_code == 200, (
+            f"Expected 200, got {resp.status_code}: {resp.text}"
+        )
+        data = resp.json()
+        expected_keys = {
+            "generated_at",
+            "window_days",
+            "alerts_open",
+            "alerts_in_review",
+            "alerts_labeled_30d",
+            "true_positive_rate_30d_percent",
+            "false_positive_rate_30d_percent",
+            "cases_open",
+            "cases_overdue",
+            "sla_breach_rate_open_cases_percent",
+            "avg_case_resolution_hours_30d",
+        }
+        assert expected_keys.issubset(data.keys()), (
+            f"Missing keys in KPI response. Got: {sorted(data.keys())}"
+        )
+        assert 0 <= float(data["true_positive_rate_30d_percent"]) <= 100
+        assert 0 <= float(data["false_positive_rate_30d_percent"]) <= 100
+        assert 0 <= float(data["sla_breach_rate_open_cases_percent"]) <= 100
 
 
 # ── Model Registry / Promote ───────────────────────────────────────────────────

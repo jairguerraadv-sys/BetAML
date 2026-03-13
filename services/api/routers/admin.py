@@ -28,6 +28,7 @@ from database import get_db
 from libs.models import (
     ApiKey,
     AuditLog,
+    Case,
     MappingConfig,
     RuleDefinition,
     ScoringConfig,
@@ -93,6 +94,20 @@ class TenantCreateOut(BaseModel):
     message: str
 
 
+class AMLKPIOut(BaseModel):
+    generated_at: datetime
+    window_days: int
+    alerts_open: int
+    alerts_in_review: int
+    alerts_labeled_30d: int
+    true_positive_rate_30d_percent: float
+    false_positive_rate_30d_percent: float
+    cases_open: int
+    cases_overdue: int
+    sla_breach_rate_open_cases_percent: float
+    avg_case_resolution_hours_30d: float
+
+
 # ── Maintenance mode ───────────────────────────────────────────────────────────
 
 @router.post("/admin/maintenance-mode", tags=["admin"])
@@ -119,6 +134,103 @@ async def set_maintenance_mode(
                        "SET_MAINTENANCE_MODE", "SystemFlag", None, {"enabled": enabled})
     await db.commit()
     return {"maintenance_mode": enabled}
+
+
+@router.get("/admin/kpis/aml", response_model=AMLKPIOut, tags=["admin"])
+async def get_aml_kpis(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_roles("ADMIN", "AUDITOR", "AML_ANALYST")),
+):
+    """Scorecard AML operacional para triagem, qualidade de rotulagem e SLA de casos."""
+    now_utc = datetime.now(UTC)
+    since_30d = now_utc - timedelta(days=30)
+    tenant_id = current_user.tenant_id
+
+    alerts_open = int((await db.execute(
+        select(sqlfunc.count(Alert.id)).where(
+            Alert.tenant_id == tenant_id,
+            Alert.status == "OPEN",
+        )
+    )).scalar() or 0)
+
+    alerts_in_review = int((await db.execute(
+        select(sqlfunc.count(Alert.id)).where(
+            Alert.tenant_id == tenant_id,
+            Alert.status == "IN_REVIEW",
+        )
+    )).scalar() or 0)
+
+    alerts_labeled_30d = int((await db.execute(
+        select(sqlfunc.count(Alert.id)).where(
+            Alert.tenant_id == tenant_id,
+            Alert.labeled_at.is_not(None),
+            Alert.labeled_at >= since_30d,
+        )
+    )).scalar() or 0)
+
+    true_positive_30d = int((await db.execute(
+        select(sqlfunc.count(Alert.id)).where(
+            Alert.tenant_id == tenant_id,
+            Alert.label == "TRUE_POSITIVE",
+            Alert.labeled_at.is_not(None),
+            Alert.labeled_at >= since_30d,
+        )
+    )).scalar() or 0)
+
+    false_positive_30d = int((await db.execute(
+        select(sqlfunc.count(Alert.id)).where(
+            Alert.tenant_id == tenant_id,
+            Alert.label == "FALSE_POSITIVE",
+            Alert.labeled_at.is_not(None),
+            Alert.labeled_at >= since_30d,
+        )
+    )).scalar() or 0)
+
+    cases_open = int((await db.execute(
+        select(sqlfunc.count(Case.id)).where(
+            Case.tenant_id == tenant_id,
+            Case.status.in_(["OPEN", "IN_REVIEW"]),
+        )
+    )).scalar() or 0)
+
+    cases_overdue = int((await db.execute(
+        select(sqlfunc.count(Case.id)).where(
+            Case.tenant_id == tenant_id,
+            Case.status.in_(["OPEN", "IN_REVIEW"]),
+            Case.sla_due_at.is_not(None),
+            Case.sla_due_at < now_utc,
+        )
+    )).scalar() or 0)
+
+    avg_case_resolution_hours_30d = float((await db.execute(
+        select(
+            sqlfunc.coalesce(
+                sqlfunc.avg(sqlfunc.extract("epoch", Case.closed_at - Case.created_at) / 3600.0),
+                0.0,
+            )
+        ).where(
+            Case.tenant_id == tenant_id,
+            Case.closed_at.is_not(None),
+            Case.closed_at >= since_30d,
+        )
+    )).scalar() or 0.0)
+
+    labeled_den = max(alerts_labeled_30d, 1)
+    open_cases_den = max(cases_open, 1)
+
+    return AMLKPIOut(
+        generated_at=now_utc,
+        window_days=30,
+        alerts_open=alerts_open,
+        alerts_in_review=alerts_in_review,
+        alerts_labeled_30d=alerts_labeled_30d,
+        true_positive_rate_30d_percent=round((true_positive_30d / labeled_den) * 100.0, 2) if alerts_labeled_30d else 0.0,
+        false_positive_rate_30d_percent=round((false_positive_30d / labeled_den) * 100.0, 2) if alerts_labeled_30d else 0.0,
+        cases_open=cases_open,
+        cases_overdue=cases_overdue,
+        sla_breach_rate_open_cases_percent=round((cases_overdue / open_cases_den) * 100.0, 2) if cases_open else 0.0,
+        avg_case_resolution_hours_30d=round(avg_case_resolution_hours_30d, 2),
+    )
 
 
 # ── API Keys ───────────────────────────────────────────────────────────────────

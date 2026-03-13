@@ -7,6 +7,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.1] — 2026-03-13
+
+### Added — Migration governance & operations
+- Alembic baseline scaffold em `services/api/alembic/` (`env.py`, `alembic.ini`, template e revisao `20260313_000001`)
+- CI: novo job `Alembic Baseline Check` em `.github/workflows/ci.yml` para validar heads/history
+- Docs operacionais atualizados com bootstrap Alembic em `README.md` e `docs/ops-guide.md`
+- Workflow manual `.github/workflows/release-readiness.yml` com gate completo (Alembic, migracao legada dry-run, stack smoke e Playwright auth/cases) usando inputs `e2e_username` e `e2e_password`
+- Dashboard `betaml-reliability-slo` provisionado em Grafana para acompanhar disponibilidade, latencia p95 e erro 5xx
+- Novas regras SLO no Prometheus (`infra/prometheus_alert_rules.yml`) com recording rules e alertas de budget burn
+- Endpoint de scorecard AML `GET /admin/kpis/aml` (triagem, rotulagem e SLA de casos)
+- Documentacao do scorecard em `docs/aml-scorecard.md`
+- Teste de integracao para KPI AML em `tests/integration/test_new_endpoints.py`
+
+### Changed
+- Roadmap de migracoes passa a operar em modelo hibrido: Alembic formal + script idempotente como fallback legado
+
 ## [0.9.0] — 2026-03-13
 
 ### Added — CI/CD & Kubernetes
