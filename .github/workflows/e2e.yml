@@ -1,0 +1,78 @@
+name: E2E Tests
+
+on:
+  workflow_dispatch:          # manual trigger via GitHub UI
+  schedule:
+    - cron: '0 6 * * 1'      # every Monday 06:00 UTC
+
+env:
+  NODE_VERSION: "20"
+  BASE_URL: "http://localhost:3000"
+
+jobs:
+  e2e:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Start full stack via docker compose
+      - name: Start services
+        run: |
+          cp .env.example .env
+          docker compose -f infra/docker-compose.yml up -d \
+            postgres redis kafka api frontend
+        env:
+          JWT_SECRET: ci-e2e-secret-at-least-32-characters-long
+          PII_ENCRYPTION_KEY: ci-pii-key-32-characters-long!!
+
+      - name: Wait for API health
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8000/health && break
+            echo "Waiting for API... ($i/30)" && sleep 5
+          done
+
+      - name: Wait for frontend
+        run: |
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:3000 && break
+            echo "Waiting for frontend... ($i/20)" && sleep 5
+          done
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install Playwright
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E smoke tests
+        working-directory: e2e
+        env:
+          BASE_URL: ${{ env.BASE_URL }}
+          E2E_USERNAME: analyst_a
+          E2E_PASSWORD: analyst123
+        run: npx playwright test --reporter=html
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 14
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v

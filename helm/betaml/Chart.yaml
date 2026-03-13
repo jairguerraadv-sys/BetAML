@@ -1,0 +1,14 @@
+apiVersion: v2
+name: betaml
+description: BetAML — PLD/FT compliance platform for Brazilian sports betting operators
+type: application
+version: 0.9.0
+appVersion: "0.9.0"
+keywords:
+  - aml
+  - compliance
+  - fintech
+  - pld
+maintainers:
+  - name: BetAML Team
+    email: ops@betaml.io

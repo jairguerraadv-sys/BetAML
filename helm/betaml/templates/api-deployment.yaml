@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "betaml.fullname" . }}-api
+  labels:
+    {{- include "betaml.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "betaml.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "betaml.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.api.image.repository }}:{{ include "betaml.imageTag" (dict "componentTag" .Values.api.image.tag "globalTag" .Values.global.imageTag) }}"
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "betaml.fullname" . }}-config
+            - secretRef:
+                name: {{ .Values.api.existingSecret }}
+          env:
+            - name: REDIS_URL
+              value: {{ .Values.api.env.REDIS_URL | quote }}
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: {{ .Values.api.env.KAFKA_BOOTSTRAP_SERVERS | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.api.env.LOG_LEVEL | quote }}

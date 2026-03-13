@@ -45,7 +45,8 @@ jobs:
           python -m pytest tests/ -q --tb=short \
             --cov=services/api \
             --cov-report=term-missing \
-            --cov-report=xml:coverage.xml
+            --cov-report=xml:coverage.xml \
+            --cov-fail-under=40
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
@@ -98,3 +99,69 @@ jobs:
       - name: TypeScript strict check
         working-directory: services/frontend
         run: npx tsc --noEmit
+
+  # ── Backend: security scan (bandit) ───────────────────────────────────────
+  backend-security:
+    name: Security Scan (bandit)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install bandit
+        run: pip install bandit==1.7.8
+
+      - name: Run bandit — SARIF report (medium+)
+        run: |
+          bandit -r services/api/ libs/ \
+            --severity-level medium \
+            --confidence-level medium \
+            --exclude services/api/tests,services/api/seeds.py \
+            --format sarif \
+            --output bandit-results.sarif || true
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: bandit-results.sarif
+        continue-on-error: true  # requires GitHub Advanced Security on private repos
+
+      - name: Fail on high-severity findings
+        run: |
+          bandit -r services/api/ libs/ \
+            --severity-level high \
+            --confidence-level high \
+            --exclude services/api/tests,services/api/seeds.py \
+            --quiet
+
+  # ── Docker: validate compose + spot-build critical images ─────────────────
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml syntax
+        run: docker compose -f infra/docker-compose.yml config --quiet
+
+      - name: Build API image (from repo root — Dockerfile copies libs/)
+        run: |
+          docker build \
+            --file services/api/Dockerfile \
+            --tag betaml/api:ci \
+            .
+
+      - name: Build frontend image (deps stage only — skips next build)
+        run: |
+          docker build \
+            --file services/frontend/Dockerfile \
+            --target deps \
+            --tag betaml/frontend-deps:ci \
+            services/frontend

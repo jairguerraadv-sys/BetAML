@@ -1,0 +1,142 @@
+# Default values for betaml.
+# Override per-environment with -f values-prod.yaml
+
+global:
+  imageRegistry: ""           # e.g. "ghcr.io/betaml" — prefix applied to all images
+  imageTag: "latest"
+  storageClass: ""            # "" uses cluster default
+
+## ─── API ────────────────────────────────────────────────────────────────────
+api:
+  replicaCount: 2
+  image:
+    repository: betaml/api
+    pullPolicy: IfNotPresent
+    tag: ""                   # defaults to global.imageTag
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+  env:
+    DATABASE_URL: ""          # set via secret
+    REDIS_URL: "redis://redis:6379/0"
+    KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
+    LOG_LEVEL: "INFO"
+  # Reference to an existing secret that contains:
+  #   DATABASE_URL, JWT_SECRET, PII_ENCRYPTION_KEY, MINIO_SECRET_KEY
+  existingSecret: "betaml-secrets"
+
+## ─── FRONTEND ────────────────────────────────────────────────────────────────
+frontend:
+  replicaCount: 2
+  image:
+    repository: betaml/frontend
+    pullPolicy: IfNotPresent
+    tag: ""
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    NEXT_PUBLIC_API_URL: ""   # e.g. https://api.betaml.io
+
+## ─── ML TRAINER ─────────────────────────────────────────────────────────────
+mlTrainer:
+  enabled: true
+  image:
+    repository: betaml/ml-trainer
+    pullPolicy: IfNotPresent
+    tag: ""
+  schedule: "0 3 * * *"      # 03:00 UTC daily (CronJob)
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
+## ─── POSTGRES ────────────────────────────────────────────────────────────────
+postgresql:
+  enabled: true               # set false to use external DB
+  image:
+    repository: postgres
+    tag: "16-alpine"
+  persistence:
+    enabled: true
+    size: 50Gi
+  auth:
+    existingSecret: "betaml-secrets"
+    secretKeys:
+      adminPasswordKey: POSTGRES_PASSWORD
+  primary:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+
+## ─── REDIS ───────────────────────────────────────────────────────────────────
+redis:
+  replicaCount: 1
+  image:
+    repository: redis
+    tag: "7-alpine"
+  persistence:
+    enabled: true
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+## ─── INGRESS ─────────────────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: betaml.example.com
+      paths:
+        - path: /api
+          pathType: Prefix
+          backend: api
+        - path: /
+          pathType: Prefix
+          backend: frontend
+  tls:
+    - secretName: betaml-tls
+      hosts:
+        - betaml.example.com
+
+## ─── CONFIG MAP (non-secret env) ────────────────────────────────────────────
+config:
+  ENVIRONMENT: "production"
+  ALLOWED_ORIGINS: "https://betaml.example.com"
+  MINIO_ENDPOINT: "minio:9000"
+  MINIO_BUCKET: "betaml-models"
+  MINIO_ACCESS_KEY: "betaml"

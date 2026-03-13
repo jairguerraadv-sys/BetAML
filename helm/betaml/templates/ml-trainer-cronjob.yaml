@@ -1,0 +1,35 @@
+{{- if .Values.mlTrainer.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "betaml.fullname" . }}-ml-trainer
+  labels:
+    {{- include "betaml.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ml-trainer
+spec:
+  schedule: {{ .Values.mlTrainer.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "betaml.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: ml-trainer
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: ml-trainer
+              image: "{{ .Values.mlTrainer.image.repository }}:{{ include "betaml.imageTag" (dict "componentTag" .Values.mlTrainer.image.tag "globalTag" .Values.global.imageTag) }}"
+              imagePullPolicy: {{ .Values.mlTrainer.image.pullPolicy }}
+              resources:
+                {{- toYaml .Values.mlTrainer.resources | nindent 16 }}
+              envFrom:
+                - configMapRef:
+                    name: {{ include "betaml.fullname" . }}-config
+                - secretRef:
+                    name: {{ .Values.api.existingSecret }}
+{{- end }}

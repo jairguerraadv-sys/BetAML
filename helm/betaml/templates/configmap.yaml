@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "betaml.fullname" . }}-config
+  labels:
+    {{- include "betaml.labels" . | nindent 4 }}
+data:
+  ENVIRONMENT: {{ .Values.config.ENVIRONMENT | quote }}
+  ALLOWED_ORIGINS: {{ .Values.config.ALLOWED_ORIGINS | quote }}
+  MINIO_ENDPOINT: {{ .Values.config.MINIO_ENDPOINT | quote }}
+  MINIO_BUCKET: {{ .Values.config.MINIO_BUCKET | quote }}
+  MINIO_ACCESS_KEY: {{ .Values.config.MINIO_ACCESS_KEY | quote }}
