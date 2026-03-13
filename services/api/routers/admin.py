@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func as sqlfunc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +25,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import create_access_token, get_current_user, hash_password, require_roles
 from config import settings
 from database import get_db
-from rate_limit import limiter
 from libs.models import (
     ApiKey,
     AuditLog,
@@ -395,9 +394,7 @@ DEFAULT_RULES_TEMPLATE = [
 
 
 @router.post("/admin/tenants", response_model=TenantCreateOut, status_code=201, tags=["admin"])
-@limiter.limit("5/minute")
 async def create_tenant(
-    request: Request,
     body: TenantCreateIn,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_roles("SUPER_ADMIN")),
