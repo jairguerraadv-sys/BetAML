@@ -137,7 +137,7 @@ export interface FeatureStoreCurrent {
 
 export interface FeatureStoreHistoryItem {
   id: string;
-  snapshot_date: string;
+  snapshot_date: string | null;
   created_at: string;
   features: Record<string, unknown>;
   drift_score?: number | null;

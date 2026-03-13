@@ -9,7 +9,7 @@ Expõe:
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import structlog
@@ -121,7 +121,7 @@ async def redis_rate_limit(
     if r is None:
         return  # sem Redis → não bloquear por falta de infra
 
-    minute_key = datetime.utcnow().strftime("%Y%m%d%H%M")
+    minute_key = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
     key = f"betaml:rate:{tenant_id}:{bucket}:{minute_key}"
     try:
         count = await r.incr(key)

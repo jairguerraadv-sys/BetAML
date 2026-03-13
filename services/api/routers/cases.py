@@ -325,7 +325,7 @@ async def generate_report_package(
         "alert_types":           list({a.alert_type for a in alerts if a.alert_type}),
     }
     report_id    = str(uuid.uuid4())
-    generated_at = datetime.utcnow().isoformat() + "Z"
+    generated_at = datetime.now(UTC).isoformat()
     payload = {
         "report_id": report_id, "schema_version": "1.0",
         "generated_at": generated_at, "generated_by": current_user.id,
@@ -474,7 +474,7 @@ async def submit_report_package(
             "report_package_id": rp.id,
             "tracking_id": tracking_id,
             "submitted_by": current_user.id,
-            "submitted_at": datetime.utcnow().isoformat() + "Z",
+            "submitted_at": datetime.now(UTC).isoformat(),
             "channel": "STUB_MANUAL",
             "note": (
                 "Submissão registrada. Quando o portal COAF disponibilizar API, "
@@ -503,7 +503,7 @@ async def submit_report_package(
         "status": "FILED",
         "report_package_id": rp.id,
         "tracking_id": tracking_id,
-        "submitted_at": datetime.utcnow().isoformat() + "Z",
+        "submitted_at": datetime.now(UTC).isoformat(),
         "submitted_by": current_user.id,
         "channel": "STUB_MANUAL",
         "message": (

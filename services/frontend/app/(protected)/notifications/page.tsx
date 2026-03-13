@@ -1,33 +1,30 @@
 'use client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import {
+  Notification,
+  fetchNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+} from '@/lib/api';
 import { Bell, CheckCheck } from 'lucide-react';
-
-interface Notification {
-  id: string;
-  title: string;
-  body: string;
-  is_read: boolean;
-  created_at: string;
-}
-
-const fetchNotifications = () =>
-  api.get<Notification[]>('/notifications').then((r) => r.data);
-
-const markRead    = (id: string) => api.post(`/notifications/${id}/read`);
-const markAllRead = ()           => api.post('/notifications/read-all');
 
 export default function NotificationsPage() {
   const qc = useQueryClient();
 
   const { data: items = [], isLoading } = useQuery({
     queryKey: ['notifications'],
-    queryFn: fetchNotifications,
+    queryFn: () => fetchNotifications(),
     refetchInterval: 30_000,
   });
 
-  const readOne  = useMutation({ mutationFn: markRead,    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }) });
-  const readAll  = useMutation({ mutationFn: markAllRead, onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }) });
+  const readOne = useMutation({
+    mutationFn: (id: string) => markNotificationRead(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
+  });
+  const readAll = useMutation({
+    mutationFn: () => markAllNotificationsRead(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
+  });
 
   const unread = items.filter((n: Notification) => !n.is_read).length;
 

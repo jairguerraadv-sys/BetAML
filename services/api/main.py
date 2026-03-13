@@ -15,14 +15,9 @@ Routes:
 from __future__ import annotations
 
 import asyncio
-import csv
-import io
-import json
 import os
 import sys
-import uuid
-from datetime import UTC, datetime, timedelta
-from typing import Any, Optional
+from datetime import UTC, datetime
 
 import structlog
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -30,58 +25,25 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from fastapi import (
-    BackgroundTasks,
-    Depends,
     FastAPI,
-    File,
-    Form,
     HTTPException,
-    Query,
     Request,
-    UploadFile,
-    status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, Field
-from sqlalchemy import desc, select, text, update, func as sqlfunc
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.responses import JSONResponse
+from sqlalchemy import desc, select, text
 
 # Adiciona libs ao path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from auth import (
-    create_access_token,
-    decrypt_pii,
-    encrypt_pii,
-    get_current_user,
-    hash_password,
-    mask_cpf,
-    oauth2_scheme,
-    require_roles,
-    revoke_token,
-    verify_password,
-)
 from config import settings
-from database import AsyncSessionLocal, current_tenant_id, engine, get_db
+from database import AsyncSessionLocal, current_tenant_id, engine
 from rate_limit import limiter  # Shared rate limiter (slowapi + Redis)
 from models import (
-    Alert,
-    AuditLog,
     Base,
-    Bet,
-    Case,
-    CaseEvent,
     FeatureSnapshot,
-    FinancialTransaction,
-    IngestJob,
-    MappingConfig,
     Notification,
     Player,
-    ReportPackage,
-    RuleDefinition,
-    ScoringConfig,
     Tenant,
     User,
 )
@@ -531,7 +493,7 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
 # ─── Health ───────────────────────────────────────
 @app.get("/health", tags=["infra"])
 async def health():
-    return {"status": "ok", "version": "2.1.0", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "ok", "version": "2.1.0", "timestamp": datetime.now(UTC).isoformat()}
 
 
 # ═══════════════════════════════════════════════════

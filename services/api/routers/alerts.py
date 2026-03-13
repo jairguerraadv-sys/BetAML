@@ -82,7 +82,7 @@ async def stream_alerts(
 
     async def event_generator() -> AsyncGenerator[str, None]:
         # Envia os 10 alertas mais recentes imediatamente ao conectar
-        last_seen_at = datetime.utcnow()
+        last_seen_at = datetime.now(timezone.utc)
         try:
             q = (
                 select(Alert)
@@ -183,7 +183,7 @@ async def triage_alert(
         raise HTTPException(404, "Alerta não encontrado")
     a.status = body.disposition
     a.triaged_by = current_user.id
-    a.triaged_at = datetime.utcnow()
+    a.triaged_at = datetime.now(timezone.utc)
     await write_audit(db, current_user.tenant_id, current_user.id, "TRIAGE", "Alert", alert_id)
     await db.commit()
     return {"id": alert_id, "status": a.status}
@@ -241,7 +241,7 @@ async def get_alert_related_transactions(
     if not a.player_id:
         return {"transactions": [], "bets": [], "alert_id": alert_id}
 
-    alert_ts = a.created_at or datetime.utcnow()
+    alert_ts = a.created_at or datetime.now(timezone.utc)
     if alert_ts.tzinfo is not None:
         alert_ts = alert_ts.replace(tzinfo=None)
     window_delta = timedelta(hours=window_hours)

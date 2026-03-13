@@ -8,26 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user
 from database import get_db
+from libs.schemas import CompoundRuleOut, RuleMacroOut
 from models import CompoundRule, RuleMacro, User
 from utils import write_audit
 
 router = APIRouter(tags=["rules"])
 
 
-# ── Pydantic in/out ───────────────────────────────────────────────────────────
-
-class CompoundRuleOut(BaseModel):
-    id: str
-    name: str
-    logic: str | None = None
-    component_rule_ids: list[str]
-    score_weights: dict | None = None
-    min_score_threshold: float | None = None
-    is_active: bool
-
-    class Config:
-        from_attributes = True
-
+# ── Pydantic in (create) ───────────────────────────────────────────────────────
 
 class CompoundRuleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
@@ -35,16 +23,6 @@ class CompoundRuleCreate(BaseModel):
     component_rule_ids: list[str]
     score_weights: dict | None = None
     min_score_threshold: float | None = None
-
-
-class RuleMacroOut(BaseModel):
-    id: str
-    name: str
-    body_dsl: str
-    description: str | None = None
-
-    class Config:
-        from_attributes = True
 
 
 class RuleMacroCreate(BaseModel):

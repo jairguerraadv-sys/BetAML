@@ -5,7 +5,7 @@ import base64
 import hashlib
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -47,7 +47,7 @@ async def revoke_token(jti: str, exp: int) -> None:
     try:
         r = await _get_auth_redis()
         if r:
-            ttl = max(int(exp - datetime.utcnow().timestamp()), 1)
+            ttl = max(int(exp - datetime.now(timezone.utc).timestamp()), 1)
             await r.set(f"betaml:revoked:jti:{jti}", "1", ex=ttl)
     except Exception:
         pass  # não bloquear logout por falha de Redis
@@ -63,7 +63,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_access_token(data: dict[str, Any], expires_delta: timedelta | None = None) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.access_token_expire_min))
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=settings.access_token_expire_min))
     # jti (JWT ID) único por token – usado para revogação/blacklist
     to_encode.update({"exp": expire, "jti": str(uuid.uuid4())})
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
@@ -158,7 +158,7 @@ async def validate_api_key(
             exp_ts = exp.timestamp()
         else:
             exp_ts = exp.timestamp()
-        if datetime.utcnow().timestamp() > exp_ts:
+        if datetime.now(timezone.utc).timestamp() > exp_ts:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="API key expirada",
@@ -167,7 +167,7 @@ async def validate_api_key(
 
     # Atualizar last_used_at (best-effort — não bloqueia em caso de falha de commit)
     try:
-        api_key.last_used_at = datetime.utcnow()
+        api_key.last_used_at = datetime.now(timezone.utc)
         await db.commit()
     except Exception:
         await db.rollback()
@@ -176,7 +176,7 @@ async def validate_api_key(
     try:
         r = await _get_auth_redis()
         if r:
-            today = datetime.utcnow().strftime("%Y-%m-%d")
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             counter_key = f"apikey_usage:{api_key.key_prefix}:{today}"
             await r.incr(counter_key)
             await r.expire(counter_key, 32 * 24 * 3600)  # 32 dias
