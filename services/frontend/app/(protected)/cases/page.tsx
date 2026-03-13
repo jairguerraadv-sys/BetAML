@@ -43,6 +43,7 @@ function CaseRow({ c, onClick }: { c: Case; onClick: () => void }) {
   return (
     <div
       onClick={onClick}
+      data-testid="case-row"
       className={`flex cursor-pointer items-center gap-4 rounded-xl border bg-white px-5 py-3.5 shadow-sm transition-all hover:shadow-md hover:border-brand/30 ${
         isUrgent ? 'border-orange-200' : 'border-gray-200'
       }`}

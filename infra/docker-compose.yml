@@ -291,7 +291,7 @@ services:
     container_name: betaml-frontend
     depends_on: [api]
     environment:
-      NEXT_PUBLIC_API_URL:     ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_API_URL:     ${NEXT_PUBLIC_API_URL:-http://api:8000}
       NEXT_PUBLIC_API_TIMEOUT: ${NEXT_PUBLIC_API_TIMEOUT:-30000}
     ports:
       - "3000:3000"

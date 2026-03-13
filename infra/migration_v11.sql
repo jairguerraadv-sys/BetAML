@@ -1,8 +1,6 @@
 -- Migration v11: Performance indexes for high-volume queries
 -- Run with: psql -U betaml -d betaml_dev -f migration_v11.sql
 
-BEGIN;
-
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Alerts: principais queries de listagem e filtragem
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -47,9 +45,9 @@ ON cases(tenant_id, priority);
 CREATE INDEX IF NOT EXISTS idx_players_tenant_risk_score
 ON players(tenant_id, risk_score DESC NULLS LAST);
 
--- Lookup por customer_id (ID do backoffice)
+-- Lookup por external_player_id (ID do backoffice)
 CREATE INDEX IF NOT EXISTS idx_players_tenant_customer_id
-ON players(tenant_id, customer_id);
+ON players(tenant_id, external_player_id);
 
 -- Players com status específico (ACTIVE, SUSPENDED, ERASED)
 CREATE INDEX IF NOT EXISTS idx_players_tenant_status
@@ -65,11 +63,11 @@ ON players(tenant_id, cpf_encrypted);
 
 -- Timeline de transações por player (DESC ordem cronológica)
 CREATE INDEX IF NOT EXISTS idx_financial_transactions_tenant_player_ts
-ON financial_transactions(tenant_id, player_id, transaction_timestamp DESC);
+ON financial_transactions(tenant_id, player_id, occurred_at DESC);
 
 -- Filtro por tipo de transação (DEPOSIT, WITHDRAWAL, etc.)
 CREATE INDEX IF NOT EXISTS idx_financial_transactions_tenant_type
-ON financial_transactions(tenant_id, transaction_type);
+ON financial_transactions(tenant_id, type);
 
 -- Transações processadas (status COMPLETED vs PENDING)
 CREATE INDEX IF NOT EXISTS idx_financial_transactions_tenant_status
@@ -81,11 +79,11 @@ ON financial_transactions(tenant_id, status);
 
 -- Timeline de bets por player
 CREATE INDEX IF NOT EXISTS idx_bets_tenant_player_ts
-ON bets(tenant_id, player_id, placed_at DESC);
+ON bets(tenant_id, player_id, occurred_at DESC);
 
 -- Bets settled (payout calculado)
 CREATE INDEX IF NOT EXISTS idx_bets_tenant_settled
-ON bets(tenant_id, settled) WHERE settled = TRUE;
+ON bets(tenant_id, settled_at) WHERE settled_at IS NOT NULL;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- AuditLog: compliance queries (filtro por entity, user, ação)
@@ -105,7 +103,7 @@ ON audit_logs(tenant_id, user_id);
 
 -- Audit de acesso PII (LGPD Art. 37)
 CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_pii
-ON audit_logs(tenant_id, pii_accessed) WHERE pii_accessed = TRUE;
+ON audit_logs(tenant_id, pii_accessed) WHERE pii_accessed IS NOT NULL;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- IngestJob: tracking de jobs de ingestão
@@ -153,22 +151,7 @@ ON notifications(tenant_id, is_read, created_at DESC);
 
 -- Regras ativas por tenant (rules engine fetch)
 CREATE INDEX IF NOT EXISTS idx_rule_definitions_tenant_active
-ON rule_definitions(tenant_id, is_active) WHERE is_active = TRUE;
-
--- ═══════════════════════════════════════════════════════════════════════════
--- Vacuum e Analyze (otimização de statistics para query planner)
--- ═══════════════════════════════════════════════════════════════════════════
-
-VACUUM ANALYZE alerts;
-VACUUM ANALYZE cases;
-VACUUM ANALYZE players;
-VACUUM ANALYZE financial_transactions;
-VACUUM ANALYZE bets;
-VACUUM ANALYZE audit_logs;
-VACUUM ANALYZE ingest_jobs;
-VACUUM ANALYZE feature_snapshots;
-
-COMMIT;
+ON rule_definitions(tenant_id, status) WHERE status = 'ACTIVE';
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Verificação de índices criados

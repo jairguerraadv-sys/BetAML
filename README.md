@@ -90,11 +90,21 @@ docker compose -f infra/docker-compose.yml up -d
 
 > **Nota:** As migrações SQL são executadas automaticamente na inicialização do container
 > PostgreSQL na ordem: `init-db.sql` → `migration_v2.sql` → `migration_v3.sql` → `migration_v4.sql`
-> → `migration_v5.sql` → `migration_v6.sql`.
+> → `migration_v5.sql` → `migration_v6.sql` → `migration_v7.sql` → `migration_v8.sql`
+> → `migration_v9.sql` → `migration_v10.sql` → `migration_v11.sql` → `migration_v12.sql`
+> → `migration_v13.sql`.
 > O `migration_v4.sql` ativa as políticas **RLS** em todas as tabelas sensíveis.
 > O `migration_v6.sql` adiciona colunas de threshold (`low_threshold`, `medium_threshold`, etc.)
-> à tabela `scoring_configs`. **Se o volume PostgreSQL já existia sem esta migração**, execute
-> manualmente: `docker exec betaml-postgres psql -U betaml -d betaml_dev -f /docker-entrypoint-initdb.d/06-migration.sql`
+> à tabela `scoring_configs`.
+>
+> **Se o volume PostgreSQL ja existia** e voce precisa aplicar upgrades incrementalmente,
+> use o script idempotente abaixo (recomendado):
+>
+> `bash scripts/postgres_migrate_existing.sh`
+>
+> Para apenas visualizar o plano sem aplicar:
+>
+> `bash scripts/postgres_migrate_existing.sh --dry-run`
 
 ### 2. Verificar saúde (aguardar ~20s)
 
@@ -116,7 +126,7 @@ Login com `tenant_slug` explícito (recomendado em produção para garantir isol
 ```bash
 curl -s -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username": "admin_a", "password": "admin123", "tenant_slug": "operadora-a"}' | jq .
+  -d '{"username": "admin_a", "password": "admin123", "tenant_slug": "operador_a"}' | jq .
 ```
 
 ### 4. Autenticação e logout

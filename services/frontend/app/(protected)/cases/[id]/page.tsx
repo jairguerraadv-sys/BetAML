@@ -557,10 +557,9 @@ function StickyAnnotations({ caseId }: { caseId: string }) {
     if (!text.trim()) return;
     setSaving(true);
     try {
-      const token = localStorage.getItem('betaml_token');
       await fetch(`/api-proxy/cases/${caseId}/events`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ event_type: 'COMMENTED', content: { comment: text } }),
       });
       setText('');

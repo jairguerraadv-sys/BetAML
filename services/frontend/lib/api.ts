@@ -204,6 +204,13 @@ export const fetchCases = (params?: Record<string, string>) =>
 export const fetchCase = (id: string) =>
   api.get<CaseDetail>(`/cases/${id}`).then((r) => r.data);
 
+export const createCase = (body: {
+  title: string;
+  description?: string;
+  player_id?: string;
+  severity?: string;
+}) => api.post<{ id: string; title: string; status: string }>('/cases', body).then((r) => r.data);
+
 export const fetchPlayers = (params?: Record<string, string>) =>
   api.get<Player[]>('/players', { params }).then((r) => r.data);
 

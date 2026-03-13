@@ -100,6 +100,18 @@ CREATE TABLE IF NOT EXISTS betaml.player_features_daily (
     shared_device_count     UInt32,
     shared_bank_count       UInt32,
     chargeback_count_30d    UInt32,
+    deposit_velocity        Decimal(10,4),
+    unique_instruments_7d   UInt32,
+    night_activity_ratio    Decimal(10,4),
+    weekend_activity_ratio  Decimal(10,4),
+    avg_odds_bet_7d         Decimal(10,4),
+    win_loss_ratio_30d      Decimal(10,4),
+    avg_dep_to_wdraw_hours  Decimal(10,4),
+    multi_currency_flag     UInt8,
+    chargeback_rate_30d     Decimal(10,4),
+    bonus_to_real_ratio_30d Decimal(10,4),
+    cashout_ratio_7d        Decimal(10,4),
+    shared_instrument_score Decimal(10,4),
     feature_version         UInt8 DEFAULT 1,
     computed_at             DateTime DEFAULT now()
 )

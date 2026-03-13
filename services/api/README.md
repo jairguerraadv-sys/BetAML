@@ -57,14 +57,14 @@ python seeds.py
 |---|---|---|---|
 | `POST` | `/auth/login` | Public | JWT login |
 | `POST` | `/auth/logout` | Authenticated | Revoke current token (Redis blacklist) |
-| `GET` | `/auth/me` | Authenticated | Current user info |
+| `GET` | `/me` / `/auth/me` | Authenticated | Current user info |
 | `POST` | `/ingest/event` | ADMIN / API Key | Ingest a single canonical event |
 | `POST` | `/ingest/file` | ADMIN / API Key | Upload a CSV/JSON file for batch ingest |
 | `GET` | `/alerts` | AML_ANALYST+ | List alerts with filters |
 | `PATCH` | `/alerts/{id}/label` | AML_ANALYST+ | Label an alert TRUE/FALSE positive |
 | `GET` | `/cases` | AML_ANALYST+ | List investigation cases |
 | `POST` | `/cases` | AML_ANALYST+ | Open a new case |
-| `POST` | `/cases/{id}/report-package/submit` | AML_ANALYST+ | Submit COAF SAR package |
+| `POST` | `/cases/{id}/report-package` | AML_ANALYST+ | Generate/submit COAF SAR package |
 | `GET` | `/players` | AML_ANALYST+ | List players with risk scores |
 | `POST` | `/players/{id}/erase` | ADMIN | LGPD Art. 18 data erasure |
 | `GET` | `/rules` | ADMIN | List DSL rules |
@@ -85,8 +85,8 @@ python seeds.py
 | `GET` | `/ml/models` | AML_ANALYST+ | Model registry list |
 | `POST` | `/ml/models/{id}/promote` | ADMIN | Promote model to champion |
 | `GET` | `/notifications` | Authenticated | In-app notifications |
-| `GET` | `/feature-store/{player_id}` | AML_ANALYST+ | Current feature snapshot |
-| `GET` | `/feature-store/{player_id}/history` | AML_ANALYST+ | Historical feature snapshots |
+| `GET` | `/feature-store/players/{player_id}/current` | AML_ANALYST+ | Current feature snapshot |
+| `GET` | `/feature-store/players/{player_id}/history` | AML_ANALYST+ | Historical feature snapshots |
 | `GET` | `/metrics` | Internal | Prometheus metrics |
 | `GET` | `/health` | Public | Health check |
 

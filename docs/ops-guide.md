@@ -101,18 +101,11 @@ run(create())
 Execute as migrations em ordem crescente de número. O arquivo `init-db.sql` cria o schema base (v1). As migrations incrementais adicionam tabelas e colunas conforme o projeto evolui.
 
 ```bash
-# Helper: aplica uma migration específica
-apply_migration() {
-  local version=$1
-  docker compose exec postgres psql -U betaml -d betaml \
-    -f /migrations/migration_v${version}.sql
-}
+# Recomendado para banco existente (idempotente + controle de checksum)
+bash scripts/postgres_migrate_existing.sh
 
-# Aplicar sequencialmente a partir de v2
-for v in 2 3 4 5 6 7 8 9 10 11 12; do
-  echo "=== Aplicando migration v$v ==="
-  apply_migration $v
-done
+# Apenas visualizar plano (sem aplicar)
+bash scripts/postgres_migrate_existing.sh --dry-run
 ```
 
 ### Resumo de Cada Migration
@@ -136,38 +129,43 @@ done
 
 ```bash
 # Exemplo: aplicar apenas a v9
-docker compose exec postgres psql -U betaml -d betaml \
-  -f /migrations/migration_v9.sql
+docker compose -f infra/docker-compose.yml exec -T postgres \
+  psql -U betaml -d betaml_dev < infra/migration_v9.sql
 ```
 
 ### Verificar Migrações Aplicadas
 
 ```bash
 # Checar se coluna snapshot_date existe (v7)
-docker compose exec postgres psql -U betaml -d betaml -c \
+docker compose exec postgres psql -U betaml -d betaml_dev -c \
   "SELECT column_name FROM information_schema.columns
    WHERE table_name='feature_snapshots' AND column_name='snapshot_date';"
 
 # Checar constraint de status (v9)
-docker compose exec postgres psql -U betaml -d betaml -c \
+docker compose exec postgres psql -U betaml -d betaml_dev -c \
   "\d players" | grep chk_player_status
 
 # Checar coluna feature_version (v10)
-docker compose exec postgres psql -U betaml -d betaml -c \
+docker compose exec postgres psql -U betaml -d betaml_dev -c \
   "SELECT column_name, data_type, column_default
    FROM information_schema.columns
    WHERE table_name='feature_snapshots' AND column_name='feature_version';"
 
 # Checar índices de performance criados na v11
-docker compose exec postgres psql -U betaml -d betaml -c \
+docker compose exec postgres psql -U betaml -d betaml_dev -c \
   "SELECT indexname FROM pg_indexes WHERE schemaname='public'
    AND indexname LIKE 'idx_%' ORDER BY indexname;" | wc -l
 # Deve retornar ≥ 30 índices
 
 # Checar coluna label_note em alerts (v12)
-docker compose exec postgres psql -U betaml -d betaml -c \
+docker compose exec postgres psql -U betaml -d betaml_dev -c \
   "SELECT column_name FROM information_schema.columns
    WHERE table_name='alerts' AND column_name='label_note';"
+
+# Checar controle de migrations aplicadas pelo script idempotente
+docker compose -f infra/docker-compose.yml exec -T postgres \
+  psql -U betaml -d betaml_dev -c \
+  "SELECT filename, applied_at FROM schema_migrations ORDER BY applied_at DESC LIMIT 10;"
 ```
 
 ### Reverter Migration v2

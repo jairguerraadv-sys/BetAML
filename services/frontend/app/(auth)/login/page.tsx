@@ -18,6 +18,14 @@ export default function LoginPage() {
       // login() chama /api/auth/login (Next.js API route) que seta cookie httpOnly.
       // O token NUNCA toca o localStorage — imune a XSS.
       await login(username, password);
+
+      // Carrega perfil autenticado e guarda metadados locais (sem token).
+      const meRes = await fetch('/api-proxy/me');
+      if (meRes.ok) {
+        const me = await meRes.json();
+        localStorage.setItem('betaml_user', JSON.stringify(me));
+      }
+
       router.push('/dashboard');
     } catch {
       setError('Credenciais inválidas.');
@@ -36,6 +44,7 @@ export default function LoginPage() {
           <input
             required
             type="text"
+            aria-label="Usuário"
             placeholder="Usuário"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
@@ -44,6 +53,7 @@ export default function LoginPage() {
           <input
             required
             type="password"
+            aria-label="Senha"
             placeholder="Senha"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -60,7 +70,7 @@ export default function LoginPage() {
         </form>
 
         <p className="mt-4 text-xs text-gray-400 text-center">
-          Demo: admin@operadora-a.bet / admin123
+          Demo: admin_a / admin123
         </p>
       </div>
     </div>

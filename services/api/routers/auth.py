@@ -74,6 +74,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/me")
+@router.get("/auth/me")
 async def me(current_user: User = Depends(get_current_user)):
     return {
         "id": current_user.id,

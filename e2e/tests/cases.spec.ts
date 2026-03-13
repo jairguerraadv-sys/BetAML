@@ -1,7 +1,8 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page, APIRequestContext } from '@playwright/test';
 
 const USERNAME = process.env.E2E_USERNAME ?? 'analyst_a';
 const PASSWORD = process.env.E2E_PASSWORD ?? 'analyst123';
+const API_URL = process.env.E2E_API_URL ?? 'http://localhost:8000';
 
 async function login(page: Page) {
   await page.goto('/login');
@@ -11,8 +12,39 @@ async function login(page: Page) {
   await page.waitForURL('**/dashboard', { timeout: 10_000 });
 }
 
+async function ensureAtLeastOneActiveCase(request: APIRequestContext) {
+  const loginRes = await request.post(`${API_URL}/auth/login`, {
+    data: { username: USERNAME, password: PASSWORD },
+  });
+  expect(loginRes.ok()).toBeTruthy();
+
+  const loginData = await loginRes.json();
+  const token = loginData?.access_token as string | undefined;
+  expect(token).toBeTruthy();
+
+  const headers = { Authorization: `Bearer ${token}` };
+  const listRes = await request.get(`${API_URL}/cases?limit=20`, { headers });
+  expect(listRes.ok()).toBeTruthy();
+
+  const cases = (await listRes.json()) as Array<{ status?: string }>;
+  const hasActive = cases.some((c) => ['OPEN', 'IN_REVIEW', 'UNDER_REVIEW'].includes(c.status ?? ''));
+
+  if (!hasActive) {
+    const createRes = await request.post(`${API_URL}/cases`, {
+      headers,
+      data: {
+        title: `E2E Case ${Date.now()}`,
+        description: 'Seed automatizado para testes E2E de casos',
+        severity: 'HIGH',
+      },
+    });
+    expect(createRes.ok()).toBeTruthy();
+  }
+}
+
 test.describe('Cases', () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, request }) => {
+    await ensureAtLeastOneActiveCase(request);
     await login(page);
     await page.goto('/cases');
   });
@@ -32,21 +64,21 @@ test.describe('Cases', () => {
   });
 
   test('clicking a case row opens detail', async ({ page }) => {
-    const firstCase = page.locator('[class*="cursor-pointer"]').first();
-    const count = await firstCase.count();
-    if (count === 0) test.skip();
+    const firstCase = page.getByTestId('case-row').first();
+    await expect(firstCase).toBeVisible();
     await firstCase.click();
-    await expect(page.url()).toMatch(/\/cases\/.+/);
-    await expect(page.getByRole('tab', { name: /visão geral/i })).toBeVisible();
+    await expect(page).toHaveURL(/\/cases\/.+/, { timeout: 10_000 });
+    await expect(page.getByRole('button', { name: /visão geral/i })).toBeVisible();
   });
 
   test('cases detail has expected tabs', async ({ page }) => {
-    const firstCase = page.locator('[class*="cursor-pointer"]').first();
-    if (await firstCase.count() === 0) test.skip();
+    const firstCase = page.getByTestId('case-row').first();
+    await expect(firstCase).toBeVisible();
     await firstCase.click();
-    await expect(page.getByRole('tab', { name: /visão geral/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /perfil/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /movimentações/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /decisão/i })).toBeVisible();
+    await expect(page).toHaveURL(/\/cases\/.+/, { timeout: 10_000 });
+    await expect(page.getByRole('button', { name: /visão geral/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /perfil do cliente/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /movimentações/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /decisão e relatório/i })).toBeVisible();
   });
 });

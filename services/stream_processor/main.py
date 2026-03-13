@@ -14,6 +14,7 @@ import logging
 import os
 import statistics
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
@@ -31,12 +32,176 @@ CH_PORT        = int(os.getenv("CLICKHOUSE_PORT", "9000"))
 CH_DB          = os.getenv("CLICKHOUSE_DB", "betaml")
 
 TOPICS = [
+    "raw.transactions",
+    "raw.bets",
+    "raw.device_events",
     "canonical.transactions",
     "canonical.bets",
     "canonical.device_events",
     "ingest.jobs",
     "ingest.jobs.reprocess",
 ]
+
+
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _now_naive_utc() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _to_naive_utc_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value)
+        except ValueError:
+            return _now_naive_utc()
+    else:
+        return _now_naive_utc()
+
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _is_uuid(value: object) -> bool:
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _normalize_transaction_payload(payload: dict) -> dict:
+    amount = _coerce_float(payload.get("amount") or payload.get("value"), 0.0)
+    tx_type = (
+        payload.get("type")
+        or payload.get("transaction_type")
+        or payload.get("txn_type")
+        or "DEPOSIT"
+    )
+    method = payload.get("method") or payload.get("payment_method") or payload.get("instrument_type")
+    status = payload.get("status") or payload.get("txn_status") or "SETTLED"
+    occurred_at = payload.get("occurred_at") or payload.get("timestamp") or payload.get("transactionDate") or _iso_now()
+
+    return {
+        "player_id": payload.get("player_id") or payload.get("playerId") or payload.get("user_id"),
+        "amount": amount,
+        "type": str(tx_type).upper(),
+        "method": method or "OTHER",
+        "status": str(status).upper(),
+        "currency": payload.get("currency") or payload.get("ccy") or "BRL",
+        "occurred_at": occurred_at,
+        "payment_instrument": payload.get("payment_instrument") or {},
+    }
+
+
+def _normalize_bet_payload(payload: dict) -> dict:
+    stake_amount = _coerce_float(payload.get("stake_amount") or payload.get("stakeAmount") or payload.get("amount"), 0.0)
+    odds = payload.get("odds")
+    potential_payout = payload.get("potential_payout") or payload.get("potentialPayout")
+    settled_payout = payload.get("settled_payout") or payload.get("actual_payout")
+    placed_at = payload.get("placed_at") or payload.get("occurred_at") or payload.get("timestamp") or _iso_now()
+
+    return {
+        "player_id": payload.get("player_id") or payload.get("playerId") or payload.get("user_id"),
+        "stake_amount": stake_amount,
+        "odds": _coerce_float(odds, 0.0) if odds is not None else None,
+        "potential_payout": _coerce_float(potential_payout, 0.0) if potential_payout is not None else None,
+        "settled_payout": _coerce_float(settled_payout, 0.0) if settled_payout is not None else None,
+        "market_type": payload.get("market_type") or payload.get("market"),
+        "sport": payload.get("sport"),
+        "channel": payload.get("channel") or "WEB",
+        "placed_at": placed_at,
+        "status": payload.get("status") or "OPEN",
+        "outcome": payload.get("outcome"),
+    }
+
+
+def _normalize_device_payload(payload: dict) -> dict:
+    occurred_at = payload.get("occurred_at") or payload.get("timestamp") or _iso_now()
+    return {
+        "player_id": payload.get("player_id") or payload.get("playerId") or payload.get("user_id"),
+        "device_id": payload.get("device_id") or payload.get("deviceId") or payload.get("fingerprint"),
+        "action": payload.get("action") or payload.get("event_type") or "LOGIN",
+        "ip": payload.get("ip") or payload.get("ip_address"),
+        "country_code": payload.get("country_code") or payload.get("geo_country"),
+        "user_agent": payload.get("user_agent"),
+        "occurred_at": occurred_at,
+    }
+
+
+async def process_raw_transaction(msg_value: dict, producer) -> None:
+    payload = msg_value.get("payload", {})
+    normalized = _normalize_transaction_payload(payload)
+    if not msg_value.get("tenant_id") or not normalized.get("player_id"):
+        return
+
+    canonical = {
+        "event_id": msg_value.get("event_id") or str(uuid.uuid4()),
+        "tenant_id": msg_value.get("tenant_id"),
+        "source_system": msg_value.get("source_system", "unknown"),
+        "source_event_id": msg_value.get("source_event_id") or msg_value.get("event_id") or str(uuid.uuid4()),
+        "schema_version": 1,
+        "entity_type": "TRANSACTION",
+        "occurred_at": normalized["occurred_at"],
+        "payload": normalized,
+        "raw_payload": msg_value.get("raw_payload") or payload,
+        "ingest_metadata": msg_value.get("ingest_metadata") or {},
+    }
+    await producer.send("canonical.transactions", canonical, key=str(canonical["source_event_id"]))
+
+
+async def process_raw_bet(msg_value: dict, producer) -> None:
+    payload = msg_value.get("payload", {})
+    normalized = _normalize_bet_payload(payload)
+    if not msg_value.get("tenant_id") or not normalized.get("player_id"):
+        return
+
+    canonical = {
+        "event_id": msg_value.get("event_id") or str(uuid.uuid4()),
+        "tenant_id": msg_value.get("tenant_id"),
+        "source_system": msg_value.get("source_system", "unknown"),
+        "source_event_id": msg_value.get("source_event_id") or msg_value.get("event_id") or str(uuid.uuid4()),
+        "schema_version": 1,
+        "entity_type": "BET",
+        "occurred_at": normalized["placed_at"],
+        "payload": normalized,
+        "raw_payload": msg_value.get("raw_payload") or payload,
+        "ingest_metadata": msg_value.get("ingest_metadata") or {},
+    }
+    await producer.send("canonical.bets", canonical, key=str(canonical["source_event_id"]))
+
+
+async def process_raw_device_event(msg_value: dict, producer) -> None:
+    payload = msg_value.get("payload", {})
+    normalized = _normalize_device_payload(payload)
+    if not msg_value.get("tenant_id") or not normalized.get("device_id"):
+        return
+
+    canonical = {
+        "event_id": msg_value.get("event_id") or str(uuid.uuid4()),
+        "tenant_id": msg_value.get("tenant_id"),
+        "source_system": msg_value.get("source_system", "unknown"),
+        "source_event_id": msg_value.get("source_event_id") or msg_value.get("event_id") or str(uuid.uuid4()),
+        "schema_version": 1,
+        "entity_type": "DEVICE_EVENT",
+        "occurred_at": normalized["occurred_at"],
+        "payload": normalized,
+        "raw_payload": msg_value.get("raw_payload") or payload,
+        "ingest_metadata": msg_value.get("ingest_metadata") or {},
+    }
+    await producer.send("canonical.device_events", canonical, key=str(canonical["source_event_id"]))
 
 # ──────────────────────────────────────────────────
 # Redis Sorted Set helpers para janelas de tempo
@@ -63,8 +228,7 @@ async def _zread_window(redis_client, key: str, cutoff: datetime) -> list[dict]:
             entry = json.loads(m)
             # re-parse ts from ISO string
             ts_raw = entry.get("ts")
-            if isinstance(ts_raw, str):
-                entry["ts"] = datetime.fromisoformat(ts_raw)
+            entry["ts"] = _to_naive_utc_datetime(ts_raw)
             result.append(entry)
         except Exception:
             pass
@@ -79,7 +243,7 @@ async def compute_features(
     *,
     current_event: dict | None = None,
 ) -> dict:
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = _now_naive_utc()
     cutoff_1h = now - timedelta(hours=1)
     cutoff_24h = now - timedelta(hours=24)
     cutoff_7d  = now - timedelta(days=7)
@@ -349,7 +513,7 @@ def _ch_insert_features(ch_client, features: dict, feature_date) -> None:
         "cashout_ratio_7d":           _f("cashout_ratio_7d"),
         "shared_instrument_score":    _f("shared_instrument_score"),
         "feature_version":            int(features.get("feature_version", 2)),
-        "computed_at":                datetime.now(timezone.utc).replace(tzinfo=None),
+        "computed_at":                _now_naive_utc(),
     }
     ch_client.insert_dict("betaml.player_features_daily", [row])
 
@@ -362,44 +526,50 @@ def _persist_feature_snapshot(features: dict, feature_date) -> None:
     sync_url = db_url.replace("postgresql://", "postgresql+psycopg2://")
     engine = sa.create_engine(sync_url, pool_pre_ping=True)
     payload = json.dumps(features, ensure_ascii=False, default=str)
+    player_id = features.get("player_id")
+    tenant_id = features.get("tenant_id")
+
     try:
-        with engine.begin() as conn:
-            conn.execute(
-                sa.text(
-                    """
-                    INSERT INTO feature_snapshots (
-                        id,
-                        tenant_id,
-                        player_id,
-                        feature_date,
-                        snapshot_date,
-                        features,
-                        created_at
-                    ) VALUES (
-                        :id,
-                        :tenant_id,
-                        :player_id,
-                        :feature_date,
-                        :snapshot_date,
-                        CAST(:features AS jsonb),
-                        NOW()
-                    )
-                    ON CONFLICT (tenant_id, player_id, feature_date)
-                    DO UPDATE SET
-                        snapshot_date = EXCLUDED.snapshot_date,
-                        features = EXCLUDED.features,
-                        created_at = NOW()
-                    """
-                ),
-                {
-                    "id": str(__import__("uuid").uuid4()),
-                    "tenant_id": features["tenant_id"],
-                    "player_id": features["player_id"],
-                    "feature_date": feature_date,
-                    "snapshot_date": feature_date,
-                    "features": payload,
-                },
-            )
+        if _is_uuid(player_id) and _is_uuid(tenant_id):
+            with engine.begin() as conn:
+                conn.execute(
+                    sa.text(
+                        """
+                        INSERT INTO feature_snapshots (
+                            id,
+                            tenant_id,
+                            player_id,
+                            feature_date,
+                            snapshot_date,
+                            features,
+                            created_at
+                        ) VALUES (
+                            :id,
+                            :tenant_id,
+                            :player_id,
+                            :feature_date,
+                            :snapshot_date,
+                            CAST(:features AS jsonb),
+                            NOW()
+                        )
+                        ON CONFLICT (tenant_id, player_id, feature_date)
+                        DO UPDATE SET
+                            snapshot_date = EXCLUDED.snapshot_date,
+                            features = EXCLUDED.features,
+                            created_at = NOW()
+                        """
+                    ),
+                    {
+                        "id": str(uuid.uuid4()),
+                        "tenant_id": tenant_id,
+                        "player_id": player_id,
+                        "feature_date": feature_date,
+                        "snapshot_date": feature_date,
+                        "features": payload,
+                    },
+                )
+        else:
+            logger.info("feature_snapshot_skipped_non_uuid_player", tenant_id=tenant_id, player_id=player_id)
     finally:
         engine.dispose()
 
@@ -436,9 +606,9 @@ async def process_transaction(msg_value: dict, redis_client, ch_client, producer
         return
 
     try:
-        occurred_at = datetime.fromisoformat(payload.get("occurred_at", datetime.now(timezone.utc).isoformat()))
+        occurred_at = _to_naive_utc_datetime(payload.get("occurred_at", _iso_now()))
     except (ValueError, TypeError):
-        occurred_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        occurred_at = _now_naive_utc()
 
     # Add to Redis Sorted Set window
     entry = {
@@ -497,9 +667,9 @@ async def process_transaction(msg_value: dict, redis_client, ch_client, producer
 
 def _ch_insert_transaction(ch_client, envelope: dict, payload: dict) -> None:
     try:
-        occurred_at = datetime.fromisoformat(payload.get("occurred_at", datetime.now(timezone.utc).isoformat()))
+        occurred_at = _to_naive_utc_datetime(payload.get("occurred_at", _iso_now()))
     except Exception:
-        occurred_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        occurred_at = _now_naive_utc()
     row = {
         "event_id":         envelope.get("event_id", ""),
         "tenant_id":        envelope.get("tenant_id", ""),
@@ -513,7 +683,7 @@ def _ch_insert_transaction(ch_client, envelope: dict, payload: dict) -> None:
         "status":           payload.get("status", ""),
         "occurred_at":      occurred_at,
         "event_date":       occurred_at.date(),
-        "created_at":       datetime.now(timezone.utc).replace(tzinfo=None),
+        "created_at":       _now_naive_utc(),
     }
     ch_client.insert_dict("betaml.transactions", [row])
 
@@ -526,9 +696,9 @@ async def process_bet(msg_value: dict, redis_client, ch_client, producer):
         return
 
     try:
-        placed_at = datetime.fromisoformat(payload.get("placed_at", datetime.now(timezone.utc).isoformat()))
+        placed_at = _to_naive_utc_datetime(payload.get("placed_at", _iso_now()))
     except Exception:
-        placed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        placed_at = _now_naive_utc()
 
     entry = {
         "ts":      placed_at.isoformat(),
@@ -549,9 +719,9 @@ async def process_bet(msg_value: dict, redis_client, ch_client, producer):
 
 def _ch_insert_bet(ch_client, envelope: dict, payload: dict) -> None:
     try:
-        placed_at = datetime.fromisoformat(payload.get("placed_at", datetime.now(timezone.utc).isoformat()))
+        placed_at = _to_naive_utc_datetime(payload.get("placed_at", _iso_now()))
     except Exception:
-        placed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        placed_at = _now_naive_utc()
     row = {
         "event_id":       envelope.get("event_id", ""),
         "tenant_id":      envelope.get("tenant_id", ""),
@@ -568,7 +738,7 @@ def _ch_insert_bet(ch_client, envelope: dict, payload: dict) -> None:
         "settled_at":     None,
         "event_date":     placed_at.date(),
         "status":         payload.get("status", ""),
-        "created_at":     datetime.now(timezone.utc).replace(tzinfo=None),
+        "created_at":     _now_naive_utc(),
     }
     ch_client.insert_dict("betaml.bets", [row])
 
@@ -700,7 +870,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                     """
                 ),
                 {
-                    "id": str(__import__("uuid").uuid4()),
+                    "id": str(uuid.uuid4()),
                     "tenant_id": tenant_id,
                     "ingest_job_id": job_id,
                     "source_system": source_system,
@@ -931,7 +1101,13 @@ async def main():
                 value = msg.value if isinstance(msg.value, dict) else json.loads(msg.value)
                 topic = msg.topic
 
-                if topic == "canonical.transactions":
+                if topic == "raw.transactions":
+                    await process_raw_transaction(value, producer)
+                elif topic == "raw.bets":
+                    await process_raw_bet(value, producer)
+                elif topic == "raw.device_events":
+                    await process_raw_device_event(value, producer)
+                elif topic == "canonical.transactions":
                     await process_transaction(value, redis_client, ch_client, producer)
                 elif topic == "canonical.bets":
                     await process_bet(value, redis_client, ch_client, producer)

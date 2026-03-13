@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from './ThemeProvider';
 import { useLocale } from '@/lib/i18n';
+import { logout as apiLogout } from '@/lib/api';
 
 // ── Jornadas principais do analista ──────────────────────────────────────────
 const MAIN_NAV = [
@@ -90,10 +91,10 @@ export default function Sidebar() {
 
   const canSeeAdvanced = ADVANCED_ROLES.includes(role);
 
-  function logout() {
-    localStorage.removeItem('betaml_token');
+  async function logout() {
+    await apiLogout();
     localStorage.removeItem('betaml_user');
-    router.push('/login');
+    router.replace('/login');
   }
 
   return (

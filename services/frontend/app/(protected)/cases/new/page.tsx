@@ -1,0 +1,104 @@
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useMutation } from '@tanstack/react-query';
+import { createCase } from '@/lib/api';
+
+export default function NewCasePage() {
+  const router = useRouter();
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [playerId, setPlayerId] = useState('');
+  const [severity, setSeverity] = useState('HIGH');
+
+  const createMut = useMutation({
+    mutationFn: () =>
+      createCase({
+        title,
+        description: description || undefined,
+        player_id: playerId || undefined,
+        severity,
+      }),
+    onSuccess: (data) => {
+      router.push(`/cases/${data.id}`);
+    },
+  });
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-4">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">Novo Caso</h1>
+        <p className="text-sm text-gray-500">Abra uma investigação manual para um alerta ou cliente.</p>
+      </div>
+
+      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm space-y-4">
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Título</label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            placeholder="Ex.: Investigação de movimentação atípica"
+          />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Descrição</label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={4}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            placeholder="Contexto inicial da investigação"
+          />
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Player ID (opcional)</label>
+            <input
+              value={playerId}
+              onChange={(e) => setPlayerId(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              placeholder="UUID do player"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Severidade</label>
+            <select
+              value={severity}
+              onChange={(e) => setSeverity(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            >
+              <option value="LOW">LOW</option>
+              <option value="MEDIUM">MEDIUM</option>
+              <option value="HIGH">HIGH</option>
+              <option value="CRITICAL">CRITICAL</option>
+            </select>
+          </div>
+        </div>
+
+        {createMut.isError && (
+          <p className="text-sm text-red-600">Falha ao criar caso. Verifique os dados e tente novamente.</p>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => router.back()}
+            className="rounded-lg border border-gray-300 px-4 py-2 text-sm"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={() => createMut.mutate()}
+            disabled={!title.trim() || createMut.isPending}
+            className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            {createMut.isPending ? 'Criando...' : 'Criar Caso'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
