@@ -109,7 +109,7 @@ apply_migration() {
 }
 
 # Aplicar sequencialmente a partir de v2
-for v in 2 3 4 5 6 7 8 9 10; do
+for v in 2 3 4 5 6 7 8 9 10 11; do
   echo "=== Aplicando migration v$v ==="
   apply_migration $v
 done
@@ -128,6 +128,7 @@ done
 | v8 | Coluna `is_read` em `notifications`; backfill de legado `read → is_read`; default `false` |
 | v9 | Colunas `reference_type`/`reference_id` em `notifications`; constraint `chk_player_status` em `players` (inclui `ERASED`); índice filtrado `status != 'ERASED'` |
 | v10 | Coluna `feature_version INTEGER NOT NULL DEFAULT 2` em `feature_snapshots`; índice por tenant/player/feature_version |
+| v11 | Índices de performance em queries de alta frequência: alerts, cases, players, transactions, audit_logs, etc. (30+ índices) |
 
 ### Aplicar Migration Individual
 

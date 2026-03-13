@@ -1,4 +1,30 @@
-"""Configurações centralizadas via env vars (pydantic-settings)."""
+"""Configurações centralizadas via env vars (pydantic-settings).
+
+⚠️  SEGURANÇA - SECRETS MANAGEMENT ⚠️
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NUNCA commit .env com secrets reais no repositório.
+Em ambientes de staging/produção, NÃO use os valores padrão abaixo.
+
+OBRIGATÓRIO em produção:
+  1. JWT_SECRET: gerar com `python -c "import secrets; print(secrets.token_hex(32))"`
+  2. PII_ENCRYPTION_KEY: gerar com `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+
+RECOMENDAÇÃO FORTE para produção:
+  - Usar secrets manager (AWS Secrets Manager, Azure Key Vault, HashiCorp Vault)
+  - Rotação automática de secrets a cada 90 dias
+  - Audit trail de acessos aos secrets
+
+Exemplo de migração para AWS Secrets Manager:
+  ```python
+  import boto3
+  secrets_client = boto3.client('secretsmanager', region_name='us-east-1')
+  response = secrets_client.get_secret_value(SecretId='betaml/prod/jwt-secret')
+  jwt_secret = json.loads(response['SecretString'])['jwt_secret']
+  ```
+
+Veja docs/security-secrets-management.md para guia completo.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings

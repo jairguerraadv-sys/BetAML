@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func as sqlfunc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import decrypt_pii, get_current_user, mask_cpf, require_roles
+from auth import decrypt_pii, encrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
 from models import FinancialTransaction, Player, ScoringConfig, User
 from utils import write_audit
@@ -236,4 +236,70 @@ async def get_player_feature_history(
         "days_requested": days,
         "count": len(rows),
         "data": [_normalize_feature_history_row(_COLUMNS, row) for row in rows],
+    }
+
+
+@router.post("/players/{player_id}/erase", status_code=200)
+async def erase_player_data(
+    player_id: str,
+    reason: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
+):
+    """
+    LGPD Art. 18 — Direito ao Esquecimento / Erasure Request.
+
+    Anonimiza dados pessoais do player, mantendo registro para auditoria:
+      - Substitui CPF por valor anonimizado (cpf_erased_<player_id_hash>)
+      - Substitui nome por "ANON_<player_id_suffix>"
+      - Status ← "ERASED"
+      - Registra em audit_log com motivo
+
+    IMPORTANTE: Esta operação é IRREVERSÍVEL.
+    """
+    p = await db.get(Player, player_id)
+    if not p or p.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Player não encontrado")
+
+    if p.status == "ERASED":
+        return {"status": "already_erased", "player_id": player_id, "message": "Player já foi anonimizado anteriormente"}
+
+    # Gerar valores anonimizados determinísticos (mesmo player gera mesmo anon)
+    import hashlib
+    player_hash = hashlib.sha256(player_id.encode()).hexdigest()[:12]
+    suffix = player_id[-6:] if len(player_id) >= 6 else player_id
+
+    # Anonimizar PII
+    anon_cpf = f"cpf_erased_{player_hash}"
+    anon_name = f"ANON_{suffix}"
+
+    # Atualizar player
+    p.cpf_encrypted = encrypt_pii(anon_cpf)
+    p.full_name = anon_name
+    p.status = "ERASED"
+    p.updated_at = _utcnow()
+
+    # Audit log (LGPD Art. 37)
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "ERASE_PLAYER_DATA", "Player", player_id,
+        before={"status": "ACTIVE", "cpf": "***", "name": "***"},
+        after={"status": "ERASED", "reason": reason or "Solicitação de titular (LGPD Art. 18)"},
+    )
+
+    await db.commit()
+
+    logger.info(
+        "player_data_erased",
+        player_id=player_id,
+        tenant_id=current_user.tenant_id,
+        actor=current_user.id,
+        reason=reason,
+    )
+
+    return {
+        "status": "erased",
+        "player_id": player_id,
+        "message": "Dados pessoais anonimizados com sucesso (LGPD Art. 18)",
+        "erased_at": _utcnow().isoformat(),
     }

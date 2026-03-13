@@ -24,6 +24,8 @@ from typing import Any, Optional
 
 import structlog
 from prometheus_fastapi_instrumentator import Instrumentator
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from fastapi import (
     BackgroundTasks,
     Depends,
@@ -60,6 +62,7 @@ from auth import (
 )
 from config import settings
 from database import AsyncSessionLocal, current_tenant_id, engine, get_db
+from rate_limit import limiter  # Shared rate limiter (slowapi + Redis)
 from models import (
     Alert,
     AuditLog,
@@ -89,6 +92,10 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# Attach slowapi limiter to app state
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Em desenvolvimento aceita localhost; em produção exige CORS_ALLOW_ORIGINS explícito.
 _cors_origins: list[str] = (
@@ -391,8 +398,21 @@ async def startup():
         and settings.jwt_secret == "dev-secret-change-me"
     ):
         raise RuntimeError(
-            "JWT_SECRET não pode ser o valor padrão em ambientes de staging/produção. "
-            "Gere um segredo com: python -c 'import secrets; print(secrets.token_hex(32))'"
+            "⚠️  CRÍTICO: JWT_SECRET não pode ser o valor padrão em staging/produção. "
+            "Gere um segredo com: python -c 'import secrets; print(secrets.token_hex(32))' "
+            "e defina a variável de ambiente JWT_SECRET."
+        )
+
+    # Guard: PII encryption key insegura em ambientes não-dev
+    if (
+        settings.environment not in ("development", "test")
+        and settings.pii_encryption_key == "ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5"
+    ):
+        raise RuntimeError(
+            "⚠️  CRÍTICO: PII_ENCRYPTION_KEY não pode ser o valor padrão em staging/produção. "
+            "Gere uma chave com: python -c 'import secrets; print(secrets.token_urlsafe(32))' "
+            "e defina a variável de ambiente PII_ENCRYPTION_KEY. "
+            "ATENÇÃO: mudar a chave INVALIDA todos os CPFs criptografados no banco!"
         )
     if (
         settings.environment not in ("development", "test")

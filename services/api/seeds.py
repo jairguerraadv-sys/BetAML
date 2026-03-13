@@ -489,8 +489,19 @@ async def seed(db: AsyncSession):
 async def main():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Check if database is already seeded (avoid duplicate data on restart)
     async with Session() as db:
+        result = await db.execute(text("SELECT COUNT(*) FROM tenants"))
+        count = result.scalar_one()
+        if count > 0:
+            print(f"⚠️  Database already contains {count} tenant(s). Skipping seed to prevent duplicates.")
+            print("   To force re-seed, run: docker compose exec postgres psql -U betaml -c 'TRUNCATE TABLE tenants CASCADE'")
+            return
+
+        print("✓ Database empty. Running seed...")
         await seed(db)
+
     await engine.dispose()
 
 
