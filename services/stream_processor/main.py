@@ -529,8 +529,41 @@ def _persist_feature_snapshot(features: dict, feature_date) -> None:
     player_id = features.get("player_id")
     tenant_id = features.get("tenant_id")
 
+    resolved_player_id = player_id
+    if not _is_uuid(resolved_player_id) and _is_uuid(tenant_id):
+        try:
+            with engine.connect() as conn:
+                mapped = conn.execute(
+                    sa.text(
+                        """
+                        SELECT id
+                        FROM players
+                        WHERE tenant_id = :tenant_id
+                          AND (
+                            external_player_id = :external_player_id
+                            OR external_id = :external_player_id
+                          )
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {
+                        "tenant_id": tenant_id,
+                        "external_player_id": str(player_id),
+                    },
+                ).scalar_one_or_none()
+            if mapped:
+                resolved_player_id = str(mapped)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "feature_snapshot_player_resolve_failed",
+                error=str(exc),
+                tenant_id=tenant_id,
+                player_id=player_id,
+            )
+
     try:
-        if _is_uuid(player_id) and _is_uuid(tenant_id):
+        if _is_uuid(resolved_player_id) and _is_uuid(tenant_id):
             with engine.begin() as conn:
                 conn.execute(
                     sa.text(
@@ -562,14 +595,19 @@ def _persist_feature_snapshot(features: dict, feature_date) -> None:
                     {
                         "id": str(uuid.uuid4()),
                         "tenant_id": tenant_id,
-                        "player_id": player_id,
+                        "player_id": resolved_player_id,
                         "feature_date": feature_date,
                         "snapshot_date": feature_date,
                         "features": payload,
                     },
                 )
         else:
-            logger.info("feature_snapshot_skipped_non_uuid_player", tenant_id=tenant_id, player_id=player_id)
+            logger.info(
+                "feature_snapshot_skipped_non_uuid_player",
+                tenant_id=tenant_id,
+                player_id=player_id,
+                resolved_player_id=resolved_player_id,
+            )
     finally:
         engine.dispose()
 

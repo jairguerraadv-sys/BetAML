@@ -1,7 +1,13 @@
 import { test, expect, Page } from '@playwright/test';
 
-const USERNAME = process.env.E2E_USERNAME ?? 'analyst_a';
-const PASSWORD = process.env.E2E_PASSWORD ?? 'analyst123';
+const USERNAME = process.env.E2E_USERNAME ?? '';
+const PASSWORD = process.env.E2E_PASSWORD ?? '';
+
+test.beforeAll(() => {
+  if (!USERNAME || !PASSWORD) {
+    throw new Error('E2E_USERNAME e E2E_PASSWORD devem estar definidos no ambiente.');
+  }
+});
 
 async function login(page: Page) {
   await page.goto('/login');

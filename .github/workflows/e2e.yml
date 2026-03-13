@@ -8,6 +8,7 @@ name: E2E Tests
 env:
   NODE_VERSION: "20"
   BASE_URL: "http://localhost:3000"
+  E2E_API_URL: "http://localhost:8000"
 
 jobs:
   e2e:
@@ -23,10 +24,12 @@ jobs:
         run: |
           cp .env.example .env
           docker compose -f infra/docker-compose.yml up -d \
-            postgres redis kafka api frontend
+            postgres redis redpanda topic-init api frontend
         env:
           JWT_SECRET: ci-e2e-secret-at-least-32-characters-long
           PII_ENCRYPTION_KEY: ci-pii-key-32-characters-long!!
+          BACKEND_API_URL: http://api:8000
+          NEXT_PUBLIC_API_URL: http://localhost:8000
 
       - name: Wait for API health
         run: |
@@ -53,17 +56,30 @@ jobs:
         working-directory: e2e
         run: npm ci
 
+      - name: Create E2E env file
+        working-directory: e2e
+        run: |
+          if [ -z "${E2E_USERNAME}" ] || [ -z "${E2E_PASSWORD}" ]; then
+            echo "E2E_USERNAME/E2E_PASSWORD nao definidos em vars/secrets do repositório." >&2
+            exit 1
+          fi
+          cat > .env.e2e <<EOF
+          BASE_URL=${BASE_URL}
+          E2E_API_URL=${E2E_API_URL}
+          E2E_USERNAME=${E2E_USERNAME}
+          E2E_PASSWORD=${E2E_PASSWORD}
+          EOF
+        env:
+          E2E_USERNAME: ${{ vars.E2E_USERNAME }}
+          E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
+
       - name: Install Playwright browsers
         working-directory: e2e
         run: npx playwright install --with-deps chromium
 
       - name: Run E2E smoke tests
         working-directory: e2e
-        env:
-          BASE_URL: ${{ env.BASE_URL }}
-          E2E_USERNAME: analyst_a
-          E2E_PASSWORD: analyst123
-        run: npx playwright test --reporter=html
+        run: npx playwright test tests/auth.spec.ts tests/cases.spec.ts --reporter=html
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4

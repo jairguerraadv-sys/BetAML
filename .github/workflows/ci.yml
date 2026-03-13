@@ -11,6 +11,28 @@ env:
   NODE_VERSION: "20"
 
 jobs:
+  # ── Repo hygiene: evitar segredos locais versionados ──────────────────────
+  secret-hygiene:
+    name: Secret Hygiene Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure e2e/.env.e2e is not tracked
+        run: |
+          if git ls-files --error-unmatch e2e/.env.e2e >/dev/null 2>&1; then
+            echo "ERROR: e2e/.env.e2e nao deve ser versionado. Use e2e/.env.e2e.example." >&2
+            exit 1
+          fi
+
+      - name: Block known default credentials in tracked files
+        run: |
+          if git grep -nE 'E2E_PASSWORD=(admin123|analyst123)' -- ':!e2e/.env.e2e.example'; then
+            echo "ERROR: credenciais default detectadas em arquivo versionado." >&2
+            exit 1
+          fi
+
   # ── Backend: unit + security + integration (mock) tests ────────────────────
   backend-tests:
     name: Backend Tests (pytest)
@@ -166,3 +188,36 @@ jobs:
             --target deps \
             --tag betaml/frontend-deps:ci \
             services/frontend
+
+  # ── Migrations: validar idempotencia em banco existente ───────────────────
+  migration-idempotency:
+    name: Migration Idempotency Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start PostgreSQL only
+        run: |
+          cp .env.example .env
+          docker compose -f infra/docker-compose.yml up -d postgres
+
+      - name: Wait for PostgreSQL health
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose -f infra/docker-compose.yml exec -T postgres pg_isready -U betaml >/dev/null 2>&1; then
+              exit 0
+            fi
+            echo "Waiting for postgres... ($i/30)" && sleep 3
+          done
+          echo "PostgreSQL did not become healthy in time" >&2
+          exit 1
+
+      - name: Run migration script twice (must be idempotent)
+        run: |
+          bash scripts/postgres_migrate_existing.sh
+          bash scripts/postgres_migrate_existing.sh
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v

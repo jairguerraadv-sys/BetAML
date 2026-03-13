@@ -108,6 +108,12 @@ bash scripts/postgres_migrate_existing.sh
 bash scripts/postgres_migrate_existing.sh --dry-run
 ```
 
+### Roadmap (Migrations)
+
+- O script `scripts/postgres_migrate_existing.sh` cobre o cenário atual de recuperação e drift em ambientes legados.
+- Proximo passo recomendado: adotar Alembic para trilha transacional formal (upgrade/downgrade versionado por revisao).
+- Durante a transicao, mantenha o script como fallback operacional para ambientes ja existentes.
+
 ### Resumo de Cada Migration
 
 | Versão | Descrição |

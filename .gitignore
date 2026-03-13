@@ -23,9 +23,15 @@ package-lock.json
 .env
 .env.local
 .env.*.local
+e2e/.env.e2e
 
 # Docker artefacts
 *.log
+
+# Test artefacts
+.coverage
+e2e/playwright-report/
+e2e/test-results/
 
 # Model artifacts (persisted in MinIO)
 *.pkl

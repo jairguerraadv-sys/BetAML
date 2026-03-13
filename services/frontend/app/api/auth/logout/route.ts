@@ -5,7 +5,10 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND = process.env.NEXT_PUBLIC_API_URL ?? 'http://api:8000';
+const BACKEND =
+  process.env.BACKEND_API_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  'http://localhost:8000';
 
 export async function POST(req: NextRequest) {
   const token = req.cookies.get('betaml_token')?.value;

@@ -149,6 +149,23 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:8000/auth/logout
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/me
 ```
 
+### 5. Testes E2E (Playwright)
+
+```bash
+cd e2e
+npm ci
+
+# Configure variaveis locais de E2E (uma vez)
+cp .env.e2e.example .env.e2e
+
+# Executa smoke principal (auth + cases)
+npx playwright test tests/auth.spec.ts tests/cases.spec.ts
+```
+
+Observacoes:
+- `e2e/.env.e2e` e local e nao deve ser versionado.
+- O Playwright carrega automaticamente `e2e/.env.e2e` e usa `e2e/.env.e2e.example` como fallback.
+
 ### 5. Ingestão de arquivo CSV (pipeline completo)
 
 ```bash
