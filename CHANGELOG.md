@@ -19,6 +19,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Endpoint de scorecard AML `GET /admin/kpis/aml` (triagem, rotulagem e SLA de casos)
 - Documentacao do scorecard em `docs/aml-scorecard.md`
 - Teste de integracao para KPI AML em `tests/integration/test_new_endpoints.py`
+- Workflow diario de qualidade de dados AML em `.github/workflows/data-quality.yml`
+- Workflow semanal de capacidade com Locust em `.github/workflows/capacity-smoke.yml`
+- Script `scripts/data_quality_checks.py` com checks criticos de consistencia
+- Script `scripts/apply_branch_protection.sh` + guia `docs/branch-protection.md` para enforcement de merge policy
 
 ### Changed
 - Roadmap de migracoes passa a operar em modelo hibrido: Alembic formal + script idempotente como fallback legado

@@ -80,8 +80,11 @@ BetAML/
       - `docs/slo-sli.md` - objetivos de confiabilidade e error budget
       - `docs/runbook-incidentes.md` - procedimentos de resposta a incidentes
       - `docs/aml-scorecard.md` - scorecard operacional AML (triagem, qualidade e SLA)
+      - `docs/branch-protection.md` - padrao de branch protection e checks obrigatorios
       - `infra/grafana/provisioning/dashboards/betaml-reliability-slo.json` - painel de acompanhamento de SLO/SLI
       - `.github/workflows/release-readiness.yml` - gate manual de readiness com Alembic + migracao legada + E2E smoke
+      - `.github/workflows/data-quality.yml` - gate diario de qualidade de dados AML
+      - `.github/workflows/capacity-smoke.yml` - smoke semanal de capacidade com Locust
 
 ---
 
@@ -264,6 +267,22 @@ TEST_STACK_UP=1 pytest tests/integration/ -v --tb=short
 
 Cobrem: ingestão de eventos/CSV, polling de job status, isolamento multi-tenant (RLS),
 geração de ReportPackage COAF, logout/blacklist JWT, audit log.
+
+### Qualidade de dados AML (automatizado)
+
+```bash
+python scripts/data_quality_checks.py
+```
+
+O workflow diario `Data Quality Gate` executa os checks de consistencia no PostgreSQL.
+
+### Teste de capacidade (Locust)
+
+```bash
+locust -f tests/load/locustfile.py --host http://localhost:8000 --headless --users 20 --spawn-rate 5 --run-time 120s --only-summary
+```
+
+O workflow semanal `Capacity Smoke` roda esse smoke automaticamente.
 
 ---
 
