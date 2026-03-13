@@ -84,12 +84,14 @@ export default function DashboardPage() {
   const { data: alertsData } = useQuery({
     queryKey: ['alerts', 'dashboard'],
     queryFn:  () => fetchAlerts({ per_page: '500' }),
+    refetchInterval: 30_000,
   });
   const alerts = alertsData?.items ?? [];
 
   const { data: cases = [] } = useQuery({
     queryKey: ['cases', 'dashboard'],
     queryFn:  () => fetchCases({ per_page: '500' }),
+    refetchInterval: 30_000,
   });
 
   const today       = new Date(); today.setHours(0, 0, 0, 0);

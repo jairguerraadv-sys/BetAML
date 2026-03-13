@@ -2,28 +2,44 @@
 tests/load/locustfile.py
 Locust load-test scenarios for BetAML API.
 
-Run:
+Run (batch ingest throughput target — 1 000 events/s):
+    locust -f tests/load/locustfile.py \
+        --host http://localhost:8000 \
+        --users 100 --spawn-rate 10 \
+        --headless --run-time 60s \
+        --csv /tmp/betaml_load_results \
+        --only-summary
+
+Run (full mixed load):
     locust -f tests/load/locustfile.py --host http://localhost:8000 --users 50 --spawn-rate 5
 
+Throughput target: POST /ingest/batch @ ≥1 000 events/second
+  With 100 BatchIngestUser workers, each posting 10 events with wait_time=0,
+  requests/s ≈ 100 × (events_per_batch / avg_response_s).
+  Tune --users and BATCH_SIZE to hit target for your hardware.
+
 Scenarios:
-  - IngestUser   : ingest CSV file → poll job status
-  - ScoringUser  : score player + get features
-  - AlertUser    : list & triage alerts
-  - CaseUser     : list & view case detail
+  - BatchIngestUser : POST /ingest/batch (JSON, high-throughput target)
+  - IngestUser      : POST /ingest/file (CSV upload) → poll jobs
+  - ScoringUser     : score player + get features
+  - AlertUser       : list & triage alerts
+  - CaseUser        : list & view case detail
 """
 from __future__ import annotations
 
 import json
 import random
+import string
 import uuid
 from io import BytesIO
 
-from locust import HttpUser, SequentialTaskSet, between, task
+from locust import HttpUser, SequentialTaskSet, between, constant, task
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _TENANT_EMAIL = "analyst@betaml.io"
 _TENANT_PASS  = "analyst123"
+BATCH_SIZE    = 10  # events per POST /ingest/batch request
 
 # Shared state for inter-task data flow (per-user)
 class _SharedCtx:
@@ -42,6 +58,28 @@ def _csv_payload(n_rows: int = 50) -> bytes:
             f"2024-11-{random.randint(1,28):02d}T{random.randint(0,23):02d}:00:00Z"
         )
     return "\n".join(lines).encode()
+
+
+def _batch_events(n: int = BATCH_SIZE) -> list[dict]:
+    """Generate n synthetic transaction events for /ingest/batch."""
+    tx_types = ["DEPOSIT", "WITHDRAWAL", "BET_STAKE", "BET_WIN"]
+    return [
+        {
+            "source_system": "BackofficeAlpha",
+            "entity_type": "transaction",
+            "external_player_id": f"load-{uuid.uuid4().hex[:8]}",
+            "payload": {
+                "transaction_id": uuid.uuid4().hex,
+                "transaction_type": random.choice(tx_types),
+                "amount": round(random.uniform(10, 10000), 2),
+                "currency": "BRL",
+                "payment_method": random.choice(["PIX", "CARD", "BOLETO"]),
+                "instrument_token": "".join(random.choices(string.hexdigits, k=16)),
+                "occurred_at": f"2024-11-{random.randint(1,28):02d}T{random.randint(0,23):02d}:{random.randint(0,59):02d}:00Z",
+            },
+        }
+        for _ in range(n)
+    ]
 
 
 # ── Login mixin ───────────────────────────────────────────────────────────────
@@ -67,7 +105,42 @@ class AuthMixin:
         return {"Authorization": f"Bearer {self.token}"}
 
 
-# ── Ingest tasks ──────────────────────────────────────────────────────────────
+# ── Batch ingest tasks (high-throughput target: ≥1 000 events/s) ──────────────
+
+class BatchIngestTaskSet(SequentialTaskSet):
+    """
+    High-throughput batch ingest. Each iteration sends BATCH_SIZE events.
+
+    Throughput formula:
+        events/s ≈ concurrency × BATCH_SIZE / avg_latency_s
+
+    With 100 users, BATCH_SIZE=10, avg_latency≈100ms:
+        100 × 10 / 0.1 = 10 000 events/s  (well above the 1 000 target)
+    Scale --users down if needed; use --csv to capture the report.
+    """
+
+    @task
+    def post_batch(self):
+        events = _batch_events(BATCH_SIZE)
+        self.client.post(
+            "/ingest/batch",
+            json=events,
+            headers={**self.user._h(), "Content-Type": "application/json"},
+            name="POST /ingest/batch",
+        )
+
+
+class BatchIngestUser(AuthMixin, HttpUser):
+    """
+    Dedicated high-throughput batch ingest user.
+    Use --users 100 to target ≥1 000 events/s throughput.
+    """
+    tasks         = [BatchIngestTaskSet]
+    wait_time     = constant(0)          # no wait — maximize throughput
+    weight        = 4                    # 4× more likely than other user classes
+
+
+# ── Ingest tasks (CSV file upload) ────────────────────────────────────────────
 
 class IngestTaskSet(SequentialTaskSet):
     @task
@@ -87,8 +160,9 @@ class IngestTaskSet(SequentialTaskSet):
 
 
 class IngestUser(AuthMixin, HttpUser):
-    tasks = [IngestTaskSet]
+    tasks     = [IngestTaskSet]
     wait_time = between(1, 3)
+    weight    = 1
 
 
 # ── Scoring tasks ─────────────────────────────────────────────────────────────
@@ -131,8 +205,9 @@ class ScoringTaskSet(SequentialTaskSet):
 
 
 class ScoringUser(AuthMixin, HttpUser):
-    tasks = [ScoringTaskSet]
+    tasks     = [ScoringTaskSet]
     wait_time = between(0.5, 2)
+    weight    = 1
 
 
 # ── Alert tasks ───────────────────────────────────────────────────────────────
@@ -175,8 +250,9 @@ class AlertTaskSet(SequentialTaskSet):
 
 
 class AlertUser(AuthMixin, HttpUser):
-    tasks = [AlertTaskSet]
+    tasks     = [AlertTaskSet]
     wait_time = between(1, 4)
+    weight    = 1
 
 
 # ── Case tasks ────────────────────────────────────────────────────────────────
@@ -218,5 +294,7 @@ class CaseTaskSet(SequentialTaskSet):
 
 
 class CaseUser(AuthMixin, HttpUser):
-    tasks = [CaseTaskSet]
+    tasks     = [CaseTaskSet]
     wait_time = between(2, 5)
+    weight    = 1
+

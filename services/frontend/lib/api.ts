@@ -259,10 +259,28 @@ export const updateScoringConfig = (body: Partial<ScoringConfig>) =>
 export const fetchSensitivityPreview = (body: Partial<ScoringConfig>) =>
   api.post<SensitivityPreview>('/scoring-config/preview', body).then((r) => r.data);
 
+export interface RuleCreatePayload {
+  name: string;
+  condition_dsl: string;
+  severity: string;
+  description?: string;
+  scope?: string;
+}
+
 export const fetchRules = () => api.get<Rule[]>('/rules').then((r) => r.data);
+
+export const createRule = (body: RuleCreatePayload) =>
+  api.post<Rule>('/rules', body).then((r) => r.data);
 
 export const simulateRule = (id: string, payload: object) =>
   api.post<{ matched: boolean; detail: string }>(`/rules/${id}/simulate`, payload).then((r) => r.data);
+
+export const ingestFile = (formData: FormData) =>
+  api
+    .post<{ status: string; rows_processed?: number }>('/ingest/file', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    .then((r) => r.data);
 
 export const triageAlert = (alertId: string, disposition: string, note: string) =>
   api.post(`/alerts/${alertId}/triage`, { disposition, note }).then((r) => r.data);

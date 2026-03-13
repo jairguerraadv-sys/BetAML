@@ -11,6 +11,7 @@ import {
   Settings, HelpCircle, Search, Moon, Sun,
 } from 'lucide-react';
 import { useTheme } from './ThemeProvider';
+import { useLocale } from '@/lib/i18n';
 
 // ── Jornadas principais do analista ──────────────────────────────────────────
 const MAIN_NAV = [
@@ -69,6 +70,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router   = useRouter();
   const { theme, toggle: toggleTheme } = useTheme();
+  const [locale, setLocale] = useLocale();
   const [role, setRole]         = useState<string>('analyst');
   const [userName, setUserName] = useState<string>('');
   const [advOpen, setAdvOpen]   = useState(false);
@@ -161,7 +163,7 @@ export default function Sidebar() {
         )}
       </nav>
 
-      {/* Footer: dark mode + sign out */}
+      {/* Footer: dark mode + locale + sign out */}
       <div className="border-t border-gray-100 px-2 py-3 space-y-1 dark:border-gray-700">
         <button
           onClick={toggleTheme}
@@ -169,6 +171,14 @@ export default function Sidebar() {
         >
           {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
           {theme === 'dark' ? 'Modo claro' : 'Modo escuro'}
+        </button>
+        <button
+          onClick={() => setLocale(locale === 'pt-BR' ? 'en-US' : 'pt-BR')}
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 transition-colors dark:text-gray-400 dark:hover:bg-gray-800"
+          title={locale === 'pt-BR' ? 'Switch to English' : 'Mudar para Português'}
+        >
+          <span className="text-base leading-none">{locale === 'pt-BR' ? '🇧🇷' : '🇺🇸'}</span>
+          <span>{locale === 'pt-BR' ? 'PT-BR' : 'EN-US'}</span>
         </button>
         <button
           onClick={logout}

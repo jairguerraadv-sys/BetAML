@@ -424,3 +424,301 @@ def test_duplicate_tenant_slug_returns_409():
         # Duplicate
         r2 = c.post("/admin/tenants", json=body)
         assert r2.status_code == 409, f"Expected 409, got {r2.status_code}: {r2.text}"
+
+
+# =============================================================================
+# Static source-inspection security tests
+# No running stack required — these tests read router source files directly
+# and assert that the expected access-control patterns are present.
+# =============================================================================
+
+import re
+import unittest
+
+# Absolute path to the services/api directory derived from this file's location.
+_SERVICES_API = os.path.normpath(
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..",
+        "..",
+        "services",
+        "api",
+    )
+)
+
+
+def _read_router(name: str) -> str:
+    """Return the full source text of services/api/routers/<name>.py."""
+    path = os.path.join(_SERVICES_API, "routers", f"{name}.py")
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _extract_function_block(src: str, func_name: str) -> str:
+    """Return the source text of the first function named *func_name*.
+
+    Extraction starts at the matching ``def`` / ``async def`` line and ends
+    just before the next top-level decorator, function, or class definition
+    that begins at column 0.
+    """
+    m = re.search(
+        r"^(?:async\s+def|def)\s+" + re.escape(func_name) + r"\b",
+        src,
+        re.MULTILINE,
+    )
+    if not m:
+        return ""
+    start = m.start()
+    tail = src[start + 1:]
+    nxt = re.search(r"^(?:@|async def |def |class )", tail, re.MULTILINE)
+    end = (start + 1 + nxt.start()) if nxt else len(src)
+    return src[start:end]
+
+
+# ── Class 1: TestAuditorReadOnly ──────────────────────────────────────────────
+
+class TestAuditorReadOnly(unittest.TestCase):
+    """AUDITOR role must be absent from every mutating (write) operation."""
+
+    def test_auditor_cannot_label_alert(self):
+        """POST /alerts/{id}/triage (alert labelling) must not allow AUDITOR.
+
+        Inspects routers/alerts.py and verifies that the triage_alert function
+        uses require_roles with a list that excludes AUDITOR.
+        """
+        src = _read_router("alerts")
+        block = _extract_function_block(src, "triage_alert")
+        self.assertTrue(block, "triage_alert function not found in routers/alerts.py")
+        self.assertIn(
+            "require_roles",
+            block,
+            "triage_alert must use require_roles to gate write access",
+        )
+        self.assertNotIn(
+            '"AUDITOR"',
+            block,
+            "triage_alert must not grant write (label) access to AUDITOR role",
+        )
+
+    def test_auditor_cannot_assign_case(self):
+        """POST /cases/{id}/assign must not allow AUDITOR.
+
+        Inspects routers/cases.py and verifies that assign_case restricts
+        access to ADMIN and excludes AUDITOR.
+        """
+        src = _read_router("cases")
+        block = _extract_function_block(src, "assign_case")
+        self.assertTrue(block, "assign_case function not found in routers/cases.py")
+        self.assertIn(
+            "require_roles",
+            block,
+            "assign_case must use require_roles to gate write access",
+        )
+        self.assertNotIn(
+            '"AUDITOR"',
+            block,
+            "assign_case must not grant case-assignment rights to AUDITOR role",
+        )
+
+    def test_auditor_cannot_ingest(self):
+        """POST /ingest/batch must not allow AUDITOR.
+
+        Inspects routers/ingest.py and verifies that ingest_batch requires
+        ADMIN or AML_ANALYST and excludes AUDITOR.
+        """
+        src = _read_router("ingest")
+        block = _extract_function_block(src, "ingest_batch")
+        self.assertTrue(block, "ingest_batch function not found in routers/ingest.py")
+        self.assertIn(
+            "require_roles",
+            block,
+            "ingest_batch must use require_roles to gate write access",
+        )
+        self.assertNotIn(
+            '"AUDITOR"',
+            block,
+            "ingest_batch must not grant ingest write access to AUDITOR role",
+        )
+
+    def test_auditor_cannot_erase_player(self):
+        """POST /players/{id}/erase must not allow AUDITOR.
+
+        Inspects routers/players.py and verifies that erase_player_data
+        requires ADMIN (and optionally SUPER_ADMIN) but never AUDITOR.
+        """
+        src = _read_router("players")
+        block = _extract_function_block(src, "erase_player_data")
+        self.assertTrue(block, "erase_player_data function not found in routers/players.py")
+        self.assertIn(
+            "require_roles",
+            block,
+            "erase_player_data must use require_roles to gate erasure access",
+        )
+        self.assertNotIn(
+            '"AUDITOR"',
+            block,
+            "erase_player_data must not grant LGPD erasure rights to AUDITOR role",
+        )
+
+
+# ── Class 2: TestPIIMasking ───────────────────────────────────────────────────
+
+class TestPIIMasking(unittest.TestCase):
+    """Full PII (CPF) must only be visible to ADMIN and AML_ANALYST."""
+
+    def test_show_full_requires_analyst_or_admin(self):
+        """GET /players/{id} show_full PII path must check for AML_ANALYST or ADMIN.
+
+        Inspects routers/players.py: verifies that get_player gates full CPF
+        exposure on a role membership check that includes ADMIN and AML_ANALYST
+        but does NOT include AUDITOR.
+        """
+        src = _read_router("players")
+        block = _extract_function_block(src, "get_player")
+        self.assertTrue(block, "get_player function not found in routers/players.py")
+        self.assertIn(
+            "show_full",
+            block,
+            "get_player must implement a show_full PII guard variable",
+        )
+        self.assertIn(
+            '"AML_ANALYST"',
+            block,
+            "show_full PII guard must explicitly include AML_ANALYST",
+        )
+        self.assertIn(
+            '"ADMIN"',
+            block,
+            "show_full PII guard must explicitly include ADMIN",
+        )
+        self.assertNotIn(
+            '"AUDITOR"',
+            block,
+            "AUDITOR must not be included in the show_full PII role guard",
+        )
+
+    def test_erased_player_returns_410(self):
+        """GET /players/{id} for an ERASED player must raise HTTP 410.
+
+        Inspects routers/players.py: verifies that get_player checks the
+        ERASED status and responds with HTTP 410 (Gone) to protect
+        anonymised data under LGPD Art. 18.
+        """
+        src = _read_router("players")
+        block = _extract_function_block(src, "get_player")
+        self.assertTrue(block, "get_player function not found in routers/players.py")
+        self.assertIn(
+            "ERASED",
+            block,
+            "get_player must explicitly check for ERASED player status",
+        )
+        self.assertIn(
+            "410",
+            block,
+            "get_player must return HTTP 410 for players with ERASED status",
+        )
+
+
+# ── Class 3: TestLGPDErasureAuth ──────────────────────────────────────────────
+
+class TestLGPDErasureAuth(unittest.TestCase):
+    """LGPD erasure and data-export endpoints must enforce the correct role set."""
+
+    def test_erase_requires_admin_not_analyst(self):
+        """POST /players/{id}/erase must require ADMIN and must not allow plain AML_ANALYST.
+
+        Inspects routers/players.py: verifies that erase_player_data guards
+        the erasure operation with require_roles("ADMIN", ...) and that
+        AML_ANALYST is NOT listed as an allowed role.
+        """
+        src = _read_router("players")
+        block = _extract_function_block(src, "erase_player_data")
+        self.assertTrue(block, "erase_player_data function not found in routers/players.py")
+        self.assertIn(
+            'require_roles("ADMIN"',
+            block,
+            "erase_player_data must require ADMIN role (LGPD erasure is a privileged action)",
+        )
+        self.assertNotIn(
+            '"AML_ANALYST"',
+            block,
+            "erase_player_data must not grant LGPD erasure rights to AML_ANALYST",
+        )
+
+    def test_data_export_requires_analyst_or_admin(self):
+        """GET /players/{id}/data-export must require AML_ANALYST or ADMIN.
+
+        Inspects routers/players.py: verifies that export_player_data uses
+        require_roles and includes both ADMIN and AML_ANALYST in the allowed
+        role set (LGPD Art. 18 portability right is exercisable by analysts).
+        """
+        src = _read_router("players")
+        block = _extract_function_block(src, "export_player_data")
+        self.assertTrue(block, "export_player_data function not found in routers/players.py")
+        self.assertIn(
+            "require_roles",
+            block,
+            "export_player_data must use require_roles to gate data-export access",
+        )
+        self.assertIn(
+            '"ADMIN"',
+            block,
+            "export_player_data must grant data-export access to ADMIN",
+        )
+        self.assertIn(
+            '"AML_ANALYST"',
+            block,
+            "export_player_data must grant data-export access to AML_ANALYST",
+        )
+
+
+# ── Class 4: TestAuditLogImmutability ─────────────────────────────────────────
+
+class TestAuditLogImmutability(unittest.TestCase):
+    """Audit logs must be append-only; no DELETE or PATCH routes are permitted."""
+
+    def test_no_delete_audit_endpoint(self):
+        """routers/audit.py must not expose any DELETE or PATCH route.
+
+        Inspects routers/audit.py: asserts that no @router.delete or
+        @router.patch decorator exists, ensuring audit_log records cannot
+        be removed or mutated via the API (immutability requirement).
+        """
+        src = _read_router("audit")
+        self.assertNotIn(
+            "@router.delete",
+            src,
+            "audit router must not expose any DELETE endpoint — logs are immutable",
+        )
+        self.assertNotIn(
+            "@router.patch",
+            src,
+            "audit router must not expose any PATCH endpoint — logs are immutable",
+        )
+        get_routes = re.findall(r"@router\.get\(", src)
+        self.assertGreater(
+            len(get_routes),
+            0,
+            "audit router must expose at least one GET endpoint for log retrieval",
+        )
+
+    def test_audit_log_written_on_erase(self):
+        """POST /players/{id}/erase must write an audit log entry (LGPD Art. 37).
+
+        Inspects routers/players.py: verifies that erase_player_data calls
+        write_audit and records the ERASE_PLAYER_DATA action so that every
+        erasure event is traceable in the immutable audit log.
+        """
+        src = _read_router("players")
+        block = _extract_function_block(src, "erase_player_data")
+        self.assertTrue(block, "erase_player_data function not found in routers/players.py")
+        self.assertIn(
+            "write_audit",
+            block,
+            "erase_player_data must call write_audit for LGPD Art. 37 compliance",
+        )
+        self.assertIn(
+            "ERASE_PLAYER_DATA",
+            block,
+            "erase_player_data audit entry must use the ERASE_PLAYER_DATA action string",
+        )

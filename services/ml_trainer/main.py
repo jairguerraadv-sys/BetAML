@@ -274,7 +274,42 @@ async def retrain_isolation_forest() -> None:
             logger.info("ml_model_persisted", filename=model_filename, bytes=len(model_bytes))
 
             # ── 6. Registra no model_registry ───────────────────────────────────
-            is_champion = f1 > 0.75
+            # Busca champion atual para comparação de regressão de qualidade
+            current_champion = (
+                await db.execute(
+                    select(ModelRegistry)
+                    .where(ModelRegistry.is_champion.is_(True))
+                    .order_by(ModelRegistry.trained_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+
+            champion_precision = (
+                (current_champion.metrics or {}).get("precision", 0.0)
+                if current_champion else 0.0
+            )
+
+            # Critérios de promoção: F1 > 0.75 E sem regressão de precision > 5%
+            precision_regression = (
+                champion_precision > 0.0
+                and precision < champion_precision * 0.95
+            )
+            is_champion = f1 > 0.75 and not precision_regression
+
+            if precision_regression:
+                logger.warning(
+                    "ml_champion_promotion_blocked",
+                    reason="precision_regression",
+                    new_precision=round(precision, 4),
+                    champion_precision=round(champion_precision, 4),
+                    drop_pct=round((1 - precision / champion_precision) * 100, 1),
+                )
+
+            # De-promove champion anterior antes de promover o novo
+            if is_champion and current_champion:
+                current_champion.is_champion = False
+                db.add(current_champion)
+
             registry_entry = ModelRegistry(
                 model_type=model_type,
                 version=version,
@@ -304,7 +339,11 @@ async def retrain_isolation_forest() -> None:
             status_str = (
                 f"Promovido a champion (F1={f1:.3f})"
                 if is_champion
-                else f"Abaixo do threshold 0.75 (F1={f1:.3f})"
+                else (
+                    f"Bloqueado: regressão de precision {champion_precision:.3f}→{precision:.3f} (>{5}%)"
+                    if precision_regression
+                    else f"Abaixo do threshold 0.75 (F1={f1:.3f})"
+                )
             )
             body = (
                 f"Modelo {model_type} treinado com {len(X_arr)} amostras. "
