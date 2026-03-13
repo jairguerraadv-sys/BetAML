@@ -140,7 +140,7 @@ function TabOverview({ c }: { c: CaseDetail }) {
                   <p className="text-xs font-semibold text-gray-800">
                     {EVT_PT[ev.event_type] ?? ev.event_type}
                   </p>
-                  {ev.content?.comment && (
+                  {!!ev.content?.comment && (
                     <p className="mt-0.5 text-xs text-gray-600 italic">"{String(ev.content.comment)}"</p>
                   )}
                   {ev.content && Object.keys(ev.content).length > 0 && !ev.content.comment && (
@@ -400,11 +400,6 @@ function TabMovements({ alertIds }: { alertIds: string[] }) {
         </div>
       )}
 
-      {txns.transactions.length === 0 && txns.bets.length === 0 && (
-        <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 py-12 text-center">
-          <p className="text-sm text-gray-400">Nenhuma movimentação encontrada na janela de {txns.window_hours}h.</p>
-        </div>
-      )}
     </div>
   );
 }
@@ -735,18 +730,4 @@ export default function CaseDetailPage() {
       <StickyAnnotations caseId={id} />
     </div>
   );
-}
-
-
-function SLABadge({ sla_due_at }: { sla_due_at?: string }) {
-  if (!sla_due_at) return null;
-  const due  = new Date(sla_due_at);
-  const now  = new Date();
-  const diff = Math.round((due.getTime() - now.getTime()) / 60000); // minutos
-  if (diff < 0) {
-    return <span className="rounded border bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 border-red-200">SLA VENCIDO</span>;
-  }
-  const label = diff < 60 ? `SLA: ${diff}min` : `SLA: ${Math.round(diff/60)}h`;
-  const cls   = diff < 120 ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-green-50 text-green-700 border-green-200';
-  return <span className={`rounded border px-2 py-0.5 text-xs font-semibold ${cls}`}>{label}</span>;
 }

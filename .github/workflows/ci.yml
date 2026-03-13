@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  # ── Backend: unit + security + integration (mock) tests ────────────────────
+  backend-tests:
+    name: Backend Tests (pytest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            services/api/requirements.txt
+
+      - name: Install API + dev dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r services/api/requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run tests with coverage
+        env:
+          JWT_SECRET: ci-test-secret-at-least-32-characters-long
+          PII_ENCRYPTION_KEY: ${{ secrets.PII_ENCRYPTION_KEY || 'ci-pii-key-32-characters-long!!' }}
+          DATABASE_URL: postgresql+asyncpg://betaml:betaml@localhost/betaml
+          REDIS_URL: redis://localhost:6379/0
+          KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+        run: |
+          python -m pytest tests/ -q --tb=short \
+            --cov=services/api \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 7
+
+  # ── Backend: lint (ruff) ───────────────────────────────────────────────────
+  backend-lint:
+    name: Backend Lint (ruff)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install linting tools
+        run: pip install ruff==0.4.7
+
+      - name: Run ruff
+        run: ruff check services/api/ libs/ --output-format=github
+
+  # ── Frontend: TypeScript strict check ─────────────────────────────────────
+  frontend-typecheck:
+    name: Frontend TypeScript Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: services/frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: services/frontend
+        run: npm ci
+
+      - name: TypeScript strict check
+        working-directory: services/frontend
+        run: npx tsc --noEmit

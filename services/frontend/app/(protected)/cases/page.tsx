@@ -2,25 +2,25 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchCases, Case } from '@/lib/api';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import {
   FolderOpen, Clock, AlertTriangle, ChevronRight,
   Filter, Search, Plus,
 } from 'lucide-react';
 
 const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
-  OPEN:       { label: 'Aberto',      cls: 'bg-blue-100 text-blue-700' },
-  IN_REVIEW:  { label: 'Em revisão',  cls: 'bg-purple-100 text-purple-700' },
-  UNDER_REVIEW:{ label: 'Em revisão', cls: 'bg-purple-100 text-purple-700' },
-  CLOSED:     { label: 'Encerrado',   cls: 'bg-gray-100 text-gray-600' },
-  REPORTED:   { label: 'Reportado',   cls: 'bg-green-100 text-green-600' },
-  ARCHIVED:   { label: 'Arquivado',   cls: 'bg-gray-50 text-gray-400' },
+  OPEN:         { label: 'Aberto',      cls: 'bg-blue-100 text-blue-700' },
+  IN_REVIEW:    { label: 'Em revisão',  cls: 'bg-purple-100 text-purple-700' },
+  UNDER_REVIEW: { label: 'Em revisão',  cls: 'bg-purple-100 text-purple-700' },
+  CLOSED:       { label: 'Encerrado',   cls: 'bg-gray-100 text-gray-600' },
+  REPORTED:     { label: 'Reportado',   cls: 'bg-green-100 text-green-600' },
+  ARCHIVED:     { label: 'Arquivado',   cls: 'bg-gray-50 text-gray-400' },
 };
 
 const PRIORITY_CONFIG: Record<string, { label: string; cls: string }> = {
-  HIGH:   { label: 'Alta',   cls: 'text-red-600' },
-  MEDIUM: { label: 'Média',  cls: 'text-orange-500' },
-  LOW:    { label: 'Baixa',  cls: 'text-green-600' },
+  HIGH:   { label: 'Alta',  cls: 'text-red-600' },
+  MEDIUM: { label: 'Média', cls: 'text-orange-500' },
+  LOW:    { label: 'Baixa', cls: 'text-green-600' },
 };
 
 function SLABadge({ sla_due_at }: { sla_due_at?: string }) {
@@ -29,19 +29,16 @@ function SLABadge({ sla_due_at }: { sla_due_at?: string }) {
   if (diff < 0) {
     return <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700">SLA VENCIDO</span>;
   }
-  const mins = Math.round(diff / 60000);
+  const mins  = Math.round(diff / 60000);
   const label = mins < 60 ? `${mins}min` : `${Math.round(mins / 60)}h`;
-  const cls   = diff < 2 * 3600000
-    ? 'bg-orange-100 text-orange-700'
-    : 'bg-green-50 text-green-700';
+  const cls   = diff < 2 * 3600000 ? 'bg-orange-100 text-orange-700' : 'bg-green-50 text-green-700';
   return <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${cls}`}>{label} p/ vencer</span>;
 }
 
 function CaseRow({ c, onClick }: { c: Case; onClick: () => void }) {
-  const status   = STATUS_CONFIG[c.status] ?? { label: c.status, cls: 'bg-gray-100 text-gray-600' };
+  const status   = STATUS_CONFIG[c.status]   ?? { label: c.status,   cls: 'bg-gray-100 text-gray-600' };
   const priority = PRIORITY_CONFIG[c.priority] ?? { label: c.priority, cls: 'text-gray-600' };
-  const isUrgent = !!((c as Record<string, unknown>).sla_due_at) &&
-    (new Date((c as Record<string, unknown>).sla_due_at as string).getTime() - Date.now()) < 2 * 3600000;
+  const isUrgent = !!c.sla_due_at && (new Date(c.sla_due_at).getTime() - Date.now()) < 2 * 3600000;
 
   return (
     <div
@@ -54,18 +51,18 @@ function CaseRow({ c, onClick }: { c: Case; onClick: () => void }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="text-sm font-semibold text-gray-900 truncate">{c.title}</p>
-          {(c as Record<string, unknown>).auto_created && (
+          {c.auto_created && (
             <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600">AUTO</span>
           )}
         </div>
         <p className="mt-0.5 text-[10px] font-mono text-gray-400">
-          {(c as Record<string, unknown>).reference_number as string} ·{' '}
+          {c.reference_number} ·{' '}
           {new Date(c.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
         </p>
       </div>
 
       <div className="flex shrink-0 items-center gap-3">
-        <SLABadge sla_due_at={(c as Record<string, unknown>).sla_due_at as string | undefined} />
+        <SLABadge sla_due_at={c.sla_due_at} />
         <span className={`text-xs font-semibold ${priority.cls}`}>{priority.label}</span>
         <span className={`rounded px-2 py-0.5 text-xs font-medium ${status.cls}`}>{status.label}</span>
         <ChevronRight size={14} className="text-gray-300" />
@@ -75,23 +72,21 @@ function CaseRow({ c, onClick }: { c: Case; onClick: () => void }) {
 }
 
 export default function CasesPage() {
-  const router       = useRouter();
-  const searchParams = useSearchParams();
+  const router = useRouter();
   const [search, setSearch]       = useState('');
   const [statusFilter, setStatus] = useState('active');
 
   const { data: cases = [], isLoading } = useQuery({
     queryKey: ['cases', statusFilter],
-    queryFn:  () => fetchCases(
+    queryFn: () => fetchCases(
       statusFilter === 'active'
         ? { per_page: '200' }
         : statusFilter === 'closed'
         ? { status: 'CLOSED', per_page: '200' }
-        : { per_page: '500' }
+        : { per_page: '500' },
     ),
   });
 
-  // Filtra ativos por padrão
   const filtered = cases.filter((c) => {
     const matchStatus =
       statusFilter === 'active'
@@ -102,27 +97,25 @@ export default function CasesPage() {
     const matchSearch =
       !search ||
       c.title.toLowerCase().includes(search.toLowerCase()) ||
-      ((c as Record<string, unknown>).reference_number as string)?.includes(search);
+      c.reference_number?.includes(search);
     return matchStatus && matchSearch;
   });
 
-  // Ordenação: SLA vencido primeiro, depois por prioridade
   const priorityOrder: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
   const sorted = [...filtered].sort((a, b) => {
-    const aSlaBreach = (a as Record<string, unknown>).sla_due_at && new Date((a as Record<string, unknown>).sla_due_at as string) < new Date();
-    const bSlaBreach = (b as Record<string, unknown>).sla_due_at && new Date((b as Record<string, unknown>).sla_due_at as string) < new Date();
-    if (aSlaBreach && !bSlaBreach) return -1;
-    if (!aSlaBreach && bSlaBreach) return 1;
+    const aBreached = !!a.sla_due_at && new Date(a.sla_due_at) < new Date();
+    const bBreached = !!b.sla_due_at && new Date(b.sla_due_at) < new Date();
+    if (aBreached && !bBreached) return -1;
+    if (!aBreached && bBreached) return 1;
     return (priorityOrder[a.priority] ?? 3) - (priorityOrder[b.priority] ?? 3);
   });
 
   const slaBreachCount = filtered.filter(
-    (c) => (c as Record<string, unknown>).sla_due_at && new Date((c as Record<string, unknown>).sla_due_at as string) < new Date()
+    (c) => !!c.sla_due_at && new Date(c.sla_due_at) < new Date(),
   ).length;
 
   return (
     <div className="space-y-5">
-      {/* Cabeçalho */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Casos em Investigação</h1>
@@ -138,7 +131,6 @@ export default function CasesPage() {
         </button>
       </div>
 
-      {/* SLA breach banner */}
       {slaBreachCount > 0 && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
           <p className="flex items-center gap-2 text-sm font-medium text-red-700">
@@ -148,7 +140,6 @@ export default function CasesPage() {
         </div>
       )}
 
-      {/* Filtros */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -159,7 +150,6 @@ export default function CasesPage() {
             className="rounded-lg border border-gray-200 bg-white py-1.5 pl-8 pr-3 text-sm text-gray-700 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand w-64 shadow-sm"
           />
         </div>
-
         <div className="flex items-center gap-1.5">
           <Filter size={13} className="text-gray-400" />
           {[
@@ -182,7 +172,6 @@ export default function CasesPage() {
         </div>
       </div>
 
-      {/* Lista */}
       {isLoading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
@@ -198,11 +187,7 @@ export default function CasesPage() {
       ) : (
         <div className="space-y-2.5">
           {sorted.map((c) => (
-            <CaseRow
-              key={c.id}
-              c={c}
-              onClick={() => router.push(`/cases/${c.id}`)}
-            />
+            <CaseRow key={c.id} c={c} onClick={() => router.push(`/cases/${c.id}`)} />
           ))}
         </div>
       )}

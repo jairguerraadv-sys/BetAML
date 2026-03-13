@@ -109,7 +109,7 @@ export default function SettingsPage() {
 
             {config && (
               <p className="text-xs text-gray-400">
-                Última atualização: {new Date(config.updated_at).toLocaleString('pt-BR')}
+                Última atualização: {config.updated_at ? new Date(config.updated_at).toLocaleString('pt-BR') : '—'}
               </p>
             )}
           </form>

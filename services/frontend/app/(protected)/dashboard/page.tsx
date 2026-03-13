@@ -117,7 +117,7 @@ export default function DashboardPage() {
   const now = new Date();
   const slaProximo = (recentCasesData ?? [])
     .filter((c) => {
-      const due = (c as Record<string, unknown>).sla_due_at as string | undefined;
+      const due = c.sla_due_at;
       if (!due) return false;
       const diff = new Date(due).getTime() - now.getTime();
       return diff > 0 && diff < 24 * 3600 * 1000 && !['CLOSED', 'REPORTED', 'ARCHIVED'].includes(c.status);
@@ -179,7 +179,7 @@ export default function DashboardPage() {
           ) : (
             <ul className="space-y-2">
               {slaProximo.map((c) => {
-                const due  = new Date((c as Record<string, unknown>).sla_due_at as string);
+                const due  = new Date(c.sla_due_at!);
                 const mins = Math.round((due.getTime() - now.getTime()) / 60000);
                 const label = mins < 60 ? `${mins}min` : `${Math.round(mins / 60)}h`;
                 return (
@@ -190,7 +190,7 @@ export default function DashboardPage() {
                     >
                       <div>
                         <p className="text-xs font-semibold text-gray-800">{c.title}</p>
-                        <p className="text-[10px] text-gray-500 mt-0.5 font-mono">{(c as Record<string, unknown>).reference_number as string}</p>
+                        <p className="text-[10px] text-gray-500 mt-0.5 font-mono">{c.reference_number}</p>
                       </div>
                       <span className="rounded bg-orange-100 px-2 py-0.5 text-xs font-bold text-orange-700">
                         {label} restantes
