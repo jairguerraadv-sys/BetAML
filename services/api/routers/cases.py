@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Optional
 
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response as FastAPIResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -166,6 +166,9 @@ async def list_cases(
         {
             "id": c.id, "title": c.title, "status": c.status, "severity": c.severity,
             "player_id": c.player_id, "assigned_to": c.assigned_to, "created_at": c.created_at,
+            "reference_number": getattr(c, "reference_number", None),
+            "priority": getattr(c, "priority", "MEDIUM"),
+            "sla_due_at": getattr(c, "sla_due_at", None),
         }
         for c in cases
     ]
@@ -188,6 +191,9 @@ async def get_case(
         "id": c.id, "title": c.title, "status": c.status, "severity": c.severity,
         "description": c.description, "player_id": c.player_id,
         "assigned_to": c.assigned_to, "created_at": c.created_at,
+        "reference_number": getattr(c, "reference_number", None),
+        "priority": getattr(c, "priority", "MEDIUM"),
+        "sla_due_at": getattr(c, "sla_due_at", None),
         "alerts": [{"id": a.id, "severity": a.severity, "title": a.title} for a in alerts],
         "timeline": [
             {"id": e.id, "event_type": e.event_type, "content": e.content, "created_at": e.created_at}
@@ -521,4 +527,77 @@ async def download_report_pdf(
         iter([pdf_bytes]),
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="report_{rp_id[:8]}.pdf"'},
+    )
+
+
+@router.get("/cases/{case_id}/report-package/coaf-xml", tags=["cases"])
+async def download_coaf_xml(
+    case_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("ADMIN", "AML_ANALYST")),
+):
+    """
+    Gera XML de Comunicação ao COAF conforme Resolução COAF 36/2021.
+    Retorna application/xml para download direto.
+    """
+    from xml.etree.ElementTree import Element, SubElement, tostring
+    from xml.dom import minidom
+
+    case = await db.get(Case, case_id)
+    if not case or case.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Case não encontrado")
+    if case.status not in ("FILED", "CLOSED"):
+        raise HTTPException(400, "Relatório COAF só pode ser gerado para cases FILED ou CLOSED")
+    if not getattr(case, "analyst_narrative", None):
+        raise HTTPException(422, "analyst_narrative obrigatório para geração do XML COAF")
+
+    # Buscar player
+    player = await db.get(Player, case.player_id) if case.player_id else None
+
+    # ── Montar XML conforme schema COAF RIF ──────────────────────────────
+    root = Element("ComunicacaoMifd")
+    root.set("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
+    root.set("versao", "3.0")
+
+    # Cabeçalho
+    cabecalho = SubElement(root, "Cabecalho")
+    SubElement(cabecalho, "NumeroSequencial").text = str(getattr(case, "reference_number", case_id[-8:]))
+    SubElement(cabecalho, "DataHoraEnvio").text = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+    SubElement(cabecalho, "TipoOperacao").text = "I"  # Inclusão
+
+    # Comunicante (Operador)
+    comunicante = SubElement(root, "Comunicante")
+    SubElement(comunicante, "CnpjOuCpfComunicante").text = "00000000000000"  # CNPJ do operador
+    SubElement(comunicante, "NomeComunicante").text = current_user.tenant_id
+    SubElement(comunicante, "TipoAtividade").text = "APOSTAS"
+
+    # Parte Envolvida
+    if player:
+        partes = SubElement(root, "PartesEnvolvidas")
+        parte = SubElement(partes, "Parte")
+        SubElement(parte, "TipoPessoa").text = "F"  # Física
+        SubElement(parte, "NomePessoa").text = "CONFIDENCIAL"  # PII protegida
+        SubElement(parte, "TipoPapel").text = "COMUNICADO"
+
+    # Operação Suspeita
+    operacoes = SubElement(root, "Operacoes")
+    operacao = SubElement(operacoes, "Operacao")
+    SubElement(operacao, "NumeroOperacao").text = str(case_id[-8:])
+    SubElement(operacao, "DataOperacao").text = case.created_at.strftime("%Y-%m-%d")
+    SubElement(operacao, "NaturezaOperacao").text = "APOSTA_ESPORTIVA"
+    SubElement(operacao, "DescricaoSuspeita").text = case.analyst_narrative or ""
+
+    # Serializar com pretty print
+    raw = tostring(root, encoding="unicode")
+    pretty = minidom.parseString(raw).toprettyxml(indent="  ", encoding="UTF-8")
+
+    # Audit
+    await write_audit(db, current_user.tenant_id, current_user.id,
+                      "DOWNLOAD_COAF_XML", "Case", case_id)
+    await db.commit()
+
+    return FastAPIResponse(
+        content=pretty if isinstance(pretty, bytes) else pretty.encode("utf-8"),
+        media_type="application/xml",
+        headers={"Content-Disposition": f"attachment; filename=coaf_{case_id[:8]}.xml"},
     )

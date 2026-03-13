@@ -1,0 +1,81 @@
+{
+  "uid": "betaml-business",
+  "title": "BetAML — Business Metrics",
+  "tags": ["betaml", "business"],
+  "timezone": "browser",
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Alertas Abertos",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 3 },
+      "targets": [{ "expr": "betaml_open_alerts_total", "legendFormat": "Open Alerts" }],
+      "options": { "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 50, "color": "yellow" }, { "value": 100, "color": "red" }] } } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Cases OPEN",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 3 },
+      "targets": [{ "expr": "betaml_open_cases_total", "legendFormat": "Open Cases" }],
+      "options": { "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 20, "color": "yellow" }, { "value": 50, "color": "red" }] } } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Eventos Ingeridos (24h)",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 3 },
+      "targets": [{ "expr": "increase(http_requests_total{job='betaml-api',handler='/ingest/event',status='202'}[24h])", "legendFormat": "Events" }],
+      "options": { "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "SLA Violations Ativas",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 3 },
+      "targets": [{ "expr": "betaml_sla_violations_total", "legendFormat": "SLA Violations" }],
+      "options": { "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 1, "color": "orange" }, { "value": 5, "color": "red" }] } } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Taxa de Ingestão por Tipo",
+      "gridPos": { "x": 0, "y": 3, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "rate(http_requests_total{job='betaml-api',handler=~'/ingest/.*',status='202'}[5m])", "legendFormat": "{{ handler }}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Alertas Gerados por Severidade",
+      "gridPos": { "x": 12, "y": 3, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "rate(betaml_alerts_generated_total[5m])", "legendFormat": "{{ severity }}" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "gauge",
+      "title": "ML Anomaly Score (p95)",
+      "gridPos": { "x": 0, "y": 11, "w": 6, "h": 5 },
+      "targets": [{ "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job='betaml-ml-service',handler='/score'}[5m]))", "legendFormat": "p95 latency" }],
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0, "max": 2, "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 0.5, "color": "yellow" }, { "value": 1, "color": "red" }] } } }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Top Endpoints por Latência (p99)",
+      "gridPos": { "x": 6, "y": 11, "w": 18, "h": 5 },
+      "targets": [{ "expr": "topk(10, histogram_quantile(0.99, sum by (handler) (rate(http_request_duration_seconds_bucket{job='betaml-api'}[5m]))))", "legendFormat": "{{ handler }}", "instant": true }],
+      "transformations": [{ "id": "sortBy", "options": { "fields": [{ "desc": true, "displayName": "Value" }] } }]
+    }
+  ],
+  "schemaVersion": 38
+}

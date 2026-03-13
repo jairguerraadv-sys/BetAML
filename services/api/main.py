@@ -468,8 +468,19 @@ async def startup():
             misfire_grace_time=3600,
         )
 
+        # SLA Violations — a cada hora
+        from jobs import check_sla_violations
+        scheduler.add_job(
+            check_sla_violations,
+            trigger="interval",
+            hours=1,
+            id="sla_violations_check",
+            replace_existing=True,
+            misfire_grace_time=600,
+        )
+
         scheduler.start()
-        logger.info("scheduled_jobs_started", jobs=["risk_score_decay@04:00", "lgpd_data_expiration@05:00"])
+        logger.info("scheduled_jobs_started", jobs=["risk_score_decay@04:00", "lgpd_data_expiration@05:00", "sla_violations_check@1h"])
     except ImportError:
         logger.warning("apscheduler_not_installed", hint="pip install apscheduler")
     except Exception as exc:

@@ -17,7 +17,7 @@ from typing import Optional
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, EmailStr
-from sqlalchemy import desc, select, update
+from sqlalchemy import desc, func as sqlfunc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user, hash_password, require_roles
@@ -440,4 +440,75 @@ async def create_tenant(
             f"Login: {admin_user.username} / (senha fornecida). "
             f"5 regras DSL padrão ativas. ScoringConfig provisionada."
         ),
+    )
+
+
+# ── Tenant management (SUPER_ADMIN) ────────────────────────────────────────
+
+class TenantOut(BaseModel):
+    id: str
+    name: str
+    slug: str
+    active: bool
+    created_at: datetime
+    user_count: Optional[int] = None
+
+class TenantUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=2, max_length=100)
+    active: Optional[bool] = None
+
+@router.get("/admin/tenants", response_model=list[TenantOut], tags=["admin"])
+async def list_tenants(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("SUPER_ADMIN")),
+):
+    """Lista todos os tenants da plataforma (SUPER_ADMIN only)."""
+    result = await db.execute(select(Tenant).order_by(Tenant.created_at.desc()))
+    tenants = result.scalars().all()
+    out = []
+    for t in tenants:
+        count_result = await db.execute(
+            select(sqlfunc.count(User.id)).where(User.tenant_id == t.id)
+        )
+        out.append(TenantOut(
+            id=str(t.id),
+            name=t.name,
+            slug=t.slug,
+            active=getattr(t, "active", True),
+            created_at=t.created_at,
+            user_count=count_result.scalar_one(),
+        ))
+    return out
+
+
+@router.patch("/admin/tenants/{tenant_id}", response_model=TenantOut, tags=["admin"])
+async def update_tenant(
+    tenant_id: str,
+    body: TenantUpdateIn,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("SUPER_ADMIN")),
+):
+    """Atualiza nome ou status ativo do tenant (SUPER_ADMIN only)."""
+    t = await db.get(Tenant, tenant_id)
+    if not t:
+        raise HTTPException(404, "Tenant não encontrado")
+    if body.name is not None:
+        t.name = body.name
+    if body.active is not None:
+        t.active = body.active
+    await _write_audit(db, current_user.tenant_id, current_user.id,
+                       "UPDATE_TENANT", "Tenant", tenant_id,
+                       {"name": body.name, "active": body.active})
+    await db.commit()
+    await db.refresh(t)
+    count_result = await db.execute(
+        select(sqlfunc.count(User.id)).where(User.tenant_id == t.id)
+    )
+    return TenantOut(
+        id=str(t.id),
+        name=t.name,
+        slug=t.slug,
+        active=getattr(t, "active", True),
+        created_at=t.created_at,
+        user_count=count_result.scalar_one(),
     )

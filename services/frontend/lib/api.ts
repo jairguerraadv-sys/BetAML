@@ -451,3 +451,18 @@ export interface TenantCreateResult {
 
 export const createTenant = (body: TenantCreatePayload) =>
   api.post<TenantCreateResult>('/admin/tenants', body).then((r) => r.data);
+
+export interface TenantOut {
+  id: string;
+  name: string;
+  slug: string;
+  active: boolean;
+  created_at: string;
+  user_count?: number;
+}
+
+export const fetchTenants = () =>
+  api.get<TenantOut[]>('/admin/tenants').then((r) => r.data);
+
+export const updateTenant = (id: string, body: { name?: string; active?: boolean }) =>
+  api.patch<TenantOut>(`/admin/tenants/${id}`, body).then((r) => r.data);

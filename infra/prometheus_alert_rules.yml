@@ -1,0 +1,114 @@
+groups:
+  - name: betaml.api
+    interval: 30s
+    rules:
+      - alert: APIHighLatency
+        expr: histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job="betaml-api"}[5m])) > 1.0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p99 latency > 1s"
+          description: "API p99 latency is {{ $value | humanizeDuration }} (threshold: 1s)"
+
+      - alert: APIHighErrorRate
+        expr: |
+          rate(http_requests_total{job="betaml-api",status=~"5.."}[5m])
+          / rate(http_requests_total{job="betaml-api"}[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API error rate > 5%"
+          description: "API error rate is {{ $value | humanizePercentage }}"
+
+      - alert: APIDown
+        expr: up{job="betaml-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "BetAML API is down"
+          description: "The BetAML API has been unreachable for more than 1 minute"
+
+  - name: betaml.kafka
+    interval: 60s
+    rules:
+      - alert: KafkaConsumerLagHigh
+        expr: |
+          sum by (group, topic) (
+            vectorized_kafka_consumer_group_committed_offset - on(topic, partition)
+            vectorized_kafka_log_end_offset
+          ) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka consumer lag > 1000 messages"
+          description: "Consumer group {{ $labels.group }} on topic {{ $labels.topic }} has lag {{ $value }}"
+
+      - alert: RedpandaDown
+        expr: up{job="redpanda"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redpanda (Kafka) is down"
+          description: "Redpanda has been unreachable for more than 2 minutes"
+
+  - name: betaml.database
+    interval: 60s
+    rules:
+      - alert: PostgresConnectionsHigh
+        expr: |
+          pg_stat_activity_count > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL connections > 80"
+          description: "PostgreSQL has {{ $value }} active connections (threshold: 80)"
+
+  - name: betaml.ml
+    interval: 60s
+    rules:
+      - alert: MLServiceDown
+        expr: up{job="betaml-ml-service"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ML Service is down"
+          description: "ML scoring service unavailable — falling back to rules-only mode"
+
+      - alert: MLScoringLatencyHigh
+        expr: histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job="betaml-ml-service",handler="/score"}[5m])) > 2.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ML scoring p99 > 2s"
+          description: "ML scoring p99 latency is {{ $value | humanizeDuration }}"
+
+  - name: betaml.business
+    interval: 120s
+    rules:
+      - alert: HighAlertQueue
+        expr: |
+          sum(betaml_open_alerts_total) > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 100 open alerts"
+          description: "There are {{ $value }} open alerts requiring analyst attention"
+
+      - alert: IngestPipelineStalled
+        expr: |
+          rate(http_requests_total{job="betaml-api",handler="/ingest/event"}[15m]) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No events ingested in last 15 minutes"
+          description: "Ingest pipeline may be stalled. Check connectors and Kafka."

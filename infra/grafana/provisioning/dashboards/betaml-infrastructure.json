@@ -1,0 +1,69 @@
+{
+  "uid": "betaml-infra",
+  "title": "BetAML — Infrastructure",
+  "tags": ["betaml", "infrastructure"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Services Up",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 3 },
+      "targets": [{ "expr": "count(up{job=~'betaml.*'} == 1)", "legendFormat": "Up" }],
+      "options": { "colorMode": "background" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "value": 0, "color": "red" }, { "value": 3, "color": "yellow" }, { "value": 5, "color": "green" }] } } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Services Down",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 3 },
+      "targets": [{ "expr": "count(up{job=~'betaml.*'} == 0) or vector(0)", "legendFormat": "Down" }],
+      "options": { "colorMode": "background" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 1, "color": "red" }] } } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Kafka Consumer Lag (max)",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 3 },
+      "targets": [{ "expr": "max(vectorized_kafka_consumer_group_committed_offset) or vector(0)", "legendFormat": "Max Lag" }],
+      "options": { "colorMode": "background" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 500, "color": "yellow" }, { "value": 1000, "color": "red" }] } } }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Service Status Over Time",
+      "gridPos": { "x": 0, "y": 3, "w": 24, "h": 6 },
+      "targets": [{ "expr": "up{job=~'betaml.*'}", "legendFormat": "{{ job }}" }],
+      "fieldConfig": { "defaults": { "min": 0, "max": 1, "unit": "short" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "API Request Rate",
+      "gridPos": { "x": 0, "y": 9, "w": 12, "h": 7 },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{job='betaml-api'}[1m]))", "legendFormat": "Total" },
+        { "expr": "sum(rate(http_requests_total{job='betaml-api',status=~'5..'}[1m]))", "legendFormat": "5xx Errors" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "API P50/P95/P99 Latency",
+      "gridPos": { "x": 12, "y": 9, "w": 12, "h": 7 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job='betaml-api'}[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job='betaml-api'}[5m])) by (le))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job='betaml-api'}[5m])) by (le))", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    }
+  ],
+  "schemaVersion": 38
+}

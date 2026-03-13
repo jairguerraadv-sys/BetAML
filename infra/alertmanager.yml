@@ -1,0 +1,54 @@
+global:
+  resolve_timeout: 5m
+  # Configurar SMTP em produção via variáveis de ambiente
+  smtp_from: '${ALERTMANAGER_FROM_EMAIL:-betaml-alerts@betaml.io}'
+  smtp_smarthost: '${SMTP_HOST:-localhost}:${SMTP_PORT:-587}'
+  smtp_auth_username: '${SMTP_USER:-}'
+  smtp_auth_password: '${SMTP_PASS:-}'
+  smtp_require_tls: true
+
+route:
+  group_by: ['alertname', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'default-receiver'
+  routes:
+    - match:
+        severity: critical
+      receiver: 'critical-receiver'
+      repeat_interval: 1h
+    - match:
+        severity: warning
+      receiver: 'warning-receiver'
+      repeat_interval: 4h
+
+receivers:
+  - name: 'default-receiver'
+    webhook_configs:
+      - url: '${ALERTMANAGER_WEBHOOK_URL:-http://api:8000/internal/alerts/webhook}'
+        send_resolved: true
+
+  - name: 'critical-receiver'
+    webhook_configs:
+      - url: '${ALERTMANAGER_WEBHOOK_URL:-http://api:8000/internal/alerts/webhook}'
+        send_resolved: true
+    # Em produção: adicionar email e Slack
+    # email_configs:
+    #   - to: '${OPS_EMAIL:-ops@betaml.io}'
+    #     subject: '[CRÍTICO] {{ .CommonAnnotations.summary }}'
+    # slack_configs:
+    #   - api_url: '${SLACK_WEBHOOK_URL}'
+    #     channel: '#betaml-alerts'
+
+  - name: 'warning-receiver'
+    webhook_configs:
+      - url: '${ALERTMANAGER_WEBHOOK_URL:-http://api:8000/internal/alerts/webhook}'
+        send_resolved: true
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname']

@@ -229,3 +229,101 @@ async def cleanup_expired_player_data() -> None:
 
 
 # APScheduler será integrado em main.py
+
+
+async def check_sla_violations() -> None:
+    """
+    SLA Violation Monitor — roda a cada hora.
+
+    Verifica cases com sla_due_at < NOW() e status não-terminal (OPEN, IN_REVIEW).
+    Para cada violação:
+      1. Cria/atualiza Notification para o responsável e para todos os ADMINs do tenant
+      2. Loga em audit_log com action="SLA_VIOLATED"
+    """
+    from models import Case, Notification, User
+    try:
+        async with AsyncSessionLocal() as db:
+            now = datetime.now(UTC)
+
+            # Buscar cases vencidos não-terminais
+            stmt = select(Case).where(
+                Case.sla_due_at < now,
+                Case.status.in_(["OPEN", "IN_REVIEW"]),
+            )
+            overdue_cases = (await db.execute(stmt)).scalars().all()
+
+            if not overdue_cases:
+                return
+
+            logger.info("sla_violations_found", count=len(overdue_cases))
+
+            for case in overdue_cases:
+                # Notificar assignee (se existir)
+                notif_user_ids = set()
+                if case.assigned_to:
+                    notif_user_ids.add(case.assigned_to)
+
+                # Notificar todos os ADMINs do tenant
+                admins = (await db.execute(
+                    select(User).where(
+                        User.tenant_id == case.tenant_id,
+                        User.role.in_(["ADMIN", "AML_ANALYST"]),
+                        User.active == True,
+                    )
+                )).scalars().all()
+                for adm in admins:
+                    notif_user_ids.add(adm.id)
+
+                hours_overdue = int((now - case.sla_due_at).total_seconds() // 3600)
+
+                for uid in notif_user_ids:
+                    # Evita duplicatas: checa notificação recente (últimas 2h)
+                    recent_cutoff = now - timedelta(hours=2)
+                    existing = (await db.execute(
+                        select(Notification).where(
+                            Notification.tenant_id == case.tenant_id,
+                            Notification.user_id == uid,
+                            Notification.reference_type == "Case",
+                            Notification.reference_id == str(case.id),
+                            Notification.type == "SLA_VIOLATION",
+                            Notification.created_at >= recent_cutoff,
+                        )
+                    )).scalar_one_or_none()
+
+                    if existing:
+                        continue  # já notificado recentemente
+
+                    db.add(Notification(
+                        tenant_id=case.tenant_id,
+                        user_id=uid,
+                        type="SLA_VIOLATION",
+                        title=f"⚠️ SLA Vencido: {case.title or case.id}",
+                        body=(
+                            f"Case #{getattr(case, 'reference_number', case.id)} está "
+                            f"{hours_overdue}h em atraso. Status: {case.status}. "
+                            f"Ação imediata necessária."
+                        ),
+                        reference_type="Case",
+                        reference_id=str(case.id),
+                    ))
+
+                # Audit log
+                db.add(AuditLog(
+                    tenant_id=case.tenant_id,
+                    user_id=None,
+                    action="SLA_VIOLATED",
+                    entity_type="Case",
+                    entity_id=str(case.id),
+                    after={
+                        "sla_due_at": case.sla_due_at.isoformat(),
+                        "hours_overdue": hours_overdue,
+                        "status": case.status,
+                    },
+                ))
+
+            await db.commit()
+            logger.info("sla_violations_processed", cases=len(overdue_cases))
+
+    except Exception as exc:
+        logger.error("check_sla_violations_failed", error=str(exc))
+        await _notify_admins_job_failure("check_sla_violations", str(exc))
