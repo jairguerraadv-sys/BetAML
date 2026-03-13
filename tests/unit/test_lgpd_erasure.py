@@ -17,7 +17,6 @@ import hashlib
 import importlib.util
 import os
 import sys
-import types
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -67,72 +66,6 @@ class TestAnonSuffix(unittest.TestCase):
         suffix = _anon_suffix("any-player-id")
         erased_cpf = f"ERASURE_{suffix}"
         self.assertFalse(erased_cpf.replace(".", "").replace("-", "").isdigit())
-
-
-# ── Tests: routes_enterprise right-to-erasure RBAC ───────────────────────────
-
-def _load_routes_enterprise():
-    """Load routes_enterprise module with stubs for heavy dependencies."""
-    # Stub out dependencies before loading
-    for mod_name, stub in {
-        "database":    types.ModuleType("database"),
-        "auth":        types.ModuleType("auth"),
-        "utils":       types.ModuleType("utils"),
-        "models":      types.ModuleType("models"),
-        "config":      types.ModuleType("config"),
-        "structlog":   types.ModuleType("structlog"),
-        "boto3":       types.ModuleType("boto3"),
-        "minio":       types.ModuleType("minio"),
-        "redis":       types.ModuleType("redis"),
-        "redis.asyncio": types.ModuleType("redis.asyncio"),
-        "fastapi":     types.ModuleType("fastapi"),
-        "sqlalchemy":  types.ModuleType("sqlalchemy"),
-        "sqlalchemy.ext.asyncio": types.ModuleType("sqlalchemy.ext.asyncio"),
-        "sqlalchemy.future":      types.ModuleType("sqlalchemy.future"),
-        "pydantic":    types.ModuleType("pydantic"),
-    }.items():
-        sys.modules.setdefault(mod_name, stub)
-
-    # Minimal FastAPI stubs
-    fastapi = sys.modules["fastapi"]
-    fastapi.APIRouter   = MagicMock(return_value=MagicMock())
-    fastapi.Depends     = lambda fn: fn
-    fastapi.HTTPException = Exception
-    fastapi.Query       = MagicMock()
-
-    # auth stubs
-    auth = sys.modules["auth"]
-    auth.get_current_user = "get_current_user_dep"
-
-    def _require_roles(*roles):
-        return f"require_roles({','.join(roles)})"
-
-    auth.require_roles     = _require_roles
-    auth.User              = MagicMock
-    auth.decrypt_pii       = lambda x: x
-    auth.mask_cpf          = lambda x: x
-    auth.hash_password     = lambda x: x
-    auth.get_password_hash = lambda x: x
-
-    # database stub
-    db_mod = sys.modules["database"]
-    db_mod.get_db = MagicMock()
-    db_mod.Base   = MagicMock()
-
-    # structlog stub
-    sl = sys.modules["structlog"]
-    sl.get_logger = lambda *a, **kw: MagicMock()
-
-    # config stub
-    cfg = sys.modules["config"]
-    cfg.settings = MagicMock(
-        minio_endpoint="http://localhost:9000",
-        minio_access_key="minio",
-        minio_secret_key="minio123",
-        minio_bucket="betaml-lakehouse",
-    )
-
-    return None  # routes_enterprise is complex; we only need dependency inspection below
 
 
 class TestRightToErasureRBAC(unittest.TestCase):

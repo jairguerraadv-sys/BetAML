@@ -19,7 +19,7 @@ router = APIRouter(tags=["rules"])
 class CompoundRuleOut(BaseModel):
     id: str
     name: str
-    logic: str
+    logic: str | None = None
     component_rule_ids: list[str]
     score_weights: dict | None = None
     min_score_threshold: float | None = None
@@ -31,7 +31,7 @@ class CompoundRuleOut(BaseModel):
 
 class CompoundRuleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
-    logic: str = "AND"
+    logic: str = Field("AND", max_length=10)
     component_rule_ids: list[str]
     score_weights: dict | None = None
     min_score_threshold: float | None = None

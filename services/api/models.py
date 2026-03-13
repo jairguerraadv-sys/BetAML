@@ -282,6 +282,7 @@ class Alert(Base):
     source_event_id  = Column(Text)
     case_id          = Column(UUID(as_uuid=False), ForeignKey("cases.id", use_alter=True, name="fk_alerts_case"))
     label            = Column(String(20))
+    label_note       = Column(Text)
     labeled_by       = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     labeled_at       = Column(DateTime(timezone=True))
     triaged_by       = Column(UUID(as_uuid=False), ForeignKey("users.id"))

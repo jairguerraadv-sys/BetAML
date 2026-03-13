@@ -109,7 +109,7 @@ apply_migration() {
 }
 
 # Aplicar sequencialmente a partir de v2
-for v in 2 3 4 5 6 7 8 9 10 11; do
+for v in 2 3 4 5 6 7 8 9 10 11 12; do
   echo "=== Aplicando migration v$v ==="
   apply_migration $v
 done
@@ -129,6 +129,7 @@ done
 | v9 | Colunas `reference_type`/`reference_id` em `notifications`; constraint `chk_player_status` em `players` (inclui `ERASED`); índice filtrado `status != 'ERASED'` |
 | v10 | Coluna `feature_version INTEGER NOT NULL DEFAULT 2` em `feature_snapshots`; índice por tenant/player/feature_version |
 | v11 | Índices de performance em queries de alta frequência: alerts, cases, players, transactions, audit_logs, etc. (30+ índices) |
+| v12 | Coluna `label_note TEXT` em `alerts` — nota de investigação do analista ao rotular alertas (LGPD conformidade + feedback loop) |
 
 ### Aplicar Migration Individual
 
@@ -161,6 +162,11 @@ docker compose exec postgres psql -U betaml -d betaml -c \
   "SELECT indexname FROM pg_indexes WHERE schemaname='public'
    AND indexname LIKE 'idx_%' ORDER BY indexname;" | wc -l
 # Deve retornar ≥ 30 índices
+
+# Checar coluna label_note em alerts (v12)
+docker compose exec postgres psql -U betaml -d betaml -c \
+  "SELECT column_name FROM information_schema.columns
+   WHERE table_name='alerts' AND column_name='label_note';"
 ```
 
 ### Reverter Migration v2

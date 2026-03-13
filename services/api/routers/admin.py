@@ -148,7 +148,7 @@ async def create_api_key(
         name=body.name,
         key_hash=hashed,
         key_prefix=raw_key[:8],
-        permissions=body.scopes,  # ORM column: permissions
+        permissions=body.permissions,  # ORM column: permissions
         active=True,              # ORM column: active
         expires_at=(
             datetime.now(UTC) + timedelta(days=body.expires_in_days)

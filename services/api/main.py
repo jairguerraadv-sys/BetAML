@@ -137,9 +137,6 @@ async def set_rls_tenant_middleware(request: Request, call_next):
     return response
 
 
-# ─── Enterprise routes ────────────────────────────
-from routes_enterprise import enterprise_router  # noqa: E402
-
 # ─── Prometheus metrics ───────────────────────────
 Instrumentator(
     should_group_status_codes=True,
@@ -571,9 +568,4 @@ app.include_router(notifications_router)
 app.include_router(internal_router)
 app.include_router(search_router)
 app.include_router(stats_router)
-
-# Enterprise router is registered last; note that FastAPI resolves routes in
-# registration order (first match wins), so core router paths take precedence
-# over any duplicate paths in enterprise_router.
-app.include_router(enterprise_router)
 

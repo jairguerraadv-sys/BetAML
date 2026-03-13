@@ -5,7 +5,9 @@ Shared by API, stream_processor, rules_engine, ml_service.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+
+_UTC = timezone.utc
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Optional
@@ -57,7 +59,7 @@ class BetChannel(str, Enum):
 # ──────────────────────────────────────────────────
 
 class IngestMetadata(BaseModel):
-    received_at: datetime = Field(default_factory=datetime.utcnow)
+    received_at: datetime = Field(default_factory=lambda: datetime.now(_UTC))
     file_name: Optional[str] = None
     api_key_id: Optional[str] = None
     checksum: Optional[str] = None
@@ -164,7 +166,7 @@ class CanonicalEvent(BaseModel):
 class PlayerFeatures(BaseModel):
     player_id: str
     tenant_id: str
-    computed_at: datetime = Field(default_factory=datetime.utcnow)
+    computed_at: datetime = Field(default_factory=lambda: datetime.now(_UTC))
     feature_version: int = 1
 
     # Deposits
@@ -249,7 +251,7 @@ class AlertMessage(BaseModel):
     evidence: AlertEvidence
     source_event_id: str
     rule_id: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(_UTC))
     schema_version: int = 1
 
 
@@ -300,7 +302,7 @@ class ApiKeyOut(BaseModel):
 
 class ApiKeyCreate(BaseModel):
     name: str
-    scopes: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
     expires_in_days: Optional[int] = None
 
 
@@ -359,7 +361,7 @@ class CompoundRuleOut(BaseModel):
 
 class CompoundRuleCreate(BaseModel):
     name: str
-    logic: str
+    logic: str = Field("AND", max_length=10)
     component_rule_ids: list[str] = Field(default_factory=list)
     score_weights: dict[str, float] = Field(default_factory=dict)
     min_score_threshold: Optional[float] = None
@@ -508,7 +510,7 @@ class FeatureStoreCurrentOut(BaseModel):
 
 class FeatureStoreHistoryItemOut(BaseModel):
     id: str
-    snapshot_date: str
+    snapshot_date: Optional[date]
     created_at: datetime
     features: dict[str, Any]
     drift_score: Optional[float] = None

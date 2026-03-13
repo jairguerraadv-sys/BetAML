@@ -298,11 +298,11 @@ async def get_alert_related_transactions(
 # ── Alert Labeling (M5 — feedback loop) ──────────────────────────────────────
 
 UTC = timezone.utc
-logger = structlog.get_logger(__name__)
 
 
 class AlertLabelIn(BaseModel):
     label: Literal["TRUE_POSITIVE", "FALSE_POSITIVE", "NEED_REVIEW"]
+    label_note: str | None = None
 
 
 @router.post("/alerts/{alert_id}/label")
@@ -324,6 +324,7 @@ async def label_alert(
         raise HTTPException(404, "Alert not found")
 
     alert.label = body.label
+    alert.label_note = body.label_note
     alert.labeled_by = current_user.id
     alert.labeled_at = datetime.now(UTC)
     await write_audit(
@@ -333,7 +334,7 @@ async def label_alert(
         action="LABEL_ALERT",
         entity_type="Alert",
         entity_id=alert_id,
-        after={"label": body.label},
+        after={"label": body.label, "label_note": body.label_note},
     )
     await db.commit()
     background_tasks.add_task(_enqueue_feedback_event, alert_id, body.label, current_user.tenant_id)
