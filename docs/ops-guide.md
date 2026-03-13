@@ -130,6 +130,7 @@ done
 | v10 | Coluna `feature_version INTEGER NOT NULL DEFAULT 2` em `feature_snapshots`; índice por tenant/player/feature_version |
 | v11 | Índices de performance em queries de alta frequência: alerts, cases, players, transactions, audit_logs, etc. (30+ índices) |
 | v12 | Coluna `label_note TEXT` em `alerts` — nota de investigação do analista ao rotular alertas (LGPD conformidade + feedback loop) |
+| v13 | Coluna `cnpj VARCHAR(14)` em `tenants` (COAF MIFD v3 obrigatório); coluna `pii_accessed TEXT` em `audit_logs` + índice para rastreabilidade LGPD Art. 37 |
 
 ### Aplicar Migration Individual
 

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_user
 from database import get_db
 from models import Alert, Case, Player, User
+from utils import write_audit
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -51,6 +52,15 @@ async def global_search(
         .limit(_MAX)
     )
     players_rows = (await db.execute(stmt_players)).scalars().all()
+
+    # LGPD Art. 37 — log PII access when player names are returned in search results
+    if players_rows:
+        await write_audit(
+            db, tid, current_user.id,
+            "SEARCH_PLAYERS", "Player", None,
+            pii_accessed="full_name",
+        )
+        await db.flush()
 
     # ── Cases ─────────────────────────────────────────────────────────────────
     stmt_cases = (

@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import structlog
@@ -50,12 +51,24 @@ from models import (
 
 logger = structlog.get_logger()
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Application lifespan: runs startup before yield, shutdown after yield."""
+    await _startup()
+    yield
+    await _shutdown()
+
+
 app = FastAPI(
     title="BetAML API",
     description="PLD/FT Platform para Operadores de Apostas",
     version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    contact={"name": "BetAML Compliance", "email": "compliance@betaml.io"},
+    license_info={"name": "Proprietary"},
+    lifespan=lifespan,
 )
 
 # Attach slowapi limiter to app state
@@ -353,8 +366,7 @@ async def _feature_store_maintenance_loop() -> None:
         await asyncio.sleep(24 * 3600)
 
 
-@app.on_event("startup")
-async def startup():
+async def _startup():
     # Guard: JWT secret inseguro em ambientes não-dev
     if (
         settings.environment not in ("development", "test")
@@ -457,8 +469,7 @@ async def startup():
     logger.info("betaml_api_started", env=settings.environment)
 
 
-@app.on_event("shutdown")
-async def shutdown():
+async def _shutdown():
     global _feature_maintenance_task
     if _feature_maintenance_task:
         _feature_maintenance_task.cancel()

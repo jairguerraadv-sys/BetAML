@@ -25,6 +25,7 @@ class Tenant(Base):
     id                   = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
     name                 = Column(Text, nullable=False, unique=True)
     slug                 = Column(Text, nullable=False, unique=True)
+    cnpj                 = Column(String(14))
     active               = Column(Boolean, nullable=False, default=True)
     settings             = Column(JSONB, nullable=False, default={})
     risk_score_threshold = Column(Numeric(5, 2), nullable=False, default=0.75)
@@ -372,6 +373,7 @@ class AuditLog(Base):
     entity_id   = Column(Text)
     before      = Column(JSONB)
     after       = Column(JSONB)
+    pii_accessed = Column(Text)
     ip_address  = Column(Text)
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
 

@@ -30,6 +30,7 @@ services:
       - ./migration_v10.sql:/docker-entrypoint-initdb.d/10-migration.sql
       - ./migration_v11.sql:/docker-entrypoint-initdb.d/11-migration.sql
       - ./migration_v12.sql:/docker-entrypoint-initdb.d/12-migration.sql
+      - ./migration_v13.sql:/docker-entrypoint-initdb.d/13-migration.sql
     ports:
       - "5432:5432"
     healthcheck:

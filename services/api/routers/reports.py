@@ -12,10 +12,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import get_current_user
+from auth import get_current_user, require_roles
 from config import settings
 from database import AsyncSessionLocal, get_db
-from models import Alert, Bet, Case, FinancialTransaction, Player, ReportPackage, RuleDefinition, User
+from models import Alert, Bet, Case, FinancialTransaction, Player, RuleDefinition, User
 
 router = APIRouter(tags=["reports"])
 
@@ -193,51 +193,11 @@ async def _build_monthly_report_background(tenant_id: str, year: int, month: int
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@router.get("/cases/{case_id}/report-package/pdf")
-async def download_report_pdf(
-    case_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Stream the PDF of the latest report package for a case."""
-    case = (await db.execute(
-        select(Case).where(
-            Case.id == case_id,
-            Case.tenant_id == current_user.tenant_id,
-        )
-    )).scalar_one_or_none()
-    if case is None:
-        raise HTTPException(404, "Case not found")
-
-    rp = (await db.execute(
-        select(ReportPackage).where(
-            ReportPackage.case_id == case_id,
-            ReportPackage.tenant_id == current_user.tenant_id,
-        ).order_by(desc(ReportPackage.created_at))
-    )).scalar_one_or_none()
-    if rp is None or not rp.pdf_path:
-        raise HTTPException(404, "No PDF report package found for this case")
-
-    try:
-        from libs.clients import get_minio_client
-        minio = get_minio_client()
-        bucket = settings.minio_bucket
-        response = minio.get_object(bucket, rp.pdf_path)
-        pdf_bytes = response.read()
-        return StreamingResponse(
-            io.BytesIO(pdf_bytes),
-            media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename=report_{case_id}.pdf"},
-        )
-    except Exception as exc:
-        raise HTTPException(500, f"Could not retrieve PDF: {exc}") from exc
-
-
 @router.post("/reports/monthly-summary", status_code=202)
 async def generate_monthly_report(
     body: MonthlyReportIn,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
 ):
     """Trigger async generation of monthly compliance summary report (202 Accepted)."""
     background_tasks.add_task(
@@ -254,7 +214,7 @@ async def get_monthly_summary(
     date_from: str = Query(..., description="Data inicial YYYY-MM-DD (inclusivo)"),
     date_to: str = Query(..., description="Data final YYYY-MM-DD (inclusivo)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
 ):
     """Return the monthly compliance summary synchronously."""
     try:
@@ -274,7 +234,7 @@ async def get_monthly_summary_csv(
     date_from: str = Query(..., description="Data inicial YYYY-MM-DD"),
     date_to: str = Query(..., description="Data final YYYY-MM-DD"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
 ):
     """Export the monthly compliance summary as a UTF-8-BOM CSV for Excel."""
     try:

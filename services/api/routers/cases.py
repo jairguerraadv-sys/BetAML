@@ -10,12 +10,12 @@ import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response as FastAPIResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func as sqlfunc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import decrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
-from models import Alert, Case, CaseEvent, Player, ReportPackage, Tenant, User
+from models import Alert, Case, CaseEvent, FinancialTransaction, Player, ReportPackage, Tenant, User
 from utils import write_audit
 
 logger = structlog.get_logger(__name__)
@@ -591,7 +591,8 @@ async def download_report_pdf(
             resp = mc.get_object(bucket, key)
             pdf_bytes = resp.read()
         except Exception as exc:
-            raise HTTPException(500, f"Erro ao ler PDF do MinIO: {exc}") from exc
+            logger.error("pdf_download_minio_failed", case_id=case_id, rp_id=rp_id, error=str(exc))
+            raise HTTPException(503, "PDF temporariamente indisponível — tente novamente em instantes") from exc
     else:
         if not _os.path.isfile(rp.pdf_path):
             raise HTTPException(404, "Arquivo PDF não encontrado no sistema")
@@ -696,13 +697,28 @@ async def download_coaf_xml(
         SubElement(parte, "TipoPessoa").text = "F"  # Física
         SubElement(parte, "NomePessoa").text = "CONFIDENCIAL"  # PII protegida por LGPD
         SubElement(parte, "TipoPapel").text = "COMUNICADO"
+        # CPF mascarado — obrigatório COAF Res. 36/2021 Schema MIFD v3
+        cpf_plain = decrypt_pii(player.cpf_encrypted)
+        SubElement(parte, "CpfCnpjPessoa").text = mask_cpf(cpf_plain)
 
     # Operação Suspeita
+    # Buscar total de transações do player (ValorOperacao — obrigatório MIFD v3)
+    total_amount: float = 0.0
+    if case.player_id:
+        total_amount = float((await db.execute(
+            select(sqlfunc.coalesce(sqlfunc.sum(FinancialTransaction.amount), 0))
+            .where(
+                FinancialTransaction.player_id == case.player_id,
+                FinancialTransaction.tenant_id == case.tenant_id,
+            )
+        )).scalar() or 0)
+
     operacoes = SubElement(root, "Operacoes")
     operacao = SubElement(operacoes, "Operacao")
     SubElement(operacao, "NumeroOperacao").text = str(case_id[-8:])
     SubElement(operacao, "DataOperacao").text = case.created_at.strftime("%Y-%m-%d")
     SubElement(operacao, "NaturezaOperacao").text = "APOSTA_ESPORTIVA"
+    SubElement(operacao, "ValorOperacao").text = f"{total_amount:.2f}"
     SubElement(operacao, "DescricaoSuspeita").text = analyst_narrative
 
     # Serializar com pretty print

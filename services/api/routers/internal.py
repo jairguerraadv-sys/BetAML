@@ -10,8 +10,10 @@ Currently exposes:
 from __future__ import annotations
 
 import structlog
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+
+from config import settings
 
 logger = structlog.get_logger(__name__)
 
@@ -39,17 +41,17 @@ async def alertmanager_webhook(request: Request) -> JSONResponse:
       "version": "4",
       "groupKey": "...",
       "status": "firing" | "resolved",
-      "alerts": [
-        {
-          "status": "firing" | "resolved",
-          "labels": {"alertname": "...", "severity": "...", ...},
-          "annotations": {"summary": "...", "description": "..."},
-          "startsAt": "...",
-          "endsAt": "..."
-        }
-      ]
+      "alerts": [...]
     }
+
+    Security: requires X-Webhook-Secret header matching INTERNAL_WEBHOOK_SECRET.
     """
+    # ── Shared-secret guard (GAP-2) ──────────────────────────────────────────
+    provided_secret = request.headers.get("X-Webhook-Secret", "")
+    if provided_secret != settings.internal_webhook_secret:
+        logger.warning("alertmanager_webhook_unauthorized", remote=request.client.host if request.client else "unknown")
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     try:
         body = await request.json()
     except Exception:

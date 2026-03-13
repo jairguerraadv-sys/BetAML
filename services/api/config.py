@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # Ingest DLQ
     dlq_max_retries: int = 3
 
+    # Internal webhook secret (AlertManager → /internal/alerts/webhook)
+    # Em produção, gere com: python -c "import secrets; print(secrets.token_hex(32))"
+    internal_webhook_secret: str = "dev-webhook-secret-change-me"
+
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
         """Rejeita secrets padrão em ambientes não-dev na instanciação."""

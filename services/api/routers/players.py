@@ -49,7 +49,10 @@ async def list_players(
 ):
     q = (
         select(Player)
-        .where(Player.tenant_id == current_user.tenant_id)
+        .where(
+            Player.tenant_id == current_user.tenant_id,
+            Player.status != "ERASED",
+        )
         .limit(limit)
         .offset(offset)
     )
@@ -91,14 +94,13 @@ async def get_player(
     cpf_plain = decrypt_pii(p.cpf_encrypted)
     show_full = current_user.role in ("ADMIN", "AML_ANALYST")
 
-    # Audit access to PII (LGPD Art. 37)
-    if show_full:
-        await write_audit(
-            db, current_user.tenant_id, current_user.id,
-            "GET_PLAYER", "Player", player_id,
-            pii_accessed="cpf"
-        )
-        await db.flush()
+    # Audit access to PII (LGPD Art. 37) — always log, even for masked CPF
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "GET_PLAYER", "Player", player_id,
+        pii_accessed="cpf" if show_full else "cpf_masked"
+    )
+    await db.flush()
 
     return {
         "id": p.id,
@@ -277,6 +279,7 @@ async def erase_player_data(
 
     # Atualizar player
     p.cpf_encrypted = encrypt_pii(anon_cpf)
+    p.name_encrypted = encrypt_pii(anon_name)  # GAP-7: also clear name_encrypted
     p.full_name = anon_name
     p.status = "ERASED"
     p.updated_at = _utcnow()

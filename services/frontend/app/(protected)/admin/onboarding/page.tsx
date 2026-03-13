@@ -92,9 +92,9 @@ const FALLBACK_CONNECTORS = [
 
 type ConnectorEntry = (typeof FALLBACK_CONNECTORS)[number] & { template: string };
 
-// ── Rule templates ────────────────────────────────────────────────────────────
+// ── Rule templates (bootstrap defaults — not clones of existing operator rules) ─
 
-const RULE_TEMPLATES = [
+const RULE_BOOTSTRAP_TEMPLATES = [
   {
     name:          'Spike de Depósito',
     description:   'Detecta depósito de alto valor combinado com frequência elevada nas últimas 24h.',
@@ -359,7 +359,7 @@ export default function OnboardingPage() {
       severity:      r.severity,
       scope:         r.scope,
     })),
-    ...RULE_TEMPLATES.filter((t) => !apiRuleNames.has(t.name.toLowerCase())),
+    ...RULE_BOOTSTRAP_TEMPLATES.filter((t) => !apiRuleNames.has(t.name.toLowerCase())),
   ];
 
   // ── Mutations ──────────────────────────────────────────────────────────────
@@ -908,6 +908,9 @@ export default function OnboardingPage() {
             </div>
 
             <div className="space-y-3">
+              <p className="text-xs text-gray-500 italic">
+                Regras marcadas como &quot;template&quot; são pontos de partida sugeridos — não são cópias de regras existentes de outros operadores.
+              </p>
               {rulesList.map((tpl, i) => {
                 const sel  = selRule === i;
                 return (

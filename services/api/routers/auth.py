@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +21,7 @@ from auth import (
 from config import settings
 from database import get_db
 from models import Tenant, User
+from rate_limit import limiter
 
 logger = structlog.get_logger(__name__)
 
@@ -41,7 +42,8 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/auth/login", response_model=TokenResponse)
-async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends(get_db)):
     if body.tenant_slug:
         tenant_result = await db.execute(
             select(Tenant).where(Tenant.slug == body.tenant_slug, Tenant.active == True)
@@ -81,7 +83,8 @@ async def me(current_user: User = Depends(get_current_user)):
 
 
 @router.post("/auth/refresh", response_model=TokenResponse)
-async def refresh(current_user: User = Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def refresh(request: Request, current_user: User = Depends(get_current_user)):
     token = create_access_token({
         "sub": current_user.id,
         "tenant_id": current_user.tenant_id,
