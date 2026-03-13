@@ -27,6 +27,7 @@ Veja docs/security-secrets-management.md para guia completo.
 """
 from __future__ import annotations
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -73,6 +74,23 @@ class Settings(BaseSettings):
 
     # Ingest DLQ
     dlq_max_retries: int = 3
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> "Settings":
+        """Rejeita secrets padrão em ambientes não-dev na instanciação."""
+        if self.environment not in ("development", "test"):
+            if self.jwt_secret == "dev-secret-change-me":
+                raise ValueError(
+                    "JWT_SECRET must be changed from default in staging/production. "
+                    "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
+                )
+            if self.pii_encryption_key == "ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5":
+                raise ValueError(
+                    "PII_ENCRYPTION_KEY must be changed from default in staging/production. "
+                    "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(32))\". "
+                    "WARNING: changing this key invalidates all encrypted CPFs in the database!"
+                )
+        return self
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

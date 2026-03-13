@@ -264,6 +264,24 @@ services:
     command: uvicorn main:app --host 0.0.0.0 --port 8001 --reload
     networks: [betaml-net]
 
+  ml-trainer:
+    build:
+      context: ..
+      dockerfile: services/ml_trainer/Dockerfile
+    container_name: betaml-ml-trainer
+    env_file: ../.env
+    depends_on:
+      postgres: {condition: service_healthy}
+      minio:    {condition: service_started}
+    environment:
+      DATABASE_URL:     ${DATABASE_URL:-postgresql://betaml:devpass@postgres:5432/betaml_dev}
+      MINIO_ENDPOINT:   ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minio123}
+      ENVIRONMENT:      ${ENVIRONMENT:-development}
+    networks: [betaml-net]
+    restart: unless-stopped
+
   frontend:
     build:
       context: ../services/frontend

@@ -1,0 +1,9 @@
+sqlalchemy[asyncio]==2.0.29
+asyncpg==0.29.0
+apscheduler==3.10.4
+structlog==24.1.0
+scikit-learn==1.4.2
+numpy==1.26.4
+minio==7.2.7
+python-jose[cryptography]==3.3.0
+pydantic-settings==2.2.1

@@ -26,6 +26,7 @@ import structlog
 from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from fastapi import (
     BackgroundTasks,
     Depends,
@@ -110,6 +111,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SlowAPIMiddleware)
 
 # ─── Middleware: propaga tenant_id para RLS do Postgres ───────────────────────
 @app.middleware("http")
@@ -414,13 +416,6 @@ async def startup():
             "e defina a variável de ambiente PII_ENCRYPTION_KEY. "
             "ATENÇÃO: mudar a chave INVALIDA todos os CPFs criptografados no banco!"
         )
-    if (
-        settings.environment not in ("development", "test")
-        and settings.pii_encryption_key == "ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5"
-    ):
-        raise RuntimeError(
-            "PII_ENCRYPTION_KEY não pode ser o valor padrão em staging/produção."
-        )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await get_producer()
@@ -537,6 +532,7 @@ from routers.admin import router as admin_router                # noqa: E402
 from routers.feature_store import router as feature_store_router  # noqa: E402
 from routers.ml import router as ml_router                     # noqa: E402
 from routers.notifications import router as notifications_router  # noqa: E402
+from routers.internal import router as internal_router            # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(alerts.router)
@@ -550,6 +546,7 @@ app.include_router(admin_router)
 app.include_router(feature_store_router)
 app.include_router(ml_router)
 app.include_router(notifications_router)
+app.include_router(internal_router)
 
 # Enterprise router is registered last; note that FastAPI resolves routes in
 # registration order (first match wins), so core router paths take precedence
