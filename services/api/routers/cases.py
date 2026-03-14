@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import decrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
 from models import Alert, Case, CaseEvent, FinancialTransaction, Player, ReportPackage, Tenant, User
+from repositories import CaseRepository
+from repositories.cases import get_case_repo
 from utils import write_audit
 
 logger = structlog.get_logger(__name__)
@@ -37,15 +39,17 @@ _STATUS_TRANSITIONS: dict[str, list[str]] = {
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _build_report_pdf(payload: dict) -> bytes:
-    """Gera PDF COAF compacto via reportlab. Retorna bytes (vazio se lib indisponível)."""
+    """Gera PDF COAF compacto via reportlab. Levanta RuntimeError se lib indisponível."""
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import cm
         from reportlab.platypus import Paragraph, Spacer, SimpleDocTemplate, Table, TableStyle
         from reportlab.lib import colors
-    except ImportError:
-        return b""
+    except ImportError as exc:
+        raise RuntimeError(
+            "reportlab não está instalado. Adicione 'reportlab' ao requirements.txt e reconstrua o container."
+        ) from exc
 
     import io as _io
     buf = _io.BytesIO()
@@ -165,14 +169,15 @@ async def list_cases(
     limit: int = 50,
     offset: int = 0,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    repo: CaseRepository = Depends(get_case_repo),
 ):
-    q = select(Case).where(Case.tenant_id == current_user.tenant_id)
-    if status_filter: q = q.where(Case.status == status_filter)
-    if player_id:     q = q.where(Case.player_id == player_id)
-    q = q.order_by(Case.created_at.desc()).limit(limit).offset(offset)
-    result = await db.execute(q)
-    cases = result.scalars().all()
+    cases = await repo.list_filtered(
+        current_user.tenant_id,
+        status=status_filter,
+        player_id=player_id,
+        limit=limit,
+        offset=offset,
+    )
     return [
         {
             "id": c.id, "title": c.title, "status": c.status, "severity": c.severity,
@@ -189,10 +194,11 @@ async def list_cases(
 async def get_case(
     case_id: str,
     current_user: User = Depends(get_current_user),
+    repo: CaseRepository = Depends(get_case_repo),
     db: AsyncSession = Depends(get_db),
 ):
-    c = await db.get(Case, case_id)
-    if not c or c.tenant_id != current_user.tenant_id:
+    c = await repo.get_by_id(current_user.tenant_id, case_id)
+    if not c:
         raise HTTPException(404, "Caso não encontrado")
     alerts = (await db.execute(select(Alert).where(Alert.case_id == case_id))).scalars().all()
     events = (await db.execute(
@@ -385,6 +391,9 @@ async def generate_report_package(
                     _f.write(pdf_bytes)
                 pdf_path = tmp_path
             rp.pdf_path = pdf_path
+    except RuntimeError as pdf_dep_exc:
+        logger.error("pdf_dependency_missing", error=str(pdf_dep_exc))
+        raise HTTPException(503, "Geração de PDF indisponível — reportlab não instalado no servidor") from pdf_dep_exc
     except Exception as pdf_exc:
         logger.warning("pdf_generation_failed", error=str(pdf_exc))
 

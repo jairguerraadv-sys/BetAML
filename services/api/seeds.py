@@ -12,7 +12,7 @@ import os
 import random
 import sys
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -275,7 +275,7 @@ async def seed(db: AsyncSession):
                 "deposit_sum_24h": 7200,
                 "threshold_count": 5,
                 "threshold_sum": 5000,
-                "triggered_at": datetime.utcnow().isoformat(),
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
             },
             source_event_id=str(uuid.uuid4()),
         )
@@ -295,7 +295,7 @@ async def seed(db: AsyncSession):
                 "pep_flag": True,
                 "amount": 15000,
                 "threshold": 5000,
-                "triggered_at": datetime.utcnow().isoformat(),
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
             },
             source_event_id=str(uuid.uuid4()),
         )
@@ -315,7 +315,7 @@ async def seed(db: AsyncSession):
                 "device_id": device_shared,
                 "shared_device_count": 5,
                 "threshold": 3,
-                "triggered_at": datetime.utcnow().isoformat(),
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
             },
             source_event_id=str(uuid.uuid4()),
         )
@@ -336,7 +336,7 @@ async def seed(db: AsyncSession):
                 "bet_stake_sum_24h": 20,
                 "withdrawal_sum_24h": 19500,
                 "ratio": 0.975,
-                "triggered_at": datetime.utcnow().isoformat(),
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
             },
             anomaly_score=0.91,
             source_event_id=str(uuid.uuid4()),

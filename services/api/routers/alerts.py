@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_user, require_roles
 from database import AsyncSessionLocal, get_db
 from models import Alert, Bet, Case, FinancialTransaction, Notification, User
+from repositories import AlertRepository
+from repositories.alerts import get_alert_repo
 from utils import write_audit
 
 logger = structlog.get_logger(__name__)
@@ -34,25 +36,25 @@ async def list_alerts(
     page: Optional[int] = Query(None, ge=1),
     per_page: Optional[int] = Query(None, ge=1, le=200),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    repo: AlertRepository = Depends(get_alert_repo),
 ):
     # Support both limit/offset and page/per_page pagination styles
     if per_page is not None:
         limit = per_page
     if page is not None:
         offset = (page - 1) * limit
-    q = select(Alert).where(Alert.tenant_id == current_user.tenant_id)
-    if severity:      q = q.where(Alert.severity == severity)
-    if status_filter: q = q.where(Alert.status == status_filter)
-    if player_id:     q = q.where(Alert.player_id == player_id)
-    if rule_id:       q = q.where(Alert.rule_id == rule_id)
-    q = q.order_by(Alert.created_at.desc()).limit(limit).offset(offset)
 
-    count_q = select(sqlfunc.count()).select_from(Alert).where(Alert.tenant_id == current_user.tenant_id)
-    total = (await db.execute(count_q)).scalar()
+    alerts = await repo.list_filtered(
+        current_user.tenant_id,
+        severity=severity,
+        status=status_filter,
+        player_id=player_id,
+        rule_id=rule_id,
+        limit=limit,
+        offset=offset,
+    )
+    total = await repo.count_filtered(current_user.tenant_id)
 
-    result = await db.execute(q)
-    alerts = result.scalars().all()
     return {
         "total": total,
         "items": [
@@ -71,7 +73,7 @@ async def list_alerts(
 @router.get("/alerts/stream")
 async def stream_alerts(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    repo: AlertRepository = Depends(get_alert_repo),
 ):
     """
     Server-Sent Events (SSE): envia novos alertas OPEN em tempo real.
@@ -84,14 +86,7 @@ async def stream_alerts(
         # Envia os 10 alertas mais recentes imediatamente ao conectar
         last_seen_at = datetime.now(timezone.utc)
         try:
-            q = (
-                select(Alert)
-                .where(Alert.tenant_id == tenant_id, Alert.status == "OPEN")
-                .order_by(Alert.created_at.desc())
-                .limit(10)
-            )
-            result = await db.execute(q)
-            for a in result.scalars().all():
+            for a in await repo.list_open_recent(tenant_id, limit=10):
                 data = json.dumps({
                     "id": a.id, "severity": a.severity, "title": a.title,
                     "status": a.status, "created_at": a.created_at.isoformat() if a.created_at else None,
@@ -104,20 +99,12 @@ async def stream_alerts(
         while True:
             try:
                 await asyncio.sleep(5)
-                new_q = (
-                    select(Alert)
-                    .where(
-                        Alert.tenant_id == tenant_id,
-                        Alert.status == "OPEN",
-                        Alert.created_at > last_seen_at,
-                    )
-                    .order_by(Alert.created_at.asc())
+                new_alerts = await repo.list_open_recent(
+                    tenant_id, limit=50, created_after=last_seen_at
                 )
-                result = await db.execute(new_q)
-                new_alerts = result.scalars().all()
                 if new_alerts:
                     last_seen_at = new_alerts[-1].created_at or last_seen_at
-                    for a in new_alerts:
+                    for a in sorted(new_alerts, key=lambda x: x.created_at or last_seen_at):
                         data = json.dumps({
                             "id": a.id, "severity": a.severity, "title": a.title,
                             "status": a.status,

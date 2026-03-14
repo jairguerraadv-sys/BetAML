@@ -21,7 +21,7 @@ import json
 import os
 import sys
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # ── Path setup ───────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@ class TestDepositFeatures(unittest.TestCase):
     """Depósitos recentes → somas e contagens corretas."""
 
     def _make_txns(self, n: int, amount: float, hours_ago: float = 1.0, txn_type: str = "DEPOSIT") -> list[dict]:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         return [
             {"type": txn_type, "amount": amount, "status": "SETTLED",
              "ts": (now - timedelta(hours=hours_ago + i * 0.1)).isoformat(),
@@ -196,7 +196,7 @@ class TestWithdrawalFeatures(unittest.TestCase):
     """Saques calculados corretamente."""
 
     def test_withdrawal_sum_24h(self):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         txns = [
             {"type": "WITHDRAWAL", "amount": 800.0, "status": "SETTLED",
              "ts": (now - timedelta(hours=2)).isoformat(), "method": "TED", "currency": "BRL"},
@@ -208,7 +208,7 @@ class TestWithdrawalFeatures(unittest.TestCase):
         self.assertAlmostEqual(features["withdrawal_sum_24h"], 1400.0, places=1)
 
     def test_ratio_withdraw_to_deposit_7d(self):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         txns = [
             {"type": "DEPOSIT", "amount": 10000.0, "status": "SETTLED",
              "ts": (now - timedelta(days=2)).isoformat(), "method": "PIX", "currency": "BRL"},
@@ -225,7 +225,7 @@ class TestZscoreFeature(unittest.TestCase):
     """Z-score calculado a partir do baseline histórico."""
 
     def test_zscore_spike(self):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         # 15 dias de histórico com depósito ~1000/dia → baseline
         historical = [
             {"type": "DEPOSIT", "amount": 1000.0, "status": "SETTLED",
@@ -242,7 +242,7 @@ class TestZscoreFeature(unittest.TestCase):
         self.assertGreater(features["zscore_current_deposit_vs_baseline"], 1.0)
 
     def test_zscore_normal_is_low(self):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         # Todos os depósitos iguais → std=0 → z=0
         txns = [
             {"type": "DEPOSIT", "amount": 1000.0, "status": "SETTLED",
@@ -275,7 +275,7 @@ class TestNightActivityRatio(unittest.TestCase):
 
     def test_all_night_transactions_ratio_is_1(self):
         # Usa datas relativas a hoje para evitar que cutoff_7d exclua os eventos
-        base_date = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        base_date = datetime.now(timezone.utc).replace(tzinfo=None).replace(hour=0, minute=0, second=0, microsecond=0)
         txns = [
             {"type": "DEPOSIT", "amount": 100.0, "status": "SETTLED",
              "ts": (base_date - timedelta(days=d) + timedelta(hours=23)).isoformat(),
@@ -287,7 +287,7 @@ class TestNightActivityRatio(unittest.TestCase):
         self.assertAlmostEqual(features["night_activity_ratio"], 1.0, places=1)
 
     def test_no_night_transactions_ratio_is_0(self):
-        base_date = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        base_date = datetime.now(timezone.utc).replace(tzinfo=None).replace(hour=0, minute=0, second=0, microsecond=0)
         txns = [
             {"type": "DEPOSIT", "amount": 100.0, "status": "SETTLED",
              "ts": (base_date - timedelta(days=d) + timedelta(hours=14)).isoformat(),  # 14h = day

@@ -94,6 +94,11 @@ class Settings(BaseSettings):
                     "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(32))\". "
                     "WARNING: changing this key invalidates all encrypted CPFs in the database!"
                 )
+            if self.internal_webhook_secret == "dev-webhook-secret-change-me":
+                raise ValueError(
+                    "INTERNAL_WEBHOOK_SECRET must be changed from default in staging/production. "
+                    "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
+                )
         return self
 
     model_config = {"env_file": ".env", "extra": "ignore"}
