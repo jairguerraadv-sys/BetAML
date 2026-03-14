@@ -539,3 +539,103 @@ export interface DashboardStats {
 
 export const fetchDashboardStats = () =>
   api.get<DashboardStats>('/stats/dashboard').then((r) => r.data);
+
+// ── Ingest Jobs & Errors (Módulo 1) ──────────────────────────────────────────
+
+export type IngestJobStatus = 'QUEUED' | 'PROCESSING' | 'DONE' | 'PARTIAL' | 'FAILED';
+
+export interface IngestJob {
+  id: string;
+  source_system: string;
+  file_name: string | null;
+  status: IngestJobStatus;
+  total_records: number | null;
+  processed_records: number | null;
+  failed_records: number | null;
+  bytes_processed: number;
+  duration_ms: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IngestJobErrorSample {
+  id: string;
+  line_number: number | null;
+  error_reason: string;
+  raw_payload: string;
+  created_at: string;
+}
+
+export interface IngestJobDetail extends IngestJob {
+  error_count: number;
+  error_sample: IngestJobErrorSample[];
+  file_size_bytes: number | null;
+  reprocessed_from: string | null;
+  mapping_version_id: string | null;
+  file_path: string | null;
+}
+
+export interface IngestError {
+  id: string;
+  ingest_job_id: string | null;
+  source_system: string;
+  entity_type: string | null;
+  line_number: number | null;
+  error_reason: string;
+  error_detail: Record<string, unknown>;
+  raw_payload: string;
+  resolved: boolean;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+export const fetchIngestJobs = (params?: {
+  status?: string;
+  source_system?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}) => api.get<IngestJob[]>('/ingest/jobs', { params }).then((r) => r.data);
+
+export const fetchIngestJob = (jobId: string) =>
+  api.get<IngestJobDetail>(`/ingest/jobs/${jobId}`).then((r) => r.data);
+
+export const reprocessIngestJob = (
+  jobId: string,
+  body: { reason: string; mapping_version_id?: string },
+) =>
+  api.post<{ job_id: string; status: string }>(
+    `/ingest/jobs/${jobId}/reprocess`,
+    body,
+  ).then((r) => r.data);
+
+export const fetchIngestErrors = (params?: {
+  source_system?: string;
+  job_id?: string;
+  resolved?: boolean;
+  limit?: number;
+  offset?: number;
+}) => api.get<IngestError[]>('/ingest/errors', { params }).then((r) => r.data);
+
+export const resolveIngestError = (errorId: string, body: { note?: string }) =>
+  api.post<{ status: string; id: string }>(
+    `/ingest/errors/${errorId}/resolve`,
+    body,
+  ).then((r) => r.data);
+
+export const replayIngestError = (
+  errorId: string,
+  body: {
+    corrected_payload: Record<string, unknown>;
+    entity_type?: string;
+    mapping_config_id?: string;
+    resolve_original?: boolean;
+    note?: string;
+  },
+) =>
+  api.post<{ status: string; event_id: string; ingest_error_id: string; resolved: boolean }>(
+    `/ingest/errors/${errorId}/replay`,
+    body,
+  ).then((r) => r.data);

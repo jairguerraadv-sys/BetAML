@@ -8,7 +8,7 @@ import {
   FileBarChart2, Bell, LogOut, SlidersHorizontal,
   ChevronDown, BookOpen, Users, Plug, ScrollText,
   Shield, List, BrainCircuit, Database, GitBranch, Wand2,
-  Settings, HelpCircle, Search, Moon, Sun,
+  Settings, HelpCircle, Search, Moon, Sun, Activity, AlertOctagon,
 } from 'lucide-react';
 import { useTheme } from './ThemeProvider';
 import { useLocale } from '@/lib/i18n';
@@ -34,6 +34,8 @@ const ADV_NAV = [
   { href: '/model-registry', label: 'Modelos Analíticos',     icon: BrainCircuit },
   { href: '/feature-store',  label: 'Base de Indicadores',    icon: Database },
   { href: '/mappings',       label: 'Conectores',             icon: Plug },
+  { href: '/ingest-jobs',    label: 'Jobs de Ingestão',       icon: Activity },
+  { href: '/ingest-errors',  label: 'Quarentena de Erros',    icon: AlertOctagon },
   { href: '/audit-logs',     label: 'Log de Auditoria',       icon: ScrollText },
   { href: '/settings',       label: 'Parâmetros de Sistema',  icon: Settings },
   { href: '/admin',          label: 'Administração',          icon: Shield },
