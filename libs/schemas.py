@@ -207,7 +207,7 @@ class PlayerFeatures(BaseModel):
 
     @classmethod
     def from_redis_dict(cls, data: dict[str, str]) -> "PlayerFeatures":
-        return cls(**data)
+        return cls.model_validate(data)
 
 
 # ──────────────────────────────────────────────────
