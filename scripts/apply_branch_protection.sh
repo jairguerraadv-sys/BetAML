@@ -20,13 +20,13 @@ fi
 # Contextos de checks que devem ser obrigatorios para merge.
 # Ajuste conforme evolucao dos workflows.
 REQUIRED_CHECKS_JSON='[
-  "Backend Tests (pytest)",
-  "Backend Lint (ruff)",
-  "Frontend TypeScript Check",
-  "Security Scan (bandit)",
-  "Docker Build Check",
-  "Migration Idempotency Check",
-  "Alembic Baseline Check"
+  {"context":"Backend Tests (pytest)"},
+  {"context":"Backend Lint (ruff)"},
+  {"context":"Frontend TypeScript Check"},
+  {"context":"Security Scan (bandit)"},
+  {"context":"Docker Build Check"},
+  {"context":"Migration Idempotency Check"},
+  {"context":"Alembic Baseline Check"}
 ]'
 
 payload=$(cat <<JSON
