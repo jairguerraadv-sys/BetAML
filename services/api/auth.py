@@ -6,7 +6,7 @@ import hashlib
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Depends, Header, HTTPException, status
@@ -109,7 +109,7 @@ async def get_current_user(
     return user
 
 
-def require_roles(*roles: str):
+def require_roles(*roles: str) -> Callable[..., Any]:
     async def checker(current_user: User = Depends(get_current_user)) -> User:
         if current_user.role not in roles:
             raise HTTPException(

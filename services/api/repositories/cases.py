@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import Depends
 from sqlalchemy import func, select
@@ -20,7 +20,7 @@ class CaseRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_by_id(self, tenant_id: str, case_id: str) -> Optional[Case]:
+    async def get_by_id(self, tenant_id: Any, case_id: str) -> Optional[Case]:
         """Retorna case por id, validando tenant."""
         c = await self.db.get(Case, case_id)
         if not c or c.tenant_id != tenant_id:
@@ -29,7 +29,7 @@ class CaseRepository:
 
     async def list_filtered(
         self,
-        tenant_id: str,
+        tenant_id: Any,
         *,
         status: Optional[str] = None,
         assigned_to: Optional[str] = None,
@@ -58,7 +58,7 @@ class CaseRepository:
 
     async def count_filtered(
         self,
-        tenant_id: str,
+        tenant_id: Any,
         *,
         status: Optional[str] = None,
         sla_breached: bool = False,
@@ -73,7 +73,7 @@ class CaseRepository:
             q = q.where(Case.sla_due_at < datetime.now(timezone.utc))
         return (await self.db.execute(q)).scalar() or 0
 
-    async def count_open(self, tenant_id: str) -> int:
+    async def count_open(self, tenant_id: Any) -> int:
         """Conta cases OPEN — usado no dashboard."""
         return await self.count_filtered(tenant_id, status="active")
 
