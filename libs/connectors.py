@@ -13,6 +13,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Any
 
+import defusedxml.ElementTree as _safe_ET
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
@@ -186,7 +187,7 @@ class ConnectorGamma(BaseConnector):
         line = 0
 
         try:
-            root = ET.fromstring(raw)
+            root = _safe_ET.fromstring(raw)
         except ET.ParseError as exc:
             return ParseResult([], 0, 1, [{"line": 0, "reason": str(exc), "raw": raw[:200].decode(errors="replace")}])
 

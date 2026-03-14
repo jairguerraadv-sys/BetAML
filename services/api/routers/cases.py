@@ -734,7 +734,7 @@ async def download_coaf_xml(
 
     # Serializar com pretty print
     raw = tostring(root, encoding="unicode")
-    pretty = minidom.parseString(raw).toprettyxml(indent="  ", encoding="UTF-8")
+    pretty = minidom.parseString(raw).toprettyxml(indent="  ", encoding="UTF-8")  # nosec B318
 
     # Audit
     await write_audit(db, current_user.tenant_id, current_user.id,

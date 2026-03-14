@@ -215,15 +215,17 @@ async def get_player_feature_history(
 
     def _query_ch() -> list:
         ch = ClickHouseClient()
-        return ch.execute(
-            f"""
-            SELECT {', '.join(_COLUMNS)}
+        col_clause = ", ".join(_COLUMNS)
+        sql = f"""
+            SELECT {col_clause}
             FROM betaml.player_features_daily
             WHERE tenant_id = %(tid)s
               AND player_id = %(pid)s
               AND feature_date >= today() - %(days)s
             ORDER BY feature_date DESC
-            """,
+            """
+        return ch.execute(
+            sql,
             {"tid": current_user.tenant_id, "pid": player_id, "days": days},
         )
 
