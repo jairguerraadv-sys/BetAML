@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid as _uuid_mod
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import structlog
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import decrypt_pii, encrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
-from models import Alert, Bet, Case, FinancialTransaction, Player, ScoringConfig, User
+from models import Alert, Case, FinancialTransaction, Player, ScoringConfig, User
 from repositories import PlayerRepository
 from repositories.players import get_player_repo
 from utils import write_audit
@@ -151,10 +151,14 @@ async def get_player_econ_compat(
     else:
         income_ratio_30d = None
 
-    if income_ratio_30d is None:        tier = "UNKNOWN"
-    elif income_ratio_30d <= ratio_threshold:  tier = "GREEN"
-    elif income_ratio_30d <= ratio_threshold * 2: tier = "YELLOW"
-    else:                                tier = "RED"
+    if income_ratio_30d is None:
+        tier = "UNKNOWN"
+    elif income_ratio_30d <= ratio_threshold:
+        tier = "GREEN"
+    elif income_ratio_30d <= ratio_threshold * 2:
+        tier = "YELLOW"
+    else:
+        tier = "RED"
 
     return {
         "player_id":              player_id,

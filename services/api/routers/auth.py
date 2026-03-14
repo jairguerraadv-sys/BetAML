@@ -11,7 +11,6 @@ from auth import (
     create_access_token,
     get_current_user,
     oauth2_scheme,
-    require_roles,
     revoke_token,
     verify_password,
 )
@@ -46,7 +45,7 @@ class LoginRequest(BaseModel):
 async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends(get_db)):
     if body.tenant_slug:
         tenant_result = await db.execute(
-            select(Tenant).where(Tenant.slug == body.tenant_slug, Tenant.active == True)
+            select(Tenant).where(Tenant.slug == body.tenant_slug, Tenant.active.is_(True))
         )
         tenant = tenant_result.scalar_one_or_none()
         if not tenant:
@@ -55,12 +54,12 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
             select(User).where(
                 User.username == body.username,
                 User.tenant_id == tenant.id,
-                User.active == True,
+                User.active.is_(True),
             )
         )
     else:
         result = await db.execute(
-            select(User).where(User.username == body.username, User.active == True)
+            select(User).where(User.username == body.username, User.active.is_(True))
         )
     user = result.scalar_one_or_none()
     if not user or not verify_password(body.password, user.password_hash):

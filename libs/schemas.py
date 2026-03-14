@@ -6,13 +6,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
-
-_UTC = timezone.utc
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
+
+_UTC = timezone.utc
 
 # ──────────────────────────────────────────────────
 # Enums

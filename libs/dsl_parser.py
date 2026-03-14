@@ -499,17 +499,25 @@ def _eval_binop(node: BinOpNode, context: dict[str, Any]) -> Any:
 
         # None comparisons: only == and != make sense
         if left is None or right is None:
-            if node.op == "==": return left == right
-            if node.op == "!=": return left != right
+            if node.op == "==":
+                return left == right
+            if node.op == "!=":
+                return left != right
             return False
 
         try:
-            if node.op == ">":  return left > right        # type: ignore[operator]
-            if node.op == "<":  return left < right        # type: ignore[operator]
-            if node.op == ">=": return left >= right       # type: ignore[operator]
-            if node.op == "<=": return left <= right       # type: ignore[operator]
-            if node.op == "==": return left == right
-            if node.op == "!=": return left != right
+            if node.op == ">":
+                return left > right  # type: ignore[operator]
+            if node.op == "<":
+                return left < right  # type: ignore[operator]
+            if node.op == ">=":
+                return left >= right  # type: ignore[operator]
+            if node.op == "<=":
+                return left <= right  # type: ignore[operator]
+            if node.op == "==":
+                return left == right
+            if node.op == "!=":
+                return left != right
         except TypeError:
             return False
 
