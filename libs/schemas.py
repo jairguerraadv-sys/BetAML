@@ -527,6 +527,22 @@ class FeatureStoreHistoryOut(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class FeatureStat(BaseModel):
+    mean: float
+    std: float
+    p10: float
+    p25: float
+    p50: float
+    p75: float
+    p90: float
+    count: int = 0  # not persisted in Redis — defaults to 0 for backward compat
+
+
+class FeaturePopulationStatsOut(BaseModel):
+    computed_at: Optional[str] = None
+    features: dict[str, FeatureStat] = Field(default_factory=dict)
+
+
 class SystemFlagOut(BaseModel):
     key: str                     # composite: "{tenant_id}:{flag_name}"
     value: Any = None            # JSONB — the stored flag value

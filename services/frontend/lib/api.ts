@@ -152,6 +152,22 @@ export interface FeatureStoreHistory {
   items: FeatureStoreHistoryItem[];
 }
 
+export interface FeatureStat {
+  mean: number;
+  std: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  count: number;
+}
+
+export interface FeaturePopulationStats {
+  computed_at: string | null;
+  features: Record<string, FeatureStat>;
+}
+
 export interface EconCompat {
   player_id: string;
   declared_income_monthly: number | null;
@@ -220,8 +236,14 @@ export const fetchPlayer = (id: string) =>
 export const fetchFeatureStoreCurrent = (playerId: string) =>
   api.get<FeatureStoreCurrent>(`/feature-store/players/${playerId}/current`).then((r) => r.data);
 
-export const fetchFeatureStoreHistory = (playerId: string) =>
-  api.get<FeatureStoreHistory>(`/feature-store/players/${playerId}/history`).then((r) => r.data);
+export const fetchFeatureStoreHistory = (
+  playerId: string,
+  params?: { from?: string; to?: string },
+) =>
+  api.get<FeatureStoreHistory>(`/feature-store/players/${playerId}/history`, { params }).then((r) => r.data);
+
+export const fetchFeaturePopulationStats = () =>
+  api.get<FeaturePopulationStats>('/feature-store/population-stats').then((r) => r.data);
 
 export const fetchPlayerEconCompat = (id: string) =>
   api.get<EconCompat>(`/players/${id}/econ-compat`).then((r) => r.data);
