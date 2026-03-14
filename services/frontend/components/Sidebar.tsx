@@ -37,6 +37,7 @@ const ADV_NAV = [
   { href: '/ingest-jobs',    label: 'Jobs de Ingestão',       icon: Activity },
   { href: '/ingest-errors',  label: 'Quarentena de Erros',    icon: AlertOctagon },
   { href: '/audit-logs',     label: 'Log de Auditoria',       icon: ScrollText },
+  { href: '/admin/ops',      label: 'Operações',              icon: Activity },
   { href: '/settings',       label: 'Parâmetros de Sistema',  icon: Settings },
   { href: '/admin',          label: 'Administração',          icon: Shield },
 ];

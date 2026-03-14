@@ -743,3 +743,45 @@ export const updateCaseStatus = (caseId: string, newStatus: string) =>
     { event_type: 'STATUS_CHANGE', content: { new_status: newStatus } },
   ).then((r) => r.data);
 
+// ── Module 7 — Observabilidade e Operação ─────────────────────────────────────
+
+export interface ServiceHealth {
+  postgres: string;
+  redis: string;
+  kafka: string;
+  minio: string;
+  clickhouse: string;
+  ml_service: string;
+}
+
+export interface HealthStatus {
+  status: 'ok' | 'degraded';
+  checks: ServiceHealth;
+  timestamp: string;
+}
+
+export const fetchHealthStatus = () =>
+  api.get<HealthStatus>('/health/ready').then((r) => r.data);
+
+export interface SystemFlag {
+  key: string;
+  value: Record<string, unknown>;
+  updated_at: string | null;
+}
+
+export const fetchSystemFlags = () =>
+  api.get<SystemFlag[]>('/admin/flags').then((r) => r.data);
+
+export const toggleMaintenanceMode = (enabled: boolean) =>
+  api
+    .post<{ maintenance_mode: boolean }>(`/admin/maintenance-mode?enabled=${enabled}`)
+    .then((r) => r.data);
+
+export const fetchAmlKpis = () =>
+  api.get<Record<string, unknown>>('/admin/kpis/aml').then((r) => r.data);
+
+export const designateChallenger = (modelId: string) =>
+  api
+    .post<{ status: string; model_id: string }>(`/model-registry/${modelId}/challenger`)
+    .then((r) => r.data);
+

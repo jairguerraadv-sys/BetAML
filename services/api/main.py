@@ -20,6 +20,8 @@ import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
+import logging
+
 import structlog
 from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import _rate_limit_exceeded_handler
@@ -48,6 +50,19 @@ from models import (
 )
 
 logger = structlog.get_logger()
+
+structlog.configure(
+    processors=[
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.dev.ConsoleRenderer()
+        if True  # always human-readable in dev; swap for JSONRenderer in prod
+        else structlog.processors.JSONRenderer(),
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+    logger_factory=structlog.PrintLoggerFactory(),
+)
 
 
 @asynccontextmanager
@@ -87,6 +102,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(SlowAPIMiddleware)
+
+# New observability middlewares (registered after SlowAPI; add_middleware wraps in reverse,
+# so RequestIDMiddleware runs outermost → RequestID generated before Maintenance check)
+from middleware import RequestIDMiddleware, MaintenanceModeMiddleware  # noqa: E402
+app.add_middleware(MaintenanceModeMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
 # ─── Middleware: propaga tenant_id para RLS do Postgres ───────────────────────
 @app.middleware("http")
@@ -470,8 +491,19 @@ async def _startup():
             misfire_grace_time=3600,
         )
 
+        # Business Metrics Update — a cada 5 minutos
+        from metrics import update_business_metrics
+        scheduler.add_job(
+            update_business_metrics,
+            trigger="interval",
+            minutes=5,
+            id="business_metrics_update",
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
         scheduler.start()
-        logger.info("scheduled_jobs_started", jobs=["risk_score_decay@04:00", "lgpd_data_expiration@05:00", "sla_violations_check@1h", "feature_population_stats@06:00", "data_retention_batch@sun03:00"])
+        logger.info("scheduled_jobs_started", jobs=["risk_score_decay@04:00", "lgpd_data_expiration@05:00", "sla_violations_check@1h", "feature_population_stats@06:00", "data_retention_batch@sun03:00", "business_metrics_update@5min"])
     except ImportError:
         logger.warning("apscheduler_not_installed", hint="pip install apscheduler")
     except Exception as exc:
@@ -515,6 +547,7 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
 # ─── Health ───────────────────────────────────────
 @app.get("/health", tags=["infra"])
 async def health():
+    """Backward-compat alias → same response as /health/live."""
     return {"status": "ok", "version": "2.1.0", "timestamp": datetime.now(UTC).isoformat()}
 
 
@@ -526,6 +559,7 @@ from routers import auth, alerts, audit, cases, ingest, mappings, players, rules
 from routers.admin import router as admin_router                # noqa: E402
 from routers.compound_rules import router as compound_rules_router  # noqa: E402
 from routers.feature_store import router as feature_store_router  # noqa: E402
+from routers.health import router as health_router                # noqa: E402
 from routers.ml import router as ml_router                     # noqa: E402
 from routers.notifications import router as notifications_router  # noqa: E402
 from routers.internal import router as internal_router            # noqa: E402
@@ -539,6 +573,7 @@ app.include_router(alerts.router)
 app.include_router(audit.router)
 app.include_router(cases.router)
 app.include_router(compound_rules_router)
+app.include_router(health_router)
 app.include_router(ingest.router)
 app.include_router(mappings.router)
 app.include_router(player_lists_router)
