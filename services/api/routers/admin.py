@@ -19,7 +19,7 @@ from typing import Optional
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func as sqlfunc, select, update
+from sqlalchemy import desc, func as sqlfunc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import create_access_token, get_current_user, hash_password, require_roles
@@ -29,7 +29,6 @@ from libs.models import (
     ApiKey,
     AuditLog,
     Case,
-    MappingConfig,
     RuleDefinition,
     ScoringConfig,
     SystemFlag,
@@ -443,10 +442,14 @@ async def preview_scoring_config(
 
     def _bucket(score: float, cfg: ScoringPreviewIn) -> str | None:
         s = score * 100
-        if s >= (cfg.critical_threshold or 95): return "critical"
-        if s >= (cfg.high_threshold or 80):     return "high"
-        if s >= (cfg.medium_threshold or 60):   return "medium"
-        if s >= (cfg.low_threshold or 30):      return "low"
+        if s >= (cfg.critical_threshold or 95):
+            return "critical"
+        if s >= (cfg.high_threshold or 80):
+            return "high"
+        if s >= (cfg.medium_threshold or 60):
+            return "medium"
+        if s >= (cfg.low_threshold or 30):
+            return "low"
         return None
 
     cur = PreviewBandCount()
@@ -456,15 +459,23 @@ async def preview_scoring_config(
         if fs is None:
             continue
         sev = (row_sev or "").upper()
-        if sev == "CRITICAL":  cur.critical += 1
-        elif sev == "HIGH":    cur.high += 1
-        elif sev == "MEDIUM":  cur.medium += 1
-        elif sev == "LOW":     cur.low += 1
+        if sev == "CRITICAL":
+            cur.critical += 1
+        elif sev == "HIGH":
+            cur.high += 1
+        elif sev == "MEDIUM":
+            cur.medium += 1
+        elif sev == "LOW":
+            cur.low += 1
         b = _bucket(fs, proposed)
-        if b == "critical":  prop.critical += 1
-        elif b == "high":    prop.high += 1
-        elif b == "medium":  prop.medium += 1
-        elif b == "low":     prop.low += 1
+        if b == "critical":
+            prop.critical += 1
+        elif b == "high":
+            prop.high += 1
+        elif b == "medium":
+            prop.medium += 1
+        elif b == "low":
+            prop.low += 1
 
     return ScoringPreviewOut(current=cur, proposed=prop, total_alerts_30d=total)
 

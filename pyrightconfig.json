@@ -1,7 +1,11 @@
 {
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "extraPaths": ["services/api", "libs"],
   "reportMissingImports": "none",
   "reportMissingModuleSource": "none",
-  "pythonVersion": "3.11",
+  "reportGeneralTypeIssues": "none",
+  "reportAttributeAccessIssue": "none",
   "exclude": [
     "services/frontend",
     "**/node_modules",

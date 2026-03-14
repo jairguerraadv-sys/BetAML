@@ -138,11 +138,16 @@ async def update_rule(
             raise HTTPException(400, detail=f"DSL inválido: {msg}")
         r.condition_dsl = body.condition_dsl
         r.version += 1
-    if body.name:        r.name        = body.name
-    if body.description: r.description = body.description
-    if body.status:      r.status      = body.status
-    if body.severity:    r.severity    = body.severity
-    if body.params is not None: r.params = body.params
+    if body.name:
+        r.name = body.name
+    if body.description:
+        r.description = body.description
+    if body.status:
+        r.status = body.status
+    if body.severity:
+        r.severity = body.severity
+    if body.params is not None:
+        r.params = body.params
     r.updated_by = current_user.id
     await write_audit(db, current_user.tenant_id, current_user.id, "UPDATE", "RuleDefinition", rule_id, before=before, after=body.model_dump())
     await db.commit()

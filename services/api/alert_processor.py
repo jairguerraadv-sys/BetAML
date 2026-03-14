@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -29,7 +28,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from config import settings
-from models import Alert, Case, CaseEvent, Player, ScoringConfig
+from models import Alert, Case, CaseEvent, Player
 
 logger = structlog.get_logger(__name__)
 
@@ -331,7 +330,7 @@ async def start_alert_consumer() -> None:
     Session = _get_consumer_session()
 
     logger.info("alert_consumer_starting", topic=TOPIC, group=GROUP_ID)
-    last_error_time = 0.0
+    _last_error_time = 0.0
 
     for attempt in range(MAX_RETRIES):
         try:

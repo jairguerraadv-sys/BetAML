@@ -469,7 +469,7 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                 "description":    alert.get("description", ""),
                 "evidence":       json.dumps(alert.get("evidence", {})),
                 "source_event_id": alert.get("source_event_id"),
-                "created_at":     datetime.utcnow(),
+                "created_at":     datetime.now(timezone.utc).replace(tzinfo=None),
             })
             # RuleExecutionLog
             conn.execute(sa.text("""

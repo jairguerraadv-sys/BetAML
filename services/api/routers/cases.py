@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import decrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
 from models import Alert, Case, CaseEvent, FinancialTransaction, Player, ReportPackage, Tenant, User
+from repositories import CaseRepository
+from repositories.cases import get_case_repo
 from utils import write_audit
 
 logger = structlog.get_logger(__name__)
@@ -37,15 +39,17 @@ _STATUS_TRANSITIONS: dict[str, list[str]] = {
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _build_report_pdf(payload: dict) -> bytes:
-    """Gera PDF COAF compacto via reportlab. Retorna bytes (vazio se lib indisponível)."""
+    """Gera PDF COAF compacto via reportlab. Levanta RuntimeError se lib indisponível."""
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import cm
         from reportlab.platypus import Paragraph, Spacer, SimpleDocTemplate, Table, TableStyle
         from reportlab.lib import colors
-    except ImportError:
-        return b""
+    except ImportError as exc:
+        raise RuntimeError(
+            "reportlab não está instalado. Adicione 'reportlab' ao requirements.txt e reconstrua o container."
+        ) from exc
 
     import io as _io
     buf = _io.BytesIO()
@@ -165,14 +169,15 @@ async def list_cases(
     limit: int = 50,
     offset: int = 0,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    repo: CaseRepository = Depends(get_case_repo),
 ):
-    q = select(Case).where(Case.tenant_id == current_user.tenant_id)
-    if status_filter: q = q.where(Case.status == status_filter)
-    if player_id:     q = q.where(Case.player_id == player_id)
-    q = q.order_by(Case.created_at.desc()).limit(limit).offset(offset)
-    result = await db.execute(q)
-    cases = result.scalars().all()
+    cases = await repo.list_filtered(
+        current_user.tenant_id,
+        status=status_filter,
+        player_id=player_id,
+        limit=limit,
+        offset=offset,
+    )
     return [
         {
             "id": c.id, "title": c.title, "status": c.status, "severity": c.severity,
@@ -189,10 +194,11 @@ async def list_cases(
 async def get_case(
     case_id: str,
     current_user: User = Depends(get_current_user),
+    repo: CaseRepository = Depends(get_case_repo),
     db: AsyncSession = Depends(get_db),
 ):
-    c = await db.get(Case, case_id)
-    if not c or c.tenant_id != current_user.tenant_id:
+    c = await repo.get_by_id(current_user.tenant_id, case_id)
+    if not c:
         raise HTTPException(404, "Caso não encontrado")
     alerts = (await db.execute(select(Alert).where(Alert.case_id == case_id))).scalars().all()
     events = (await db.execute(
@@ -221,9 +227,9 @@ async def assign_case(
     db: AsyncSession = Depends(get_db),
 ):
     c = await db.get(Case, case_id)
-    if not c or c.tenant_id != current_user.tenant_id:
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
-    c.assigned_to = body.user_id
+    c.assigned_to = body.user_id  # type: ignore[assignment]
     evt = CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,
         event_type="ASSIGNMENT", content={"assigned_to": body.user_id},
@@ -243,12 +249,12 @@ async def add_case_event(
     db: AsyncSession = Depends(get_db),
 ):
     c = await db.get(Case, case_id)
-    if not c or c.tenant_id != current_user.tenant_id:
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
     if body.event_type == "STATUS_CHANGE":
         new_status = body.content.get("new_status")
         if new_status:
-            allowed = _STATUS_TRANSITIONS.get(c.status, [])
+            allowed = _STATUS_TRANSITIONS.get(str(c.status), [])
             if new_status not in allowed:
                 raise HTTPException(
                     400,
@@ -256,7 +262,7 @@ async def add_case_event(
                     f"Transições permitidas de '{c.status}': "
                     f"{allowed if allowed else ['nenhuma (status terminal)']}",
                 )
-            c.status = new_status
+            c.status = new_status  # type: ignore[assignment]
     evt = CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,
         event_type=body.event_type, content=body.content, created_by=current_user.id,
@@ -277,7 +283,7 @@ async def upload_evidence(
     db: AsyncSession = Depends(get_db),
 ):
     c = await db.get(Case, case_id)
-    if not c or c.tenant_id != current_user.tenant_id:
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
     evt = CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,
@@ -298,7 +304,7 @@ async def generate_report_package(
     db: AsyncSession = Depends(get_db),
 ):
     c = await db.get(Case, case_id)
-    if not c or c.tenant_id != current_user.tenant_id:
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
     if body.decision == "FILE_SAR" and not body.analyst_narrative:
         raise HTTPException(400, "analyst_narrative é obrigatório quando decision=FILE_SAR (COAF Res. 36/2021 Art. 9)")
@@ -307,14 +313,14 @@ async def generate_report_package(
     events  = (await db.execute(select(CaseEvent).where(CaseEvent.case_id == case_id))).scalars().all()
 
     player_info: dict = {}
-    if c.player_id:
+    if c.player_id is not None:
         p = await db.get(Player, c.player_id)
         if p:
-            cpf_plain = decrypt_pii(p.cpf_encrypted)
+            cpf_plain = decrypt_pii(p.cpf_encrypted)  # type: ignore[arg-type]
             player_info = {
                 "player_id": p.id, "external_player_id": p.external_player_id,
                 "cpf_masked": mask_cpf(cpf_plain), "pep_flag": p.pep_flag,
-                "risk_score": float(p.risk_score),
+                "risk_score": float(p.risk_score),  # type: ignore[arg-type]
             }
 
     alert_amounts = [float(a.evidence.get("amount", 0)) for a in alerts if isinstance(a.evidence, dict)]
@@ -322,7 +328,7 @@ async def generate_report_package(
         "total_alerts":          len(alerts),
         "total_amount_brl":      round(sum(alert_amounts), 2),
         "max_single_amount_brl": round(max(alert_amounts, default=0.0), 2),
-        "alert_types":           list({a.alert_type for a in alerts if a.alert_type}),
+        "alert_types":           list({a.alert_type for a in alerts if a.alert_type is not None}),
     }
     report_id    = str(uuid.uuid4())
     generated_at = datetime.now(UTC).isoformat()
@@ -333,18 +339,18 @@ async def generate_report_package(
         "subject": player_info,
         "case": {
             "id": c.id, "title": c.title, "status": c.status, "severity": c.severity,
-            "opened_at": c.created_at.isoformat() + "Z" if c.created_at else None,
+            "opened_at": c.created_at.isoformat() + "Z" if c.created_at is not None else None,
         },
         "suspicious_operations": [
             {"alert_id": a.id, "title": a.title, "severity": a.severity,
              "alert_type": a.alert_type, "evidence": a.evidence,
-             "occurred_at": a.created_at.isoformat() + "Z" if a.created_at else None}
+             "occurred_at": a.created_at.isoformat() + "Z" if a.created_at is not None else None}
             for a in alerts
         ],
         "financial_summary": financial_summary,
         "investigation_timeline": [
             {"event_type": e.event_type, "content": e.content,
-             "recorded_at": e.created_at.isoformat() + "Z" if e.created_at else None}
+             "recorded_at": e.created_at.isoformat() + "Z" if e.created_at is not None else None}
             for e in events
         ],
         "analyst_narrative": body.analyst_narrative,
@@ -365,7 +371,8 @@ async def generate_report_package(
     try:
         pdf_bytes = await asyncio.get_event_loop().run_in_executor(None, _build_report_pdf, payload)
         if pdf_bytes:
-            import os as _os, tempfile as _tmp
+            import os as _os
+            import tempfile as _tmp
             pdf_filename = f"reports/{current_user.tenant_id}/{report_id}.pdf"
             try:
                 from minio import Minio as _Minio
@@ -384,7 +391,10 @@ async def generate_report_package(
                 with open(tmp_path, "wb") as _f:
                     _f.write(pdf_bytes)
                 pdf_path = tmp_path
-            rp.pdf_path = pdf_path
+            rp.pdf_path = pdf_path  # type: ignore[assignment]
+    except RuntimeError as pdf_dep_exc:
+        logger.error("pdf_dependency_missing", error=str(pdf_dep_exc))
+        raise HTTPException(503, "Geração de PDF indisponível — reportlab não instalado no servidor") from pdf_dep_exc
     except Exception as pdf_exc:
         logger.warning("pdf_generation_failed", error=str(pdf_exc))
 
@@ -428,7 +438,7 @@ async def submit_report_package(
         JSON com status da submissão e identificador de rastreamento.
     """
     c = await db.get(Case, case_id)
-    if not c or c.tenant_id != current_user.tenant_id:
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
 
     # Buscar o ReportPackage mais recente para este caso
@@ -457,11 +467,11 @@ async def submit_report_package(
             f"Decision atual: '{payload_decision}'."
         )
 
-    if rp.status == "FILED":
+    if str(rp.status) == "FILED":
         raise HTTPException(409, "Este ReportPackage já foi submetido anteriormente.")
 
     # Marcar como FILED
-    rp.status = "FILED"
+    rp.status = "FILED"  # type: ignore[assignment]
 
     # Registrar evento no caso
     import uuid as _uuid
@@ -529,7 +539,7 @@ async def list_report_packages(
         Lista de dicionários com metadados de cada ReportPackage.
     """
     c = await db.get(Case, case_id)
-    if not c or c.tenant_id != current_user.tenant_id:
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
 
     rps = (await db.execute(
@@ -548,7 +558,7 @@ async def list_report_packages(
             "format": rp.format,
             "decision": (
                 (rp.payload or {}).get("decision", rp.decision)
-                if rp.payload
+                if rp.payload is not None
                 else rp.decision
             ),
             "created_at": rp.created_at,
@@ -575,18 +585,19 @@ async def download_report_pdf(
         application/pdf — bytes do relatório COAF.
     """
     rp = await db.get(ReportPackage, rp_id)
-    if not rp or rp.tenant_id != current_user.tenant_id or rp.case_id != case_id:
+    if not rp or str(rp.tenant_id) != str(current_user.tenant_id) or str(rp.case_id) != case_id:
         raise HTTPException(404, "ReportPackage não encontrado")
-    if not rp.pdf_path:
+    if rp.pdf_path is None:
         raise HTTPException(404, "PDF ainda não gerado para este pacote")
     import os as _os
-    if rp.pdf_path.startswith("minio://"):
+    pdf_path_str = str(rp.pdf_path)
+    if pdf_path_str.startswith("minio://"):
         try:
             from minio import Minio as _Minio
             minio_url = _os.getenv("MINIO_URL", "minio:9000")
             mc = _Minio(minio_url, access_key=_os.getenv("MINIO_ACCESS_KEY", "minio"),
                         secret_key=_os.getenv("MINIO_SECRET_KEY", "minio123"), secure=False)
-            parts = rp.pdf_path[len("minio://"):].split("/", 1)
+            parts = pdf_path_str[len("minio://"):].split("/", 1)
             bucket, key = parts[0], parts[1]
             resp = mc.get_object(bucket, key)
             pdf_bytes = resp.read()
@@ -594,9 +605,9 @@ async def download_report_pdf(
             logger.error("pdf_download_minio_failed", case_id=case_id, rp_id=rp_id, error=str(exc))
             raise HTTPException(503, "PDF temporariamente indisponível — tente novamente em instantes") from exc
     else:
-        if not _os.path.isfile(rp.pdf_path):
+        if not _os.path.isfile(pdf_path_str):
             raise HTTPException(404, "Arquivo PDF não encontrado no sistema")
-        with open(rp.pdf_path, "rb") as f:
+        with open(pdf_path_str, "rb") as f:
             pdf_bytes = f.read()
     return StreamingResponse(
         iter([pdf_bytes]),
@@ -624,7 +635,7 @@ async def download_coaf_xml(
     from xml.dom import minidom
 
     case = await db.get(Case, case_id)
-    if not case or case.tenant_id != current_user.tenant_id:
+    if not case or str(case.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Case não encontrado")
     if case.status not in ("CLOSED", "REPORTED"):
         raise HTTPException(400, "Relatório COAF só pode ser gerado para cases CLOSED ou REPORTED")
@@ -643,7 +654,7 @@ async def download_coaf_xml(
     # Narrativa: preferir payload["analystNarrative"] → payload["analyst_narrative"] → coluna direta
     analyst_narrative = ""
     if rp is not None:
-        analyst_narrative = (
+        analyst_narrative = str(
             (rp.payload or {}).get("analystNarrative")
             or (rp.payload or {}).get("analyst_narrative")
             or rp.analyst_narrative
@@ -667,7 +678,7 @@ async def download_coaf_xml(
             )
 
     # ── Buscar player ─────────────────────────────────────────────────────────
-    player = await db.get(Player, case.player_id) if case.player_id else None
+    player = await db.get(Player, case.player_id) if case.player_id is not None else None
 
     # ── Montar XML conforme schema COAF RIF ───────────────────────────────────
     root = Element("ComunicacaoMifd")
@@ -685,7 +696,7 @@ async def download_coaf_xml(
     # Comunicante (Operador)
     comunicante = SubElement(root, "Comunicante")
     SubElement(comunicante, "CnpjOuCpfComunicante").text = cnpj
-    SubElement(comunicante, "NomeComunicante").text = (
+    SubElement(comunicante, "NomeComunicante").text = str(
         (tenant.name if tenant else None) or current_user.tenant_id
     )
     SubElement(comunicante, "TipoAtividade").text = "APOSTAS"
@@ -698,13 +709,13 @@ async def download_coaf_xml(
         SubElement(parte, "NomePessoa").text = "CONFIDENCIAL"  # PII protegida por LGPD
         SubElement(parte, "TipoPapel").text = "COMUNICADO"
         # CPF mascarado — obrigatório COAF Res. 36/2021 Schema MIFD v3
-        cpf_plain = decrypt_pii(player.cpf_encrypted)
+        cpf_plain = decrypt_pii(player.cpf_encrypted)  # type: ignore[arg-type]
         SubElement(parte, "CpfCnpjPessoa").text = mask_cpf(cpf_plain)
 
     # Operação Suspeita
     # Buscar total de transações do player (ValorOperacao — obrigatório MIFD v3)
     total_amount: float = 0.0
-    if case.player_id:
+    if case.player_id is not None:
         total_amount = float((await db.execute(
             select(sqlfunc.coalesce(sqlfunc.sum(FinancialTransaction.amount), 0))
             .where(

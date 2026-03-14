@@ -13,8 +13,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import structlog
-from sqlalchemy import select, update, and_, desc
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_
 
 from config import settings
 from database import AsyncSessionLocal
@@ -29,7 +28,7 @@ async def _notify_admins_job_failure(job_name: str, error: str) -> None:
         async with AsyncSessionLocal() as db:
             admins = (
                 await db.execute(
-                    select(User).where(User.role == "ADMIN", User.active == True)
+                    select(User).where(User.role == "ADMIN", User.active.is_(True))
                 )
             ).scalars().all()
             for admin in admins:
@@ -65,7 +64,7 @@ async def calculate_risk_score_decay() -> None:
     """
     try:
         async with AsyncSessionLocal() as db:
-            tenants = (await db.execute(select(Tenant).where(Tenant.active == True))).scalars().all()
+            tenants = (await db.execute(select(Tenant).where(Tenant.active.is_(True)))).scalars().all()
 
             for tenant in tenants:
                 # Buscar ScoringConfig para pesos
@@ -169,7 +168,7 @@ async def cleanup_expired_player_data() -> None:
     """
     try:
         async with AsyncSessionLocal() as db:
-            tenants = (await db.execute(select(Tenant).where(Tenant.active == True))).scalars().all()
+            tenants = (await db.execute(select(Tenant).where(Tenant.active.is_(True)))).scalars().all()
 
             for tenant in tenants:
                 scoring_cfg = (
@@ -271,7 +270,7 @@ async def check_sla_violations() -> None:
                     select(User).where(
                         User.tenant_id == case.tenant_id,
                         User.role.in_(["ADMIN", "AML_ANALYST"]),
-                        User.active == True,
+                        User.active.is_(True),
                     )
                 )).scalars().all()
                 for adm in admins:
@@ -356,7 +355,7 @@ async def compute_feature_population_stats() -> None:
         try:
             async with AsyncSessionLocal() as db:
                 tenants = (
-                    await db.execute(select(Tenant).where(Tenant.active == True))
+                    await db.execute(select(Tenant).where(Tenant.active.is_(True)))
                 ).scalars().all()
 
                 since = datetime.now(UTC) - timedelta(days=30)

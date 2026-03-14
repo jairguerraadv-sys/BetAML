@@ -1,7 +1,6 @@
 """routers/player_lists.py — Player watchlists (M3): CRUD + CSV bulk upload."""
 from __future__ import annotations
 
-import io
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field

@@ -12,7 +12,7 @@ import os
 import random
 import sys
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from config import settings
 from auth import hash_password, encrypt_pii
 from models import (
-    Alert, AuditLog, Base, Case, CaseEvent, CompoundRule,
+    Alert, Base, Case, CaseEvent, CompoundRule,
     MappingConfig, Player, PlayerList, PlayerListEntry, RuleDefinition,
     ScoringConfig, Tenant, User,
 )
@@ -229,7 +229,7 @@ async def seed(db: AsyncSession):
 
         # 50 Players + cenários suspeitos
         device_shared = "dev-shared-001"  # device compartilhado
-        bank_shared   = "12345678901"     # conta bancária compartilhada
+        _bank_shared   = "12345678901"     # conta bancária compartilhada
 
         players_list = []
         for i in range(50):
@@ -248,7 +248,7 @@ async def seed(db: AsyncSession):
             db.add(player)
             players_list.append(player)
         await db.flush()
-        print(f"    50 players criados (3 PEP)")
+        print("    50 players criados (3 PEP)")
 
         # Cenários suspeitos — gerar Alerts
         suspicious_players = players_list[:5]
@@ -258,7 +258,7 @@ async def seed(db: AsyncSession):
             {"tid": tenant.id}
         )
         rule_rows = rule_result.fetchall()
-        rules_map = {r.name: r.id for r in rule_rows}
+        _rules_map = {r.name: r.id for r in rule_rows}
 
         # Cenário 1: Structuring
         p = suspicious_players[0]
@@ -275,7 +275,7 @@ async def seed(db: AsyncSession):
                 "deposit_sum_24h": 7200,
                 "threshold_count": 5,
                 "threshold_sum": 5000,
-                "triggered_at": datetime.utcnow().isoformat(),
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
             },
             source_event_id=str(uuid.uuid4()),
         )
@@ -295,7 +295,7 @@ async def seed(db: AsyncSession):
                 "pep_flag": True,
                 "amount": 15000,
                 "threshold": 5000,
-                "triggered_at": datetime.utcnow().isoformat(),
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
             },
             source_event_id=str(uuid.uuid4()),
         )
@@ -315,7 +315,7 @@ async def seed(db: AsyncSession):
                 "device_id": device_shared,
                 "shared_device_count": 5,
                 "threshold": 3,
-                "triggered_at": datetime.utcnow().isoformat(),
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
             },
             source_event_id=str(uuid.uuid4()),
         )
@@ -336,7 +336,7 @@ async def seed(db: AsyncSession):
                 "bet_stake_sum_24h": 20,
                 "withdrawal_sum_24h": 19500,
                 "ratio": 0.975,
-                "triggered_at": datetime.utcnow().isoformat(),
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
             },
             anomaly_score=0.91,
             source_event_id=str(uuid.uuid4()),
@@ -472,8 +472,8 @@ async def seed(db: AsyncSession):
             )
             db.add(compound2)
 
-        print(f"    4 alertas suspeitos + 1 case auto-criado")
-        print(f"    ScoringConfig, 2 PlayerLists, CompoundRules criadas")
+        print("    4 alertas suspeitos + 1 case auto-criado")
+        print("    ScoringConfig, 2 PlayerLists, CompoundRules criadas")
 
     await db.commit()
     print("\nSeeds aplicados com sucesso!")

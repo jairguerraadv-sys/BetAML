@@ -250,7 +250,7 @@ class ClickHouseClient:
             return
         cols = list(rows[0].keys())
         col_str = ", ".join(cols)
-        placeholders = ", ".join(["%s"] * len(cols))
+        _placeholders = ", ".join(["%s"] * len(cols))
         query = f"INSERT INTO {table} ({col_str}) VALUES"
         data = [tuple(r[c] for c in cols) for r in rows]
         self.execute_many(query, data)

@@ -1,11 +1,8 @@
 """routers/auth.py — Autenticação: login, refresh, logout, /me"""
-from __future__ import annotations
-
-from datetime import timedelta
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,21 +11,20 @@ from auth import (
     create_access_token,
     get_current_user,
     oauth2_scheme,
-    require_roles,
     revoke_token,
     verify_password,
 )
 from config import settings
 from database import get_db
 from models import Tenant, User
+from rate_limit import limiter
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["auth"])
-# NOTE: Auth endpoints are rate-limited by the global SlowAPIMiddleware (1000/min).
-# For tighter per-endpoint limits (e.g. 10/min for login), configure at the
-# ingress/WAF level in production — SlowAPI decorator + from __future__ import
-# annotations causes __globals__ resolution failure in FastAPI's typed-signature.
+# Rate-limit: 10/min por IP no login e refresh.
+# O decorator @limiter.limit requer `request: Request` como primeiro parâmetro
+# explícito para funcionar corretamente com `from __future__ import annotations`.
 
 
 class TokenResponse(BaseModel):
@@ -45,10 +41,11 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/auth/login", response_model=TokenResponse)
-async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends(get_db)):
     if body.tenant_slug:
         tenant_result = await db.execute(
-            select(Tenant).where(Tenant.slug == body.tenant_slug, Tenant.active == True)
+            select(Tenant).where(Tenant.slug == body.tenant_slug, Tenant.active.is_(True))
         )
         tenant = tenant_result.scalar_one_or_none()
         if not tenant:
@@ -57,12 +54,12 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
             select(User).where(
                 User.username == body.username,
                 User.tenant_id == tenant.id,
-                User.active == True,
+                User.active.is_(True),
             )
         )
     else:
         result = await db.execute(
-            select(User).where(User.username == body.username, User.active == True)
+            select(User).where(User.username == body.username, User.active.is_(True))
         )
     user = result.scalar_one_or_none()
     if not user or not verify_password(body.password, user.password_hash):
@@ -86,7 +83,8 @@ async def me(current_user: User = Depends(get_current_user)):
 
 
 @router.post("/auth/refresh", response_model=TokenResponse)
-async def refresh(current_user: User = Depends(get_current_user)):
+@limiter.limit("10/minute")
+async def refresh(request: Request, current_user: User = Depends(get_current_user)):
     token = create_access_token({
         "sub": current_user.id,
         "tenant_id": current_user.tenant_id,

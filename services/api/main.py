@@ -27,7 +27,6 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from fastapi import (
     FastAPI,
-    HTTPException,
     Request,
 )
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,7 +43,6 @@ from models import (
     Base,
     FeatureSnapshot,
     Notification,
-    Player,
     Tenant,
     User,
 )
@@ -334,7 +332,7 @@ async def _run_feature_drift_check_once() -> None:
                             select(User.id).where(
                                 User.tenant_id == tenant_id,
                                 User.role == "ADMIN",
-                                User.active == True,
+                                User.active.is_(True),
                             )
                         )
                     ).scalars().all()

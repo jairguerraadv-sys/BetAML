@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid as _uuid_mod
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import structlog
@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import decrypt_pii, encrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
-from models import Alert, Bet, Case, FinancialTransaction, Player, ScoringConfig, User
+from models import Alert, Case, FinancialTransaction, Player, ScoringConfig, User
+from repositories import PlayerRepository
+from repositories.players import get_player_repo
 from utils import write_audit
 
 logger = structlog.get_logger(__name__)
@@ -45,18 +47,10 @@ async def list_players(
     limit: int = Query(50, le=200),
     offset: int = 0,
     current_user: User = Depends(get_current_user),
+    repo: PlayerRepository = Depends(get_player_repo),
     db: AsyncSession = Depends(get_db),
 ):
-    q = (
-        select(Player)
-        .where(
-            Player.tenant_id == current_user.tenant_id,
-            Player.status != "ERASED",
-        )
-        .limit(limit)
-        .offset(offset)
-    )
-    players = (await db.execute(q)).scalars().all()
+    players = await repo.list_active(current_user.tenant_id, limit=limit, offset=offset)
     # LGPD Art. 37 — log de acesso a dados pessoais (CPF mascarado)
     if current_user.role in ("ADMIN", "AML_ANALYST") and players:
         await write_audit(
@@ -83,10 +77,11 @@ async def list_players(
 async def get_player(
     player_id: str,
     current_user: User = Depends(get_current_user),
+    repo: PlayerRepository = Depends(get_player_repo),
     db: AsyncSession = Depends(get_db),
 ):
-    p = await db.get(Player, player_id)
-    if not p or p.tenant_id != current_user.tenant_id:
+    p = await repo.get_by_id(current_user.tenant_id, player_id)
+    if not p:
         raise HTTPException(404, "Player não encontrado")
     if p.status == "ERASED":
         # LGPD Art. 18 — dados anonimizados; não retornar PII
@@ -156,10 +151,14 @@ async def get_player_econ_compat(
     else:
         income_ratio_30d = None
 
-    if income_ratio_30d is None:        tier = "UNKNOWN"
-    elif income_ratio_30d <= ratio_threshold:  tier = "GREEN"
-    elif income_ratio_30d <= ratio_threshold * 2: tier = "YELLOW"
-    else:                                tier = "RED"
+    if income_ratio_30d is None:
+        tier = "UNKNOWN"
+    elif income_ratio_30d <= ratio_threshold:
+        tier = "GREEN"
+    elif income_ratio_30d <= ratio_threshold * 2:
+        tier = "YELLOW"
+    else:
+        tier = "RED"
 
     return {
         "player_id":              player_id,

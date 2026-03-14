@@ -8,7 +8,6 @@ Expõe:
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -51,11 +50,11 @@ async def stop_producer():
 
 async def write_audit(
     db: AsyncSession,
-    tenant_id: str,
-    user_id: Optional[str],
+    tenant_id: Any,
+    user_id: Any,
     action: str,
     entity_type: str,
-    entity_id: Optional[str] = None,
+    entity_id: Any = None,
     before: Optional[dict] = None,
     after: Optional[dict] = None,
     ip: Optional[str] = None,
