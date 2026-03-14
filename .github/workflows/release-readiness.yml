@@ -41,7 +41,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: e2e/package-lock.json
+          cache-dependency-path: e2e/package.json
 
       - name: Install API dependencies
         run: |
@@ -104,4 +104,4 @@ jobs:
 
       - name: Stop services
         if: always()
-        run: docker compose -f infra/docker-compose.yml down -v
+        run: docker compose -f infra/docker-compose.yml down -v || true

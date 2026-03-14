@@ -33,12 +33,13 @@ jobs:
 
       - name: Wait for PostgreSQL
         run: |
-          for i in $(seq 1 30); do
+          for i in $(seq 1 80); do
             docker compose -f infra/docker-compose.yml exec -T postgres pg_isready -U betaml >/dev/null 2>&1 && exit 0
-            echo "Waiting for postgres... ($i/30)"
+            echo "Waiting for postgres... ($i/80)"
             sleep 3
           done
           echo "PostgreSQL not ready in time" >&2
+          docker compose -f infra/docker-compose.yml logs postgres || true
           exit 1
 
       - name: Run data quality checks
@@ -48,4 +49,4 @@ jobs:
 
       - name: Stop services
         if: always()
-        run: docker compose -f infra/docker-compose.yml down -v
+        run: docker compose -f infra/docker-compose.yml down -v || true

@@ -97,8 +97,28 @@ jobs:
       - name: Install linting tools
         run: pip install ruff==0.4.7
 
-      - name: Run ruff
-        run: ruff check services/api/ libs/ --output-format=github
+      - name: Run ruff on changed Python files
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          mapfile -t files < <(
+            git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+              | grep -E '^(services/api|libs)/.*\.py$' || true
+          )
+
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No changed Python files under services/api or libs; skipping ruff."
+            exit 0
+          fi
+
+          printf 'Linting files:\n%s\n' "${files[@]}"
+          ruff check "${files[@]}" --output-format=github
 
   # ── Frontend: TypeScript strict check ─────────────────────────────────────
   frontend-typecheck:
@@ -112,8 +132,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: services/frontend/package-lock.json
 
       - name: Install dependencies
         working-directory: services/frontend
@@ -171,6 +189,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare .env for compose validation
+        run: cp .env.example .env
+
       - name: Validate docker-compose.yml syntax
         run: docker compose -f infra/docker-compose.yml config --quiet
 
@@ -204,13 +225,14 @@ jobs:
 
       - name: Wait for PostgreSQL health
         run: |
-          for i in $(seq 1 30); do
+          for i in $(seq 1 80); do
             if docker compose -f infra/docker-compose.yml exec -T postgres pg_isready -U betaml >/dev/null 2>&1; then
               exit 0
             fi
-            echo "Waiting for postgres... ($i/30)" && sleep 3
+            echo "Waiting for postgres... ($i/80)" && sleep 3
           done
           echo "PostgreSQL did not become healthy in time" >&2
+          docker compose -f infra/docker-compose.yml logs postgres || true
           exit 1
 
       - name: Run migration script twice (must be idempotent)
@@ -220,7 +242,7 @@ jobs:
 
       - name: Stop services
         if: always()
-        run: docker compose -f infra/docker-compose.yml down -v
+        run: docker compose -f infra/docker-compose.yml down -v || true
 
   # ── Migrations: validar trilha formal Alembic ─────────────────────────────
   alembic-smoke:

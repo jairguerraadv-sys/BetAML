@@ -29,17 +29,28 @@ jobs:
       - name: Start stack for load smoke
         run: |
           cp .env.example .env
+
+          # Start Postgres first to avoid dependency race with heavy init scripts.
+          docker compose -f infra/docker-compose.yml up -d postgres
+
+          for i in $(seq 1 80); do
+            docker compose -f infra/docker-compose.yml exec -T postgres pg_isready -U betaml >/dev/null 2>&1 && break
+            echo "Waiting for postgres... ($i/80)"
+            sleep 3
+          done
+
           docker compose -f infra/docker-compose.yml up -d \
-            postgres redis redpanda topic-init api
+            redis redpanda topic-init api
 
       - name: Wait for API
         run: |
-          for i in $(seq 1 40); do
+          for i in $(seq 1 70); do
             curl -sf http://localhost:8000/health >/dev/null && exit 0
-            echo "Waiting for API... ($i/40)"
+            echo "Waiting for API... ($i/70)"
             sleep 3
           done
           echo "API not ready" >&2
+          docker compose -f infra/docker-compose.yml logs postgres api || true
           exit 1
 
       - name: Run Locust smoke (batch ingest focus)
@@ -55,4 +66,4 @@ jobs:
 
       - name: Stop services
         if: always()
-        run: docker compose -f infra/docker-compose.yml down -v
+        run: docker compose -f infra/docker-compose.yml down -v || true

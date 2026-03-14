@@ -312,6 +312,12 @@ CREATE POLICY case_events_tenant_isolation ON case_events
 --    antes da inserção correspondente (o seeds.py já propaga via get_db).
 
 -- ── 5. Índices adicionais ─────────────────────────────────────────────
+ALTER TABLE notifications
+    ADD COLUMN IF NOT EXISTS is_read BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE compound_rules
+    ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+
 CREATE INDEX IF NOT EXISTS idx_report_packages_case    ON report_packages(case_id);
 CREATE INDEX IF NOT EXISTS idx_report_packages_tenant  ON report_packages(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feature_snapshots_player ON feature_snapshots(tenant_id, player_id, feature_date DESC);

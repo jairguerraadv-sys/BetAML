@@ -13,6 +13,7 @@ node_modules/
 out/
 *.tsbuildinfo
 package-lock.json
+!services/frontend/package-lock.json
 
 # IDE
 .vscode/
