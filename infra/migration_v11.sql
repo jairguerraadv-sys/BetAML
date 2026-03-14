@@ -102,8 +102,21 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_user
 ON audit_logs(tenant_id, user_id);
 
 -- Audit de acesso PII (LGPD Art. 37)
-CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_pii
-ON audit_logs(tenant_id, pii_accessed) WHERE pii_accessed IS NOT NULL;
+DO $$
+BEGIN
+	IF EXISTS (
+		SELECT 1
+		FROM information_schema.columns
+		WHERE table_name = 'audit_logs'
+		  AND column_name = 'pii_accessed'
+	) THEN
+		EXECUTE '
+			CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_pii
+			ON audit_logs(tenant_id, pii_accessed)
+			WHERE pii_accessed IS NOT NULL
+		';
+	END IF;
+END $$;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- IngestJob: tracking de jobs de ingestão
