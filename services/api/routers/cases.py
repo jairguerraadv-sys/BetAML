@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
 import structlog
@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import decrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
-from models import Alert, Case, CaseEvent, FinancialTransaction, Player, ReportPackage, Tenant, User
+from models import Alert, Case, CaseEvent, FinancialTransaction, Notification, Player, ReportPackage, ScoringConfig, Tenant, User
 from repositories import CaseRepository
 from repositories.cases import get_case_repo
 from utils import write_audit
@@ -138,6 +138,15 @@ class CaseEventCreate(BaseModel):
     content: dict[str, Any]
 
 
+class CaseCommentIn(BaseModel):
+    content: str = Field(..., min_length=1, max_length=2000)
+    mentions: list[str] = Field(default_factory=list)
+
+
+class CaseLinkAlertIn(BaseModel):
+    alert_id: str
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post("/cases", status_code=201)
@@ -156,6 +165,17 @@ async def create_case(
     )
     db.add(c)
     await db.flush()
+    # Auto-set SLA deadline from tenant ScoringConfig (or fallback defaults)
+    sc = (await db.execute(
+        select(ScoringConfig).where(ScoringConfig.tenant_id == current_user.tenant_id).limit(1)
+    )).scalar_one_or_none()
+    _sla_hours = {
+        "CRITICAL": int(sc.sla_critical_hours) if sc else 4,
+        "HIGH":     int(sc.sla_high_hours)     if sc else 24,
+        "MEDIUM":   int(sc.sla_medium_hours)   if sc else 72,
+        "LOW":      int(sc.sla_low_hours)       if sc else 168,
+    }
+    c.sla_due_at = datetime.now(UTC) + timedelta(hours=_sla_hours.get(body.severity, 24))
     await write_audit(db, current_user.tenant_id, current_user.id, "CREATE", "Case", c.id, after=body.model_dump())
     await db.commit()
     await db.refresh(c)
@@ -236,6 +256,15 @@ async def assign_case(
         created_by=current_user.id,
     )
     db.add(evt)
+    db.add(Notification(
+        tenant_id=current_user.tenant_id,
+        user_id=body.user_id,
+        type="CASE_ASSIGNED",
+        title=f"Caso atribuído: {c.title}",
+        body=f"O caso foi atribuído a você por {current_user.username}.",
+        reference_type="Case",
+        reference_id=case_id,
+    ))
     await write_audit(db, current_user.tenant_id, current_user.id, "ASSIGN", "Case", case_id, after={"assigned_to": body.user_id})
     await db.commit()
     return {"case_id": case_id, "assigned_to": body.user_id}
@@ -263,6 +292,9 @@ async def add_case_event(
                     f"{allowed if allowed else ['nenhuma (status terminal)']}",
                 )
             c.status = new_status  # type: ignore[assignment]
+            if new_status in ("CLOSED", "REPORTED"):
+                c.closed_by = current_user.id  # type: ignore[assignment]
+                c.closed_at = datetime.now(UTC)  # type: ignore[assignment]
     evt = CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,
         event_type=body.event_type, content=body.content, created_by=current_user.id,
@@ -746,3 +778,69 @@ async def download_coaf_xml(
         media_type="application/xml",
         headers={"Content-Disposition": f"attachment; filename=coaf_{case_id[:8]}.xml"},
     )
+
+
+# ── Module 5: Comments with @mention + Link-Alert ─────────────────────────────
+
+@router.post("/cases/{case_id}/comments", status_code=201)
+async def add_case_comment(
+    case_id: str,
+    body: CaseCommentIn,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Adiciona comentário ao caso. Suporta @menção de analistas do mesmo tenant."""
+    c = await db.get(Case, case_id)
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Caso não encontrado")
+    evt = CaseEvent(
+        case_id=case_id, tenant_id=current_user.tenant_id,
+        event_type="COMMENT",
+        content={"comment": body.content, "mentions": body.mentions, "author": current_user.id},
+        created_by=current_user.id,
+    )
+    db.add(evt)
+    for uid in body.mentions:
+        db.add(Notification(
+            tenant_id=current_user.tenant_id,
+            user_id=uid,
+            type="CASE_MENTION",
+            title=f"Você foi mencionado no caso: {c.title}",
+            body=body.content[:200],
+            reference_type="Case",
+            reference_id=case_id,
+        ))
+    await write_audit(db, current_user.tenant_id, current_user.id,
+                      "CASE_COMMENT", "Case", case_id,
+                      after={"mentions": body.mentions, "length": len(body.content)})
+    await db.commit()
+    await db.refresh(evt)
+    return {"id": evt.id, "created_at": evt.created_at}
+
+
+@router.post("/cases/{case_id}/link-alert")
+async def link_alert_to_case(
+    case_id: str,
+    body: CaseLinkAlertIn,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Vincula um alerta avulso a um caso existente."""
+    c = await db.get(Case, case_id)
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Caso não encontrado")
+    a = await db.get(Alert, body.alert_id)
+    if not a or str(a.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Alerta não encontrado")
+    a.case_id = case_id  # type: ignore[assignment]
+    db.add(CaseEvent(
+        case_id=case_id, tenant_id=current_user.tenant_id,
+        event_type="ALERT_LINKED",
+        content={"alert_id": body.alert_id, "alert_title": a.title, "severity": a.severity},
+        created_by=current_user.id,
+    ))
+    await write_audit(db, current_user.tenant_id, current_user.id,
+                      "LINK_ALERT", "Case", case_id, after={"alert_id": body.alert_id})
+    await db.commit()
+    return {"case_id": case_id, "alert_id": body.alert_id, "status": "linked"}
+

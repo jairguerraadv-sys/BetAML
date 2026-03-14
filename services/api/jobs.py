@@ -17,7 +17,7 @@ from sqlalchemy import select, and_
 
 from config import settings
 from database import AsyncSessionLocal
-from models import Alert, AuditLog, FeatureSnapshot, Notification, Player, ScoringConfig, Tenant, User
+from models import Alert, AuditLog, Case, FeatureSnapshot, Notification, Player, ScoringConfig, Tenant, User
 
 logger = structlog.get_logger(__name__)
 
@@ -237,12 +237,17 @@ async def check_sla_violations() -> None:
     """
     SLA Violation Monitor — roda a cada hora.
 
-    Verifica cases com sla_due_at < NOW() e status não-terminal (OPEN, IN_REVIEW).
+    Verifica cases com sla_due_at < NOW() e status não-terminal
+    (OPEN, INVESTIGATING, PENDING_REVIEW).
+
     Para cada violação:
-      1. Cria/atualiza Notification para o responsável e para todos os ADMINs do tenant
+      1. Cria Notification para o responsável e para todos os ADMINs do tenant
+         (evita duplicatas: ignora se já notificado nas últimas 2h)
       2. Loga em audit_log com action="SLA_VIOLATED"
+
+    Adicionalmente, gera notificações de aviso (SLA_WARNING) para cases
+    cujo sla_due_at está dentro das próximas 2 horas.
     """
-    from models import Case, Notification, User
     try:
         async with AsyncSessionLocal() as db:
             now = datetime.now(UTC)
@@ -250,7 +255,7 @@ async def check_sla_violations() -> None:
             # Buscar cases vencidos não-terminais
             stmt = select(Case).where(
                 Case.sla_due_at < now,
-                Case.status.in_(["OPEN", "IN_REVIEW"]),
+                Case.status.in_(["OPEN", "INVESTIGATING", "PENDING_REVIEW"]),
             )
             overdue_cases = (await db.execute(stmt)).scalars().all()
 
@@ -325,6 +330,59 @@ async def check_sla_violations() -> None:
 
             await db.commit()
             logger.info("sla_violations_processed", cases=len(overdue_cases))
+
+            # ── SLA_WARNING: cases approaching deadline within 2 hours ──────────
+            warn_horizon = now + timedelta(hours=2)
+            approaching = (await db.execute(
+                select(Case).where(
+                    Case.sla_due_at > now,
+                    Case.sla_due_at <= warn_horizon,
+                    Case.status.in_(["OPEN", "INVESTIGATING", "PENDING_REVIEW"]),
+                )
+            )).scalars().all()
+
+            for case in approaching:
+                minutes_left = int((case.sla_due_at - now).total_seconds() // 60)
+                notif_user_ids: set = set()
+                if case.assigned_to:
+                    notif_user_ids.add(case.assigned_to)
+                warn_admins = (await db.execute(
+                    select(User).where(
+                        User.tenant_id == case.tenant_id,
+                        User.role.in_(["ADMIN", "AML_ANALYST"]),
+                        User.active.is_(True),
+                    )
+                )).scalars().all()
+                for adm in warn_admins:
+                    notif_user_ids.add(adm.id)
+
+                for uid in notif_user_ids:
+                    warn_cutoff = now - timedelta(hours=1)
+                    existing_warn = (await db.execute(
+                        select(Notification).where(
+                            Notification.tenant_id == case.tenant_id,
+                            Notification.user_id == uid,
+                            Notification.reference_type == "Case",
+                            Notification.reference_id == str(case.id),
+                            Notification.type == "SLA_WARNING",
+                            Notification.created_at >= warn_cutoff,
+                        )
+                    )).scalar_one_or_none()
+                    if existing_warn:
+                        continue
+                    db.add(Notification(
+                        tenant_id=case.tenant_id,
+                        user_id=uid,
+                        type="SLA_WARNING",
+                        title=f"SLA a vencer: {case.title or case.id}",
+                        body=f"Caso vence em {minutes_left} minutos. Status atual: {case.status}.",
+                        reference_type="Case",
+                        reference_id=str(case.id),
+                    ))
+
+            if approaching:
+                await db.commit()
+                logger.info("sla_warnings_sent", cases=len(approaching))
 
     except Exception as exc:
         logger.error("check_sla_violations_failed", error=str(exc))

@@ -214,7 +214,7 @@ export const fetchAlerts = (params?: Record<string, string>) =>
 export const fetchAlert = (id: string) =>
   api.get<AlertDetail>(`/alerts/${id}`).then((r) => r.data);
 
-export const fetchCases = (params?: Record<string, string>) =>
+export const fetchCases = (params?: Record<string, string | number>) =>
   api.get<Case[]>('/cases', { params }).then((r) => r.data);
 
 export const fetchCase = (id: string) =>
@@ -322,9 +322,6 @@ export const ingestFile = (formData: FormData) =>
 
 export const triageAlert = (alertId: string, disposition: string, note: string) =>
   api.post(`/alerts/${alertId}/triage`, { disposition, note }).then((r) => r.data);
-
-export const linkAlertToCase = (alertId: string, caseId: string) =>
-  api.post(`/alerts/${alertId}/link-to-case`, { case_id: caseId }).then((r) => r.data);
 
 // ── Mappings (Módulo 1) ─────────────────────────────────────────────────────
 
@@ -670,3 +667,76 @@ export const replayIngestError = (
     `/ingest/errors/${errorId}/replay`,
     body,
   ).then((r) => r.data);
+
+// ── Module 5 — Case Workflow + Player Investigation ────────────────────────────
+
+export interface TransactionChartItem {
+  day: string;
+  deposit_sum: number;
+  withdrawal_sum: number;
+}
+
+export interface BetChartItem {
+  day: string;
+  stake_sum: number;
+}
+
+export interface PaymentInstrumentSummary {
+  payment_instrument: string | null;
+  payment_method: string | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  tx_count: number;
+}
+
+export interface PlayerNetworkItem {
+  player_id: string;
+  shared_by: Array<{ type: string; value: string }>;
+}
+
+export interface CaseAlertHistory {
+  player_id: string;
+  cases: Array<{ id: string; title: string; status: string; severity: string; created_at: string }>;
+  alerts: Array<{ id: string; title: string; severity: string; status: string; created_at: string }>;
+}
+
+export const fetchPlayerTransactionsChart = (playerId: string, days = 90) =>
+  api.get<{ player_id: string; days: number; data: TransactionChartItem[] }>(
+    `/players/${playerId}/transactions-chart`,
+    { params: { days } },
+  ).then((r) => r.data);
+
+export const fetchPlayerBetsChart = (playerId: string, days = 90) =>
+  api.get<{ player_id: string; days: number; data: BetChartItem[] }>(
+    `/players/${playerId}/bets-chart`,
+    { params: { days } },
+  ).then((r) => r.data);
+
+export const fetchPlayerPaymentInstruments = (playerId: string) =>
+  api.get<{ player_id: string; instruments: PaymentInstrumentSummary[] }>(
+    `/players/${playerId}/payment-instruments`,
+  ).then((r) => r.data);
+
+export const fetchPlayerNetwork = (playerId: string) =>
+  api.get<{ player_id: string; related_players: PlayerNetworkItem[] }>(
+    `/players/${playerId}/network`,
+  ).then((r) => r.data);
+
+export const fetchPlayerCaseAlertHistory = (playerId: string) =>
+  api.get<CaseAlertHistory>(`/players/${playerId}/case-alert-history`).then((r) => r.data);
+
+export const addCaseComment = (caseId: string, body: { content: string; mentions?: string[] }) =>
+  api.post<{ id: string; created_at: string }>(`/cases/${caseId}/comments`, body).then((r) => r.data);
+
+export const linkAlertToCase = (caseId: string, alertId: string) =>
+  api.post<{ case_id: string; alert_id: string; status: string }>(
+    `/cases/${caseId}/link-alert`,
+    { alert_id: alertId },
+  ).then((r) => r.data);
+
+export const updateCaseStatus = (caseId: string, newStatus: string) =>
+  api.post<{ id: string; event_type: string; created_at: string }>(
+    `/cases/${caseId}/events`,
+    { event_type: 'STATUS_CHANGE', content: { new_status: newStatus } },
+  ).then((r) => r.data);
+

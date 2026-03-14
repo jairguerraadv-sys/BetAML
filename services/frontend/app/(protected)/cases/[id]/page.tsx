@@ -4,12 +4,19 @@ import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/rea
 import {
   fetchCase, fetchPlayer, fetchPlayerEconCompat,
   generateReportPackage, CaseDetail, fetchAlertRelatedTransactions,
+  updateCaseStatus, addCaseComment,
+  fetchPlayerTransactionsChart, fetchPlayerBetsChart,
+  fetchPlayerPaymentInstruments, fetchPlayerNetwork, fetchPlayerCaseAlertHistory,
 } from '@/lib/api';
 import { useParams, useRouter } from 'next/navigation';
 import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
+  LineChart, Line,
+} from 'recharts';
+import {
   ArrowLeft, AlertTriangle, Clock, User, TrendingDown,
   FileText, CheckCircle2, MessageSquare, Send, ChevronRight,
-  Activity, HelpCircle, X,
+  Activity, HelpCircle, X, Network, CreditCard, History, ArrowRightLeft,
 } from 'lucide-react';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -23,11 +30,13 @@ const SEV_CLS: Record<string, string> = {
   LOW:      'bg-green-100 text-green-700 border-green-200',
 };
 const STATUS_CLS: Record<string, string> = {
-  OPEN:        'bg-blue-100 text-blue-700',
-  IN_REVIEW:   'bg-purple-100 text-purple-700',
-  UNDER_REVIEW:'bg-purple-100 text-purple-700',
-  CLOSED:      'bg-gray-100 text-gray-500',
-  REPORTED:    'bg-green-100 text-green-700',
+  OPEN:           'bg-blue-100 text-blue-700',
+  INVESTIGATING:  'bg-indigo-100 text-indigo-700',
+  PENDING_REVIEW: 'bg-purple-100 text-purple-700',
+  IN_REVIEW:      'bg-purple-100 text-purple-700',    // legacy
+  UNDER_REVIEW:   'bg-purple-100 text-purple-700',    // legacy
+  CLOSED:         'bg-gray-100 text-gray-500',
+  REPORTED:       'bg-green-100 text-green-700',
 };
 const RISK_BAND_CLS: Record<string, string> = {
   HIGH:   'bg-red-100 text-red-700',
@@ -35,8 +44,12 @@ const RISK_BAND_CLS: Record<string, string> = {
   LOW:    'bg-green-100 text-green-700',
 };
 const STATUS_PT: Record<string, string> = {
-  OPEN: 'Aberto', IN_REVIEW: 'Em revisão', UNDER_REVIEW: 'Em revisão',
-  CLOSED: 'Encerrado', REPORTED: 'Reportado ao COAF',
+  OPEN:           'Aberto',
+  INVESTIGATING:  'Investigando',
+  PENDING_REVIEW: 'Aguarda Revisão',
+  IN_REVIEW:      'Em revisão',
+  CLOSED:         'Encerrado',
+  REPORTED:       'Reportado ao COAF',
 };
 const ECON_CLS: Record<string, string> = {
   GREEN:   'bg-green-100 text-green-700',
@@ -45,14 +58,57 @@ const ECON_CLS: Record<string, string> = {
   UNKNOWN: 'bg-gray-100 text-gray-500',
 };
 const EVT_PT: Record<string, string> = {
-  CREATED:           'Caso criado',
-  ASSIGNED:          'Atribuído a analista',
-  COMMENTED:         'Comentário adicionado',
-  STATUS_CHANGED:    'Status atualizado',
-  ALERT_LINKED:      'Alerta vinculado',
-  REPORT_GENERATED:  'Relatório gerado',
+  CREATED:            'Caso criado',
+  ASSIGNED:           'Atribuído a analista',
+  ASSIGNMENT:         'Atribuído a analista',
+  COMMENTED:          'Comentário adicionado',
+  COMMENT:            'Comentário adicionado',
+  STATUS_CHANGED:     'Status atualizado',
+  STATUS_CHANGE:      'Status atualizado',
+  ALERT_LINKED:       'Alerta vinculado',
+  REPORT_GENERATED:   'Relatório gerado',
+  REPORT_SUBMITTED:   'Relatório submetido ao COAF',
   SYSTEM_AUTO_CREATED:'Auto-criado pelo sistema',
+  EVIDENCE_UPLOAD:    'Evidência enviada',
 };
+
+const TRANSITIONS: Record<string, string[]> = {
+  OPEN:           ['INVESTIGATING', 'CLOSED'],
+  INVESTIGATING:  ['PENDING_REVIEW', 'CLOSED', 'OPEN'],
+  PENDING_REVIEW: ['INVESTIGATING', 'CLOSED', 'REPORTED'],
+  CLOSED:         ['OPEN'],
+  REPORTED:       [],
+};
+
+// StatusTransitionSelect — small inline select to advance the case workflow
+function StatusTransitionSelect({
+  caseId, currentStatus, onSuccess,
+}: {
+  caseId: string;
+  currentStatus: string;
+  onSuccess: () => void;
+}) {
+  const qc = useQueryClient();
+  const allowed = TRANSITIONS[currentStatus] ?? [];
+  const transition = useMutation({
+    mutationFn: (s: string) => updateCaseStatus(caseId, s),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['case', caseId] }); onSuccess(); },
+  });
+  if (!allowed.length) return null;
+  return (
+    <select
+      defaultValue=""
+      onChange={(e) => { if (e.target.value) transition.mutate(e.target.value); }}
+      disabled={transition.isPending}
+      className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-brand disabled:opacity-50"
+    >
+      <option value="" disabled>Mover para…</option>
+      {allowed.map((s) => (
+        <option key={s} value={s}>{STATUS_PT[s] ?? s}</option>
+      ))}
+    </select>
+  );
+}
 
 function SLABadge({ sla_due_at }: { sla_due_at?: string }) {
   if (!sla_due_at) return null;
@@ -173,6 +229,38 @@ function TabProfile({ playerId }: { playerId: string | undefined }) {
     queryFn:  () => fetchPlayerEconCompat(playerId!),
     enabled:  !!playerId,
   });
+  const { data: txChartRes } = useQuery({
+    queryKey: ['player-tx-chart', playerId],
+    queryFn:  () => fetchPlayerTransactionsChart(playerId!),
+    enabled:  !!playerId,
+  });
+  const txChart = txChartRes?.data ?? [];
+
+  const { data: betChartRes } = useQuery({
+    queryKey: ['player-bet-chart', playerId],
+    queryFn:  () => fetchPlayerBetsChart(playerId!),
+    enabled:  !!playerId,
+  });
+  const betChart = betChartRes?.data ?? [];
+
+  const { data: instrumentsRes } = useQuery({
+    queryKey: ['player-instruments', playerId],
+    queryFn:  () => fetchPlayerPaymentInstruments(playerId!),
+    enabled:  !!playerId,
+  });
+  const instruments = instrumentsRes?.instruments ?? [];
+
+  const { data: networkRes } = useQuery({
+    queryKey: ['player-network', playerId],
+    queryFn:  () => fetchPlayerNetwork(playerId!),
+    enabled:  !!playerId,
+  });
+  const network = networkRes?.related_players ?? [];
+  const { data: caseHistory } = useQuery({
+    queryKey: ['player-case-history', playerId],
+    queryFn:  () => fetchPlayerCaseAlertHistory(playerId!),
+    enabled:  !!playerId,
+  });
 
   if (!playerId) return (
     <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 py-16 text-center">
@@ -258,6 +346,146 @@ function TabProfile({ playerId }: { playerId: string | undefined }) {
               <dd className="font-semibold">{(econ.ratio_threshold * 100).toFixed(0)}% da renda</dd>
             </div>
           </dl>
+        </div>
+      )}
+
+      {/* Histórico de Movimentações 90d */}
+      {txChart.length > 0 && (
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold text-gray-700">
+            <ArrowRightLeft size={14} className="text-gray-400" /> Depósitos vs Saques — 90 dias
+          </h3>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={txChart} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+              <XAxis dataKey="day" tick={{ fontSize: 10 }} tickFormatter={(v: string) => v.slice(5)} />
+              <YAxis tick={{ fontSize: 10 }} width={56} tickFormatter={(v: number) => `R$${(v / 1000).toFixed(0)}k`} />
+              <Tooltip formatter={(v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} />
+              <Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />
+              <Bar dataKey="deposit_sum" name="Depósitos" fill="#22c55e" radius={[2, 2, 0, 0]} />
+              <Bar dataKey="withdrawal_sum" name="Saques" fill="#ef4444" radius={[2, 2, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Histórico de Apostas 90d */}
+      {betChart.length > 0 && (
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold text-gray-700">
+            <Activity size={14} className="text-gray-400" /> Volume de Apostas — 90 dias
+          </h3>
+          <ResponsiveContainer width="100%" height={160}>
+            <LineChart data={betChart} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+              <XAxis dataKey="day" tick={{ fontSize: 10 }} tickFormatter={(v: string) => v.slice(5)} />
+              <YAxis tick={{ fontSize: 10 }} width={56} tickFormatter={(v: number) => `R$${(v / 1000).toFixed(0)}k`} />
+              <Tooltip formatter={(v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} />
+              <Line type="monotone" dataKey="stake_sum" name="Apostas" stroke="#6366f1" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Instrumentos de Pagamento */}
+      {instruments.length > 0 && (
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">
+            <CreditCard size={14} className="text-gray-400" /> Instrumentos de Pagamento
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-100 text-left text-gray-400">
+                  <th className="pb-2 pr-4">Instrumento</th>
+                  <th className="pb-2 pr-4">Método</th>
+                  <th className="pb-2 pr-4">1ª vez</th>
+                  <th className="pb-2 pr-4">Última vez</th>
+                  <th className="pb-2">Transações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {instruments.map((inst, i) => (
+                  <tr key={i} className="hover:bg-gray-50">
+                    <td className="py-2 pr-4 font-mono text-gray-700">{inst.payment_instrument ?? '—'}</td>
+                    <td className="py-2 pr-4 text-gray-500">{inst.payment_method ?? '—'}</td>
+                    <td className="py-2 pr-4 text-gray-400">
+                      {inst.first_seen ? new Date(inst.first_seen).toLocaleDateString('pt-BR') : '—'}
+                    </td>
+                    <td className="py-2 pr-4 text-gray-400">
+                      {inst.last_seen ? new Date(inst.last_seen).toLocaleDateString('pt-BR') : '—'}
+                    </td>
+                    <td className="py-2 font-semibold text-gray-700">{inst.tx_count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Rede de Relacionamentos */}
+      {network.length > 0 && (
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">
+            <Network size={14} className="text-gray-400" /> Rede de Relacionamentos
+            <span className="ml-auto rounded bg-orange-100 px-2 py-0.5 text-[10px] font-bold text-orange-700">
+              {network.length} vínculo{network.length !== 1 ? 's' : ''}
+            </span>
+          </h3>
+          <ul className="space-y-2">
+            {network.map((item, i) => (
+              <li key={i} className="flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs">
+                <span className="font-mono text-gray-600">{item.player_id.slice(0, 8)}…</span>
+                <span className="flex flex-wrap gap-1">
+                  {item.shared_by.map((s, j) => (
+                    <span key={j} className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700">
+                      {s.type}: {s.value}
+                    </span>
+                  ))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Histórico de Casos e Alertas */}
+      {caseHistory && (caseHistory.cases.length > 0 || caseHistory.alerts.length > 0) && (
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">
+            <History size={14} className="text-gray-400" /> Histórico do Cliente
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                Casos anteriores ({caseHistory.cases.length})
+              </p>
+              <ul className="space-y-1.5">
+                {caseHistory.cases.slice(0, 5).map((ch) => (
+                  <li key={ch.id} className="flex items-center justify-between rounded border border-gray-100 px-2 py-1.5 text-xs">
+                    <span className="truncate text-gray-600">{ch.title}</span>
+                    <span className={`ml-2 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${STATUS_CLS[ch.status] ?? 'bg-gray-100 text-gray-500'}`}>
+                      {STATUS_PT[ch.status] ?? ch.status}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                Alertas recentes ({caseHistory.alerts.length})
+              </p>
+              <ul className="space-y-1.5">
+                {caseHistory.alerts.slice(0, 5).map((a) => (
+                  <li key={a.id} className="flex items-center justify-between rounded border border-gray-100 px-2 py-1.5 text-xs">
+                    <span className="truncate text-gray-600">{a.title}</span>
+                    <span className={`ml-2 shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold ${SEV_CLS[a.severity] ?? 'bg-gray-100 text-gray-500'}`}>
+                      {SEV_LABEL[a.severity] ?? a.severity}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -449,7 +677,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
             <p className="mt-0.5 text-xs text-green-600 font-mono">{rpResult.report_package_id}</p>
             {rpResult.pdf_path && (
               <a
-                href={`/api-proxy/cases/${caseId}/report-package/${rpResult.report_package_id}/pdf`}
+                href={`/api-proxy/cases/${caseId}/report-package/pdf?rp_id=${rpResult.report_package_id}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="mt-3 inline-flex items-center gap-1 rounded-lg bg-green-700 px-4 py-2 text-xs font-semibold text-white hover:bg-green-800"
@@ -457,14 +685,16 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                 ⬇ Baixar PDF (COAF)
               </a>
             )}
-            <a
-              href={`/api-proxy/cases/${caseId}/report-package/${rpResult.report_package_id}/coaf-xml`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-3 inline-flex items-center gap-1 rounded-lg border border-green-600 px-4 py-2 text-xs font-semibold text-green-700 hover:bg-green-50"
-            >
-              ⬇ Baixar XML (COAF Res. 36)
-            </a>
+            {(c.status === 'CLOSED' || c.status === 'REPORTED') && (
+              <a
+                href={`/api-proxy/cases/${caseId}/report-package/coaf-xml?rp_id=${rpResult.report_package_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-3 inline-flex items-center gap-1 rounded-lg border border-green-600 px-4 py-2 text-xs font-semibold text-green-700 hover:bg-green-50"
+              >
+                ⬇ Baixar XML (COAF Res. 36)
+              </a>
+            )}
           </div>
         ) : (
           <div className="space-y-4">
@@ -557,11 +787,7 @@ function StickyAnnotations({ caseId }: { caseId: string }) {
     if (!text.trim()) return;
     setSaving(true);
     try {
-      await fetch(`/api-proxy/cases/${caseId}/events`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ event_type: 'COMMENTED', content: { comment: text } }),
-      });
+      await addCaseComment(caseId, { content: text, mentions: [] });
       setText('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -615,11 +841,13 @@ function StickyAnnotations({ caseId }: { caseId: string }) {
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
+
 export default function CaseDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const qc     = useQueryClient();
   const [activeTab, setActiveTab] = useState<Tab>('overview');
+
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['case', id],
@@ -669,6 +897,11 @@ export default function CaseDetailPage() {
               {STATUS_PT[c.status] ?? c.status}
             </span>
             <SLABadge sla_due_at={c.sla_due_at} />
+            <StatusTransitionSelect
+              caseId={id}
+              currentStatus={c.status}
+              onSuccess={() => {}}
+            />
           </div>
         </div>
 

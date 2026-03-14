@@ -67,6 +67,11 @@ def _make_db() -> AsyncMock:
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
     db.add = MagicMock()
+    # Ensure execute(..).scalar_one_or_none() returns None (ScoringConfig lookup → fallback)
+    _exec_result = MagicMock()
+    _exec_result.scalar_one_or_none = MagicMock(return_value=None)
+    _exec_result.scalars.return_value.all.return_value = []
+    db.execute = AsyncMock(return_value=_exec_result)
     return db
 
 

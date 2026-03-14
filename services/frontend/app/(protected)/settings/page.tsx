@@ -5,7 +5,7 @@ import { Settings, Save } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 interface ScoringConfig {
-  id: number;
+  id: string;
   rule_weight: number;
   ml_weight: number;
   network_weight: number;
@@ -18,23 +18,25 @@ interface ScoringConfig {
   sla_high_hours: number;
   sla_critical_hours: number;
   updated_at: string | null;
+  data_retention_days: number;
 }
 
 const fetchConfig = () =>
   api.get<ScoringConfig>('/scoring-config').then((r) => r.data);
 
-const fields: { key: keyof ScoringConfig; label: string; step: string }[] = [
-  { key: 'rule_weight',       label: 'Peso — Regras DSL',             step: '0.01' },
-  { key: 'ml_weight',         label: 'Peso — Modelos ML',             step: '0.01' },
-  { key: 'network_weight',    label: 'Peso — Análise de Rede',        step: '0.01' },
-  { key: 'low_threshold',     label: 'Limiar Baixo (score 0-100)',    step: '1' },
-  { key: 'medium_threshold',  label: 'Limiar Médio (score 0-100)',    step: '1' },
-  { key: 'high_threshold',    label: 'Limiar Alto (score 0-100)',     step: '1' },
-  { key: 'critical_threshold',label: 'Limiar Crítico (score 0-100)', step: '1' },
-  { key: 'sla_low_hours',     label: 'SLA Baixo (horas)',             step: '1' },
-  { key: 'sla_medium_hours',  label: 'SLA Médio (horas)',             step: '1' },
-  { key: 'sla_high_hours',    label: 'SLA Alto (horas)',              step: '1' },
-  { key: 'sla_critical_hours',label: 'SLA Crítico (horas)',          step: '1' },
+const fields: { key: keyof ScoringConfig; label: string; step: string; min: number; max: number }[] = [
+  { key: 'rule_weight',          label: 'Peso — Regras DSL',             step: '0.01', min: 0,   max: 1   },
+  { key: 'ml_weight',            label: 'Peso — Modelos ML',             step: '0.01', min: 0,   max: 1   },
+  { key: 'network_weight',       label: 'Peso — Análise de Rede',        step: '0.01', min: 0,   max: 1   },
+  { key: 'low_threshold',        label: 'Limiar Baixo (score 0-100)',    step: '1',    min: 0,   max: 100 },
+  { key: 'medium_threshold',     label: 'Limiar Médio (score 0-100)',    step: '1',    min: 0,   max: 100 },
+  { key: 'high_threshold',       label: 'Limiar Alto (score 0-100)',     step: '1',    min: 0,   max: 100 },
+  { key: 'critical_threshold',   label: 'Limiar Crítico (score 0-100)', step: '1',    min: 0,   max: 100 },
+  { key: 'sla_low_hours',        label: 'SLA Baixo (horas)',             step: '1',    min: 1,   max: 720 },
+  { key: 'sla_medium_hours',     label: 'SLA Médio (horas)',             step: '1',    min: 1,   max: 720 },
+  { key: 'sla_high_hours',       label: 'SLA Alto (horas)',              step: '1',    min: 1,   max: 720 },
+  { key: 'sla_critical_hours',   label: 'SLA Crítico (horas)',           step: '1',    min: 1,   max: 720 },
+  { key: 'data_retention_days',  label: 'Retenção de dados (dias)',      step: '1',    min: 30,  max: 1825 },
 ];
 
 export default function SettingsPage() {
@@ -79,14 +81,14 @@ export default function SettingsPage() {
             onSubmit={(e) => { e.preventDefault(); save.mutate(); }}
           >
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-              {fields.map(({ key, label, step }) => (
+              {fields.map(({ key, label, step, min, max }) => (
                 <div key={key}>
                   <label className="mb-1 block text-xs font-medium text-gray-600">{label}</label>
                   <input
                     type="number"
                     step={step}
-                    min={0}
-                    max={10}
+                    min={min}
+                    max={max}
                     value={(form[key] as number) ?? 0}
                     onChange={(e) => setForm((f) => ({ ...f, [key]: parseFloat(e.target.value) }))}
                     className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"

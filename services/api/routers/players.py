@@ -8,12 +8,12 @@ from typing import Optional
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func as sqlfunc, select
+from sqlalchemy import case as sqla_case, func as sqlfunc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import decrypt_pii, encrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
-from models import Alert, Case, FinancialTransaction, Player, ScoringConfig, User
+from models import Alert, Bet, Case, DeviceEvent, FinancialTransaction, Player, ScoringConfig, User
 from repositories import PlayerRepository
 from repositories.players import get_player_repo
 from utils import write_audit
@@ -480,3 +480,216 @@ async def export_player_data(
         cases_count=cases_count or 0,
         alerts_count=alerts_count or 0,
     )
+
+
+# ── Module 5: Player Enrichment Endpoints ────────────────────────────────────
+
+@router.get("/players/{player_id}/transactions-chart")
+async def get_player_transactions_chart(
+    player_id: str,
+    days: int = Query(90, ge=7, le=365),
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Volume diário de depósitos e saques dos últimos N dias (painel de investigação)."""
+    p = await db.get(Player, player_id)
+    if not p or p.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Player não encontrado")
+    cutoff = _utcnow() - timedelta(days=days)
+    rows = (await db.execute(
+        select(
+            sqlfunc.date_trunc("day", FinancialTransaction.occurred_at).label("day"),
+            sqlfunc.coalesce(
+                sqlfunc.sum(sqla_case(
+                    (FinancialTransaction.type == "DEPOSIT", FinancialTransaction.amount),
+                    else_=0
+                )), 0).label("deposit_sum"),
+            sqlfunc.coalesce(
+                sqlfunc.sum(sqla_case(
+                    (FinancialTransaction.type == "WITHDRAWAL", FinancialTransaction.amount),
+                    else_=0
+                )), 0).label("withdrawal_sum"),
+        )
+        .where(
+            FinancialTransaction.tenant_id == current_user.tenant_id,
+            FinancialTransaction.player_id == player_id,
+            FinancialTransaction.occurred_at >= cutoff,
+        )
+        .group_by(sqlfunc.date_trunc("day", FinancialTransaction.occurred_at))
+        .order_by(sqlfunc.date_trunc("day", FinancialTransaction.occurred_at))
+    )).all()
+    return {"player_id": player_id, "days": days, "data": [
+        {"day": str(r.day)[:10], "deposit_sum": float(r.deposit_sum),
+         "withdrawal_sum": float(r.withdrawal_sum)}
+        for r in rows
+    ]}
+
+
+@router.get("/players/{player_id}/bets-chart")
+async def get_player_bets_chart(
+    player_id: str,
+    days: int = Query(90, ge=7, le=365),
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Volume diário de stake de apostas dos últimos N dias."""
+    p = await db.get(Player, player_id)
+    if not p or p.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Player não encontrado")
+    cutoff = _utcnow() - timedelta(days=days)
+    rows = (await db.execute(
+        select(
+            sqlfunc.date_trunc("day", Bet.occurred_at).label("day"),
+            sqlfunc.coalesce(sqlfunc.sum(Bet.stake_amount), 0).label("stake_sum"),
+        )
+        .where(
+            Bet.tenant_id == current_user.tenant_id,
+            Bet.player_id == player_id,
+            Bet.occurred_at >= cutoff,
+        )
+        .group_by(sqlfunc.date_trunc("day", Bet.occurred_at))
+        .order_by(sqlfunc.date_trunc("day", Bet.occurred_at))
+    )).all()
+    return {"player_id": player_id, "days": days, "data": [
+        {"day": str(r.day)[:10], "stake_sum": float(r.stake_sum)}
+        for r in rows
+    ]}
+
+
+@router.get("/players/{player_id}/payment-instruments")
+async def get_player_payment_instruments(
+    player_id: str,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Instrumentos de pagamento distintos usados pelo player com datas de primeira/última ocorrência."""
+    p = await db.get(Player, player_id)
+    if not p or p.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Player não encontrado")
+    rows = (await db.execute(
+        select(
+            FinancialTransaction.payment_instrument,
+            FinancialTransaction.payment_method,
+            sqlfunc.min(FinancialTransaction.occurred_at).label("first_seen"),
+            sqlfunc.max(FinancialTransaction.occurred_at).label("last_seen"),
+            sqlfunc.count(FinancialTransaction.id).label("tx_count"),
+        )
+        .where(
+            FinancialTransaction.tenant_id == current_user.tenant_id,
+            FinancialTransaction.player_id == player_id,
+            FinancialTransaction.payment_instrument.isnot(None),
+        )
+        .group_by(FinancialTransaction.payment_instrument, FinancialTransaction.payment_method)
+        .order_by(sqlfunc.max(FinancialTransaction.occurred_at).desc())
+    )).all()
+    return {"player_id": player_id, "instruments": [
+        {
+            "payment_instrument": r.payment_instrument,
+            "payment_method": r.payment_method,
+            "first_seen": r.first_seen,
+            "last_seen": r.last_seen,
+            "tx_count": r.tx_count,
+        }
+        for r in rows
+    ]}
+
+
+@router.get("/players/{player_id}/network")
+async def get_player_network(
+    player_id: str,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Players relacionados por device_hash ou bank_account_hash partilhados."""
+    p = await db.get(Player, player_id)
+    if not p or p.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Player não encontrado")
+
+    related: dict[str, dict] = {}
+
+    # Shared device fingerprint
+    device_hashes = (await db.execute(
+        select(DeviceEvent.device_hash).distinct()
+        .where(
+            DeviceEvent.tenant_id == current_user.tenant_id,
+            DeviceEvent.player_id == player_id,
+            DeviceEvent.device_hash.isnot(None),
+        )
+    )).scalars().all()
+
+    if device_hashes:
+        peers = (await db.execute(
+            select(DeviceEvent.player_id, DeviceEvent.device_hash).distinct()
+            .where(
+                DeviceEvent.tenant_id == current_user.tenant_id,
+                DeviceEvent.device_hash.in_(device_hashes),
+                DeviceEvent.player_id != player_id,
+                DeviceEvent.player_id.isnot(None),
+            )
+            .limit(100)
+        )).all()
+        for row in peers:
+            pid = str(row.player_id)
+            related.setdefault(pid, {"player_id": pid, "shared_by": []})
+            related[pid]["shared_by"].append({"type": "device", "value": row.device_hash[:8] + "…"})
+
+    # Shared bank account hash
+    bank_hashes = (await db.execute(
+        select(FinancialTransaction.bank_account_hash).distinct()
+        .where(
+            FinancialTransaction.tenant_id == current_user.tenant_id,
+            FinancialTransaction.player_id == player_id,
+            FinancialTransaction.bank_account_hash.isnot(None),
+        )
+    )).scalars().all()
+
+    if bank_hashes:
+        bank_peers = (await db.execute(
+            select(FinancialTransaction.player_id, FinancialTransaction.bank_account_hash).distinct()
+            .where(
+                FinancialTransaction.tenant_id == current_user.tenant_id,
+                FinancialTransaction.bank_account_hash.in_(bank_hashes),
+                FinancialTransaction.player_id != player_id,
+                FinancialTransaction.player_id.isnot(None),
+            )
+            .limit(100)
+        )).all()
+        for row in bank_peers:
+            pid = str(row.player_id)
+            related.setdefault(pid, {"player_id": pid, "shared_by": []})
+            related[pid]["shared_by"].append({"type": "bank_account",
+                                              "value": row.bank_account_hash[:8] + "…"})
+
+    return {"player_id": player_id, "related_players": list(related.values())[:50]}
+
+
+@router.get("/players/{player_id}/case-alert-history")
+async def get_player_case_alert_history(
+    player_id: str,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Histórico de casos e alertas anteriores do player para o painel de investigação."""
+    p = await db.get(Player, player_id)
+    if not p or p.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Player não encontrado")
+    cases = (await db.execute(
+        select(Case)
+        .where(Case.tenant_id == current_user.tenant_id, Case.player_id == player_id)
+        .order_by(Case.created_at.desc())
+        .limit(20)
+    )).scalars().all()
+    alerts = (await db.execute(
+        select(Alert)
+        .where(Alert.tenant_id == current_user.tenant_id, Alert.player_id == player_id)
+        .order_by(Alert.created_at.desc())
+        .limit(50)
+    )).scalars().all()
+    return {
+        "player_id": player_id,
+        "cases": [{"id": str(c.id), "title": c.title, "status": c.status,
+                   "severity": c.severity, "created_at": c.created_at} for c in cases],
+        "alerts": [{"id": str(a.id), "title": a.title, "severity": a.severity,
+                    "status": a.status, "created_at": a.created_at} for a in alerts],
+    }
+
