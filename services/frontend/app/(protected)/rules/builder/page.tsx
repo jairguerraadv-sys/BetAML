@@ -1,10 +1,10 @@
 'use client';
 import { useState, useCallback } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, validateDsl, createRule } from '@/lib/api';
 import {
   Plus, Trash2, Play, Save, Copy, ChevronDown, ChevronRight,
-  Zap, AlertTriangle, Info, CheckCircle2, X,
+  AlertTriangle, Info, CheckCircle2, X, ToggleLeft, ToggleRight,
 } from 'lucide-react';
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
@@ -12,9 +12,11 @@ import {
 type FieldType = 'number' | 'string' | 'select';
 type Operator = 'gt' | 'gte' | 'lt' | 'lte' | 'eq' | 'neq' | 'in' | 'contains';
 type Severity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+type Scope = 'TRANSACTION' | 'BET' | 'PLAYER';
+type JoinOp = 'and' | 'or';
 
 interface FieldDef {
-  key: string;
+  key: string;      // real DSL field path, e.g. "features.deposit_count_24h"
   label: string;
   type: FieldType;
   unit?: string;
@@ -37,23 +39,25 @@ interface RuleTemplate {
   tag: string;
   conditions: Omit<Condition, 'id'>[];
   severity: Severity;
+  scope: Scope;
 }
 
-// ── Definições de campos disponíveis────────────────────────────────────────
+// ── Campos disponíveis (chave = caminho DSL real) ───────────────────────────
 
 const FIELDS: FieldDef[] = [
-  { key: 'total_30d',       label: 'Movimentação total (30 dias)',      type: 'number', unit: 'R$',  hint: 'Soma de entradas + saídas nos últimos 30 dias' },
-  { key: 'tx_count_30d',    label: 'Número de transações (30 dias)',    type: 'number', unit: 'transações' },
-  { key: 'avg_tx_value',    label: 'Ticket médio',                      type: 'number', unit: 'R$' },
-  { key: 'deposit_count_1d',label: 'Depósitos em 24h',                  type: 'number', unit: 'depósitos', hint: 'Indicador de estruturação/smurfing' },
-  { key: 'withdrawal_speed',label: 'Tempo saque após depósito',         type: 'number', unit: 'minutos', hint: 'Velocidade alta pode indicar layering' },
-  { key: 'unique_devices',  label: 'Dispositivos únicos usados',         type: 'number', unit: 'dispositivos' },
-  { key: 'unique_accounts', label: 'Contas origem diferentes (30 dias)', type: 'number', unit: 'contas' },
-  { key: 'risk_score',      label: 'Score de risco atual',               type: 'number', unit: '% (0-100)' },
-  { key: 'is_pep',          label: 'É pessoa politicamente exposta (PEP)',type: 'select', options: ['true', 'false'] },
-  { key: 'jurisdiction',    label: 'Jurisdição de origem',               type: 'select', options: ['BR', 'PY', 'BO', 'VE', 'FATF_GREY'] },
-  { key: 'profile_type',    label: 'Tipo de perfil',                     type: 'select', options: ['BRONZE', 'SILVER', 'GOLD', 'VIP'] },
-  { key: 'anomaly_score',   label: 'Score ML (anomalia)',                 type: 'number', unit: '% (0-100)',  hint: 'Score gerado pelo modelo de isolamento de floresta' },
+  { key: 'features.deposit_sum_30d',               label: 'Volume depósitos (30d)',         type: 'number', unit: 'R$',         hint: 'Soma dos depósitos nos últimos 30 dias' },
+  { key: 'features.deposit_count_24h',             label: 'Depósitos em 24h',               type: 'number', unit: 'N',          hint: 'Indicador de estruturação/smurfing' },
+  { key: 'features.withdrawal_sum_7d',             label: 'Volume saques (7d)',              type: 'number', unit: 'R$' },
+  { key: 'features.chargeback_count_30d',          label: 'Chargebacks (30d)',              type: 'number', unit: 'N' },
+  { key: 'features.avg_deposit_to_withdrawal_hours', label: 'Tempo médio depósito→saque',   type: 'number', unit: 'horas',      hint: 'Valores baixos indicam layering' },
+  { key: 'features.shared_device_count',           label: 'Dispositivos compartilhados',    type: 'number', unit: 'N' },
+  { key: 'features.unique_instruments_7d',         label: 'Instrumentos únicos (7d)',        type: 'number', unit: 'N' },
+  { key: 'features.cashout_ratio_7d',              label: 'Ratio saque (7d)',               type: 'number', unit: '0–1' },
+  { key: 'features.cluster_size',                  label: 'Tamanho do cluster',             type: 'number', unit: 'N' },
+  { key: 'player.risk_score',                      label: 'Score de risco',                 type: 'number', unit: '0–100' },
+  { key: 'player.pep_flag',                        label: 'É PEP',                          type: 'select', options: ['true', 'false'] },
+  { key: 'transaction.amount',                     label: 'Valor da transação',             type: 'number', unit: 'R$' },
+  { key: 'transaction.type',                       label: 'Tipo de transação',              type: 'select', options: ['DEPOSIT', 'WITHDRAWAL', 'CHARGEBACK', 'BONUS'] },
 ];
 
 const OPERATORS: { value: Operator; label: string; types: FieldType[] }[] = [
@@ -71,62 +75,51 @@ const TEMPLATES: RuleTemplate[] = [
   {
     id: 'structuring',
     name: 'Estruturação (Smurfing)',
-    description: 'Vários depósitos pequenos em 24h para evitar identificação',
-    icon: '🏦',
-    tag: 'COAF art. 11',
-    severity: 'HIGH',
+    description: 'Vários depósitos em 24h combinados com volume elevado em 30 dias',
+    icon: '🏦', tag: 'COAF art. 11', severity: 'HIGH', scope: 'TRANSACTION',
     conditions: [
-      { field: 'deposit_count_1d', operator: 'gte', value: '5' },
-      { field: 'avg_tx_value',     operator: 'lte', value: '9000' },
-      { field: 'total_30d',        operator: 'gte', value: '50000' },
+      { field: 'features.deposit_count_24h', operator: 'gte', value: '5' },
+      { field: 'features.deposit_sum_30d',   operator: 'gte', value: '50000' },
     ],
   },
   {
     id: 'layering_speed',
     name: 'Layering — Saques rápidos',
-    description: 'Valorização rápida seguida de retirada, menos de 30 minutos',
-    icon: '⚡',
-    tag: 'Ciclo rápido',
-    severity: 'CRITICAL',
+    description: 'Retirada acelerada após depósito: menos de 2 horas',
+    icon: '⚡', tag: 'Ciclo rápido', severity: 'CRITICAL', scope: 'TRANSACTION',
     conditions: [
-      { field: 'withdrawal_speed', operator: 'lte', value: '30' },
-      { field: 'total_30d',        operator: 'gte', value: '100000' },
+      { field: 'features.avg_deposit_to_withdrawal_hours', operator: 'lte', value: '2' },
+      { field: 'features.deposit_sum_30d',                 operator: 'gte', value: '100000' },
     ],
   },
   {
     id: 'pep_volume',
     name: 'PEP — Volume elevado',
     description: 'Pessoa politicamente exposta com movimentação incompatível',
-    icon: '🏛️',
-    tag: 'PEP / Res. 30',
-    severity: 'HIGH',
+    icon: '🏛️', tag: 'PEP / Res. 30', severity: 'HIGH', scope: 'PLAYER',
     conditions: [
-      { field: 'is_pep',    operator: 'eq',  value: 'true' },
-      { field: 'total_30d', operator: 'gte', value: '30000' },
+      { field: 'player.pep_flag',          operator: 'eq',  value: 'true' },
+      { field: 'features.deposit_sum_30d', operator: 'gte', value: '30000' },
     ],
   },
   {
-    id: 'multi_account',
-    name: 'Múltiplas contas / dispositivos',
-    description: 'Uso de muitas contas ou dispositivos para fragmentar operações',
-    icon: '📱',
-    tag: 'Fragmentação',
-    severity: 'MEDIUM',
+    id: 'multi_device',
+    name: 'Múltiplos dispositivos',
+    description: 'Uso de muitos dispositivos compartilhados para fragmentar operações',
+    icon: '📱', tag: 'Fragmentação', severity: 'MEDIUM', scope: 'TRANSACTION',
     conditions: [
-      { field: 'unique_accounts', operator: 'gte', value: '5' },
-      { field: 'unique_devices',  operator: 'gte', value: '3' },
+      { field: 'features.shared_device_count',   operator: 'gte', value: '5' },
+      { field: 'features.unique_instruments_7d', operator: 'gte', value: '3' },
     ],
   },
   {
-    id: 'high_risk_jurisdiction',
-    name: 'Jurisdição de alto risco',
-    description: 'Transações de países em lista cinza FATF ou vizinhos de fronteira',
-    icon: '🌍',
-    tag: 'FATF Grey List',
-    severity: 'MEDIUM',
+    id: 'fast_cashout',
+    name: 'Saque após depósito (ratio)',
+    description: 'Saque quase total do valor depositado — ratio alto em 7 dias',
+    icon: '💸', tag: 'Round-trip', severity: 'HIGH', scope: 'TRANSACTION',
     conditions: [
-      { field: 'jurisdiction', operator: 'in', value: 'PY,BO,VE,FATF_GREY' },
-      { field: 'total_30d',    operator: 'gte', value: '10000' },
+      { field: 'features.cashout_ratio_7d',  operator: 'gte', value: '0.9' },
+      { field: 'features.deposit_sum_30d',   operator: 'gte', value: '10000' },
     ],
   },
 ];
@@ -138,57 +131,75 @@ const SEVERITY_COLORS: Record<Severity, string> = {
   CRITICAL: 'bg-red-100 text-red-700',
 };
 
-// ── Componentes auxiliares ─────────────────────────────────────────────────
-
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
+function buildDsl(conditions: Condition[], joinOp: JoinOp): string {
+  const parts = conditions
+    .filter((c) => c.field && c.value)
+    .map((c) => {
+      const opMap: Record<Operator, string> = {
+        gt: '>', gte: '>=', lt: '<', lte: '<=',
+        eq: '==', neq: '!=', in: 'in', contains: 'contains',
+      };
+      const op = opMap[c.operator];
+      const val = c.operator === 'in'
+        ? `["${c.value.split(',').map((v) => v.trim()).join('","')}"]`
+        : isNaN(Number(c.value)) && c.value !== 'true' && c.value !== 'false'
+          ? `"${c.value}"`
+          : c.value;
+      return `${c.field} ${op} ${val}`;
+    });
+  return parts.join(` ${joinOp} `);
+}
+
+// ── ConditionRow ───────────────────────────────────────────────────────────
+
 function ConditionRow({
-  cond, index, onChange, onRemove, isFirst,
+  cond, index, joinOp, onChange, onRemove,
 }: {
-  cond: Condition; index: number;
+  cond: Condition; index: number; joinOp: JoinOp;
   onChange: (c: Condition) => void;
   onRemove: () => void;
-  isFirst: boolean;
 }) {
   const field = FIELDS.find((f) => f.key === cond.field);
   const validOps = OPERATORS.filter((o) => !field || o.types.includes(field.type));
 
   return (
     <div className="flex items-start gap-2 group">
-      {/* conector */}
       <div className="w-16 flex-shrink-0 pt-2.5 text-right">
-        {isFirst ? (
-          <span className="text-xs font-bold text-brand-600 uppercase tracking-wide">Quando</span>
+        {index === 0 ? (
+          <span className="text-xs font-bold text-brand uppercase tracking-wide">Quando</span>
         ) : (
-          <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">E</span>
+          <span className={`text-xs font-bold uppercase tracking-wide ${joinOp === 'and' ? 'text-blue-600' : 'text-purple-600'}`}>
+            {joinOp === 'and' ? 'E' : 'OU'}
+          </span>
         )}
       </div>
 
-      {/* campo */}
       <select
-        className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-brand-300 focus:border-brand-400"
+        className="flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:ring-2 focus:ring-brand dark:border-gray-700 dark:bg-gray-800 dark:text-white"
         value={cond.field}
         onChange={(e) => onChange({ ...cond, field: e.target.value, value: '' })}
       >
         <option value="">— Selecione o campo —</option>
         {FIELDS.map((f) => (
-          <option key={f.key} value={f.key}>{f.label}{f.unit ? ` (${f.unit})` : ''}</option>
+          <option key={f.key} value={f.key}>
+            {f.label}{f.unit ? ` (${f.unit})` : ''}
+          </option>
         ))}
       </select>
 
-      {/* operador */}
       <select
-        className="w-44 flex-shrink-0 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-brand-300"
+        className="w-44 flex-shrink-0 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:ring-2 focus:ring-brand dark:border-gray-700 dark:bg-gray-800 dark:text-white"
         value={cond.operator}
         onChange={(e) => onChange({ ...cond, operator: e.target.value as Operator })}
       >
         {validOps.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
 
-      {/* valor */}
       {field?.type === 'select' ? (
         <select
-          className="w-36 flex-shrink-0 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-brand-300"
+          className="w-36 flex-shrink-0 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:ring-2 focus:ring-brand dark:border-gray-700 dark:bg-gray-800 dark:text-white"
           value={cond.value}
           onChange={(e) => onChange({ ...cond, value: e.target.value })}
         >
@@ -198,17 +209,16 @@ function ConditionRow({
       ) : (
         <input
           type={field?.type === 'number' ? 'number' : 'text'}
-          className="w-36 flex-shrink-0 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400"
+          className="w-36 flex-shrink-0 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:ring-2 focus:ring-brand dark:border-gray-700 dark:bg-gray-800 dark:text-white"
           placeholder="valor"
           value={cond.value}
           onChange={(e) => onChange({ ...cond, value: e.target.value })}
         />
       )}
 
-      {/* remove */}
       <button
         onClick={onRemove}
-        className="mt-2 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500"
+        className="mt-2 opacity-0 transition-opacity group-hover:opacity-100 text-gray-400 hover:text-red-500"
         title="Remover condição"
       >
         <X size={16} />
@@ -220,59 +230,28 @@ function ConditionRow({
 // ── Página principal ───────────────────────────────────────────────────────
 
 export default function RuleBuilderPage() {
-  const [name, setName]             = useState('');
+  const [name, setName]               = useState('');
   const [description, setDescription] = useState('');
-  const [severity, setSeverity]     = useState<Severity>('MEDIUM');
-  const [conditions, setConditions] = useState<Condition[]>([
+  const [severity, setSeverity]       = useState<Severity>('MEDIUM');
+  const [scope, setScope]             = useState<Scope>('TRANSACTION');
+  const [joinOp, setJoinOp]           = useState<JoinOp>('and');
+  const [conditions, setConditions]   = useState<Condition[]>([
     { id: uid(), field: '', operator: 'gte', value: '' },
   ]);
   const [showTemplates, setShowTemplates] = useState(true);
-  const [previewResult, setPreviewResult] = useState<{ matched: number; total: number } | null>(null);
-  const [saved, setSaved]           = useState(false);
+  const [validateResult, setValidateResult] = useState<{ valid: boolean; error?: string } | null>(null);
+  const [saved, setSaved]             = useState(false);
 
-  // Simulation mutation (calls existing rule simulate endpoint after save)
-  const simulateMutation = useMutation({
-    mutationFn: async () => {
-      // Build DSL expression from conditions
-      const parts = conditions
-        .filter((c) => c.field && c.value)
-        .map((c) => {
-          const op = c.operator === 'gt' ? '>' : c.operator === 'gte' ? '>=' :
-                     c.operator === 'lt' ? '<' : c.operator === 'lte' ? '<=' :
-                     c.operator === 'eq' ? '==' : c.operator === 'neq' ? '!=' :
-                     c.operator === 'in' ? 'IN' : 'CONTAINS';
-          const val = isNaN(Number(c.value)) ? `"${c.value}"` : c.value;
-          return `${c.field} ${op} ${val}`;
-        });
-      const expr = parts.join(' AND ');
-      return { expr, estimated_matches: Math.floor(Math.random() * 80) + 5, total: 500 };
-    },
-    onSuccess: (data) => {
-      setPreviewResult({ matched: data.estimated_matches, total: data.total });
-    },
+  const dsl = buildDsl(conditions, joinOp);
+
+  const validateMutation = useMutation({
+    mutationFn: () => validateDsl(dsl),
+    onSuccess: (data) => setValidateResult(data),
   });
 
   const saveMutation = useMutation({
-    mutationFn: async () => {
-      const conds = conditions.filter((c) => c.field && c.value);
-      const parts = conds.map((c) => {
-        const op = c.operator === 'gt' ? '>' : c.operator === 'gte' ? '>=' :
-                   c.operator === 'lt' ? '<' : c.operator === 'lte' ? '<=' :
-                   c.operator === 'eq' ? '==' : c.operator === 'neq' ? '!=' :
-                   c.operator === 'in' ? 'IN' : 'CONTAINS';
-        const val = isNaN(Number(c.value)) ? `"${c.value}"` : c.value;
-        return `${c.field} ${op} ${val}`;
-      });
-      const expression = parts.join(' AND ');
-      return api.post('/rules', {
-        name,
-        description,
-        expression,
-        severity,
-        category: 'BEHAVIORAL',
-        is_active: true,
-      }).then((r) => r.data);
-    },
+    mutationFn: () =>
+      createRule({ name, description, condition_dsl: dsl, severity, scope }),
     onSuccess: () => {
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -292,54 +271,54 @@ export default function RuleBuilderPage() {
     setName(tmpl.name);
     setDescription(tmpl.description);
     setSeverity(tmpl.severity);
+    setScope(tmpl.scope);
     setConditions(tmpl.conditions.map((c) => ({ ...c, id: uid() })));
     setShowTemplates(false);
-    setPreviewResult(null);
+    setValidateResult(null);
   };
 
-  const isValid = name.trim().length > 0 && conditions.filter((c) => c.field && c.value).length > 0;
+  const isValid = name.trim().length > 0 && dsl.length > 0;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      {/* Header */}
+    <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Construtor de Regras</h1>
-        <p className="text-gray-500 mt-1">
-          Crie regras sem escrever código — defina condições em português e publique com um clique.
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Construtor de Regras</h1>
+        <p className="mt-1 text-gray-500">
+          Defina condições em português e publique com um clique. A DSL gerada é avaliada em tempo real pelo Rules Engine.
         </p>
       </div>
 
       {/* Templates */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
         <button
-          className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-gray-50 transition-colors"
+          className="flex w-full items-center justify-between px-6 py-4 text-left transition-colors hover:bg-gray-50 dark:hover:bg-gray-800"
           onClick={() => setShowTemplates((v) => !v)}
         >
           <div className="flex items-center gap-2">
-            <Copy size={16} className="text-brand-500" />
-            <span className="font-semibold text-gray-800">Modelos prontos para PLD</span>
-            <span className="text-xs text-gray-400 ml-2">Clique para copiar uma base</span>
+            <Copy size={16} className="text-brand" />
+            <span className="font-semibold text-gray-800 dark:text-white">Modelos prontos para PLD</span>
+            <span className="ml-2 text-xs text-gray-400">clique para expandir</span>
           </div>
           {showTemplates ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
         </button>
 
         {showTemplates && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 p-4 border-t border-gray-100">
+          <div className="grid grid-cols-1 gap-3 border-t border-gray-100 p-4 dark:border-gray-700 sm:grid-cols-2 lg:grid-cols-3">
             {TEMPLATES.map((tmpl) => (
               <button
                 key={tmpl.id}
                 onClick={() => applyTemplate(tmpl)}
-                className="text-left p-4 rounded-lg border border-gray-200 hover:border-brand-400 hover:bg-brand-50 transition-all group"
+                className="group rounded-lg border border-gray-200 p-4 text-left transition-all hover:border-brand hover:bg-brand/5 dark:border-gray-700"
               >
-                <div className="flex items-start justify-between mb-2">
+                <div className="mb-2 flex items-start justify-between">
                   <span className="text-2xl">{tmpl.icon}</span>
-                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${SEVERITY_COLORS[tmpl.severity]}`}>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${SEVERITY_COLORS[tmpl.severity]}`}>
                     {tmpl.severity}
                   </span>
                 </div>
-                <p className="font-semibold text-sm text-gray-800 group-hover:text-brand-700">{tmpl.name}</p>
-                <p className="text-xs text-gray-500 mt-1 leading-snug">{tmpl.description}</p>
-                <span className="mt-2 inline-block text-xs text-brand-600 font-medium">{tmpl.tag}</span>
+                <p className="text-sm font-semibold text-gray-800 group-hover:text-brand dark:text-white">{tmpl.name}</p>
+                <p className="mt-1 text-xs leading-snug text-gray-500">{tmpl.description}</p>
+                <span className="mt-2 inline-block text-xs font-medium text-brand">{tmpl.tag}</span>
               </button>
             ))}
           </div>
@@ -347,25 +326,26 @@ export default function RuleBuilderPage() {
       </div>
 
       {/* Builder */}
-      <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
+      <div className="divide-y divide-gray-100 overflow-hidden rounded-xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-900">
+
         {/* Identificação */}
-        <div className="p-6 space-y-4">
-          <h2 className="font-semibold text-gray-800">Identificação da regra</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-4 p-6">
+          <h2 className="font-semibold text-gray-800 dark:text-white">Identificação da regra</h2>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Nome da regra *</label>
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Nome da regra *</label>
               <input
                 type="text"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400"
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:ring-2 focus:ring-brand dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                 placeholder="Ex: Estruturação com PEP"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Severidade do alerta</label>
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Severidade</label>
               <select
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-brand-300"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:ring-2 focus:ring-brand dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                 value={severity}
                 onChange={(e) => setSeverity(e.target.value as Severity)}
               >
@@ -375,24 +355,48 @@ export default function RuleBuilderPage() {
                 <option value="CRITICAL">🔴 CRÍTICO — ação imediata</option>
               </select>
             </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Descrição (opcional)</label>
-            <textarea
-              rows={2}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 resize-none"
-              placeholder="Descreva o padrão suspeito que esta regra detecta..."
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Escopo</label>
+              <select
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:ring-2 focus:ring-brand dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                value={scope}
+                onChange={(e) => setScope(e.target.value as Scope)}
+              >
+                <option value="TRANSACTION">TRANSACTION — avaliada em cada transação</option>
+                <option value="BET">BET — avaliada em cada aposta</option>
+                <option value="PLAYER">PLAYER — avaliada no perfil do jogador</option>
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Descrição (opcional)</label>
+              <textarea
+                rows={2}
+                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:ring-2 focus:ring-brand dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                placeholder="Padrão suspeito que esta regra detecta..."
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </div>
           </div>
         </div>
 
         {/* Condições */}
-        <div className="p-6 space-y-3">
-          <div className="flex items-center justify-between mb-1">
-            <h2 className="font-semibold text-gray-800">Condições de disparo</h2>
-            <span className="text-xs text-gray-400">Todas as condições precisam ser verdadeiras (operador E)</span>
+        <div className="space-y-3 p-6">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-gray-800 dark:text-white">Condições de disparo</h2>
+            <button
+              type="button"
+              onClick={() => setJoinOp((v) => (v === 'and' ? 'or' : 'and'))}
+              className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                joinOp === 'and'
+                  ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                  : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+              }`}
+              title="Alternar entre E (todas) / OU (qualquer)"
+            >
+              {joinOp === 'and' ? <ToggleLeft size={14} /> : <ToggleRight size={14} />}
+              {joinOp === 'and' ? 'Todas (E)' : 'Qualquer (OU)'}
+            </button>
           </div>
 
           <div className="space-y-3">
@@ -401,7 +405,7 @@ export default function RuleBuilderPage() {
                 key={cond.id}
                 cond={cond}
                 index={idx}
-                isFirst={idx === 0}
+                joinOp={joinOp}
                 onChange={(updated) => updateCondition(cond.id, updated)}
                 onRemove={() => removeCondition(cond.id)}
               />
@@ -410,63 +414,50 @@ export default function RuleBuilderPage() {
 
           <button
             onClick={addCondition}
-            className="mt-2 flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-800 font-medium"
+            className="mt-2 flex items-center gap-1.5 text-sm font-medium text-brand hover:opacity-80"
           >
             <Plus size={15} /> Adicionar condição
           </button>
         </div>
 
         {/* Prévia DSL */}
-        <div className="px-6 py-4 bg-gray-50">
-          <p className="text-xs font-mono text-gray-500 leading-relaxed">
-            <span className="text-gray-400 mr-2">Expressão gerada:</span>
-            {conditions
-              .filter((c) => c.field && c.value)
-              .map((c, i) => {
-                const fl = FIELDS.find((f) => f.key === c.field)?.label ?? c.field;
-                const op = c.operator.toUpperCase();
-                return (
-                  <span key={c.id}>
-                    {i > 0 && <span className="text-blue-500 font-bold"> E </span>}
-                    <span className="text-gray-700">{fl}</span>
-                    {' '}<span className="text-purple-600">{op}</span>{' '}
-                    <span className="text-green-700">{c.value}</span>
-                  </span>
-                );
-              })}
-            {conditions.filter((c) => c.field && c.value).length === 0 && (
-              <span className="italic text-gray-400">Nenhuma condição definida ainda</span>
-            )}
+        <div className="bg-gray-50 px-6 py-4 dark:bg-gray-800">
+          <p className="break-all font-mono text-xs leading-relaxed text-gray-500">
+            <span className="mr-2 text-gray-400">DSL gerada:</span>
+            {dsl || <span className="italic text-gray-400">Nenhuma condição definida</span>}
           </p>
         </div>
 
-        {/* Resultado de simulação */}
-        {previewResult && (
-          <div className="px-6 py-4 bg-green-50 border-t border-green-100 flex items-center gap-3">
-            <CheckCircle2 size={18} className="text-green-600 flex-shrink-0" />
-            <p className="text-sm text-green-800">
-              Nos últimos 30 dias, essa regra teria gerado{' '}
-              <strong>{previewResult.matched} alertas</strong>{' '}
-              em {previewResult.total} eventos analisados
-              {' '}({((previewResult.matched / previewResult.total) * 100).toFixed(1)}% taxa de disparo)
+        {/* Resultado de validação */}
+        {validateResult && (
+          <div className={`flex items-start gap-3 px-6 py-4 ${
+            validateResult.valid ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20'
+          }`}>
+            {validateResult.valid
+              ? <CheckCircle2 size={16} className="mt-0.5 flex-shrink-0 text-green-600" />
+              : <AlertTriangle size={16} className="mt-0.5 flex-shrink-0 text-red-600" />}
+            <p className={`text-sm ${validateResult.valid ? 'text-green-800' : 'text-red-800'}`}>
+              {validateResult.valid
+                ? 'DSL válida — a regra pode ser publicada.'
+                : `Erro de sintaxe: ${validateResult.error}`}
             </p>
           </div>
         )}
 
         {/* Ações */}
-        <div className="px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center justify-between px-6 py-4">
           <button
-            onClick={() => simulateMutation.mutate()}
-            disabled={!isValid || simulateMutation.isPending}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            onClick={() => validateMutation.mutate()}
+            disabled={!isValid || validateMutation.isPending}
+            className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-600 dark:text-gray-300"
           >
             <Play size={15} />
-            {simulateMutation.isPending ? 'Simulando...' : 'Simular (30 dias)'}
+            {validateMutation.isPending ? 'Validando...' : 'Validar DSL'}
           </button>
 
           <div className="flex items-center gap-3">
             {saved && (
-              <span className="flex items-center gap-1.5 text-sm text-green-700 font-medium">
+              <span className="flex items-center gap-1.5 text-sm font-medium text-green-700">
                 <CheckCircle2 size={15} /> Regra publicada!
               </span>
             )}
@@ -478,7 +469,7 @@ export default function RuleBuilderPage() {
             <button
               onClick={() => saveMutation.mutate()}
               disabled={!isValid || saveMutation.isPending}
-              className="flex items-center gap-2 px-5 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="flex items-center gap-2 rounded-lg bg-brand px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand/90 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Save size={15} />
               {saveMutation.isPending ? 'Publicando...' : 'Publicar Regra'}
@@ -488,14 +479,17 @@ export default function RuleBuilderPage() {
       </div>
 
       {/* Dica */}
-      <div className="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-800">
-        <Info size={16} className="text-blue-500 flex-shrink-0 mt-0.5" />
+      <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950">
+        <Info size={16} className="mt-0.5 flex-shrink-0 text-blue-500" />
         <div>
-          <p className="font-semibold mb-0.5">Como funciona?</p>
-          <p className="text-blue-700 leading-relaxed">
+          <p className="mb-0.5 font-semibold">Como funciona?</p>
+          <p className="leading-relaxed text-blue-700">
             Cada evento processado pelo BetAML é avaliado contra todas as regras ativas.
-            Quando todas as condições de uma regra são satisfeitas, um alerta é criado automaticamente
-            com a severidade escolhida e atribuído à fila do analista responsável.
+            A DSL gerada usa caminhos reais do contexto de avaliação — clique em{' '}
+            <strong>Validar DSL</strong> antes de publicar para confirmar que a sintaxe está correta.
+            O motor suporta operadores aritméticos: <code className="font-mono">+</code>,{' '}
+            <code className="font-mono">-</code>, <code className="font-mono">*</code>,{' '}
+            <code className="font-mono">/</code>.
           </p>
         </div>
       </div>

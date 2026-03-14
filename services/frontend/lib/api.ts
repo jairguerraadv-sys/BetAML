@@ -301,8 +301,17 @@ export const fetchRules = () => api.get<Rule[]>('/rules').then((r) => r.data);
 export const createRule = (body: RuleCreatePayload) =>
   api.post<Rule>('/rules', body).then((r) => r.data);
 
+export const validateDsl = (condition_dsl: string) =>
+  api.post<{ valid: boolean; error?: string }>('/rules/validate', { condition_dsl }).then((r) => r.data);
+
+export interface SimulateRuleResult {
+  rule_id: string;
+  results: Array<{ matched: boolean; event: Record<string, unknown>; error?: string }>;
+  matches: number;
+}
+
 export const simulateRule = (id: string, payload: object) =>
-  api.post<{ matched: boolean; detail: string }>(`/rules/${id}/simulate`, payload).then((r) => r.data);
+  api.post<SimulateRuleResult>(`/rules/${id}/simulate`, payload).then((r) => r.data);
 
 export const ingestFile = (formData: FormData) =>
   api
