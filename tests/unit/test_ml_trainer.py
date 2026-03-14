@@ -6,26 +6,24 @@ Tests cover:
     there are fewer than 50 extractable feature vectors in the unsupervised path.
   - TestMLTrainerSupervisedPath: uses GradientBoostingClassifier when >= 50 labeled
     alerts exist; IsolationForest is used (and GradientBoosting skipped) otherwise.
-  - TestMLTrainerNoChampion: promotes the new model (is_champion=True) when no
+  - TestMLTrainerNoChampion: promotes the new model (status="champion") when no
     current champion exists, provided F1 > 0.75.
-  - TestMLTrainerPromotion: promotes new model AND de-promotes old champion when
+  - TestMLTrainerPromotion: promotes new model AND archives old champion when
     F1 > 0.75 and precision does not regress by more than 5%.
-  - TestMLTrainerRegression: blocks promotion (is_champion=False, old champion NOT
-    de-promoted) when new precision < 95% of champion precision.
+  - TestMLTrainerRegression: blocks promotion (status="STAGING", old champion NOT
+    archived) when new precision < 95% of champion precision.
 
 Patching strategy
 -----------------
   main.Session              — async_sessionmaker created at module level in main.py
   sys.modules["models"]     — lazy `from models import ...` inside the function
                               patched to avoid SQLAlchemy column-descriptor errors
-                              caused by columns (is_champion, version, metadata)
-                              that exist in ml_trainer logic but not in models.py
   sys.modules["minio"]      — `from minio import Minio` inside the function;
                               minio may not be installed in the dev test environment
   main.select               — avoids passing MagicMock ORM classes to the real
                               SQLAlchemy select() which would raise TypeError
   main.GradientBoostingClassifier / main.IsolationForest — avoids actual training
-  main.f1_score / main.precision_score / main.recall_score — returns controlled floats
+  main.f1_score / precision_score / recall_score / roc_auc_score — controlled floats
   main.pickle.dumps         — MagicMock models are not picklable; returns b"fake"
 """
 from __future__ import annotations
@@ -147,8 +145,8 @@ def _mock_models() -> types.ModuleType:
     The lazy import inside retrain_isolation_forest() does
       from models import Alert, ModelRegistry, Notification, User
     Replacing sys.modules["models"] with this object ensures:
-      - ModelRegistry.is_champion  → MagicMock (no AttributeError)
-      - ModelRegistry(is_champion=True, ...)  → call is recorded; kwargs inspectable
+      - ModelRegistry.status  → MagicMock (no AttributeError)
+      - ModelRegistry(status="champion", ...)  → call is recorded; kwargs inspectable
       - Notification(...)  → each call creates a distinct mock instance
     """
     mod = types.ModuleType("models")
@@ -290,6 +288,7 @@ def _apply_patches(
     stack.enter_context(patch("main.f1_score", return_value=f1))
     stack.enter_context(patch("main.precision_score", return_value=precision))
     stack.enter_context(patch("main.recall_score", return_value=recall))
+    stack.enter_context(patch("main.roc_auc_score", return_value=0.85))
     stack.enter_context(patch("main.pickle.dumps", return_value=b"fake_model_bytes"))
 
     return {"gb_cls": gb_mock, "if_cls": if_mock}
@@ -588,13 +587,13 @@ class TestMLTrainerSupervisedPath:
 class TestMLTrainerNoChampion:
     """
     When no current champion exists, champion_precision = 0.0 so the precision
-    regression check is always False.  The new model is promoted (is_champion=True)
+    regression check is always False.  The new model is promoted (status="champion")
     iff F1 > 0.75; no de-promotion call is made on any existing champion.
     """
 
     @pytest.mark.asyncio
     async def test_promotes_when_no_champion_and_f1_above_threshold(self):
-        """No current champion + F1=0.80 > 0.75 → ModelRegistry created with is_champion=True."""
+        """No current champion + F1=0.80 > 0.75 → ModelRegistry created with status='champion'."""
         labeled = [_labeled_alert("TRUE_POSITIVE")] * 50
 
         def cfg_labeled(r):
@@ -627,14 +626,14 @@ class TestMLTrainerNoChampion:
             from main import retrain_isolation_forest
             await retrain_isolation_forest()
 
-        # ModelRegistry was called with is_champion=True
+        # ModelRegistry was called with status="champion"
         registry_call_kwargs = mock_models_mod.ModelRegistry.call_args.kwargs
-        assert registry_call_kwargs.get("is_champion") is True
+        assert registry_call_kwargs.get("status") == "champion"
         session.commit.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_no_promotion_when_f1_below_threshold_and_no_champion(self):
-        """No current champion + F1=0.70 < 0.75 → ModelRegistry created with is_champion=False."""
+        """No current champion + F1=0.70 < 0.75 → ModelRegistry created with status='STAGING'."""
         labeled = [_labeled_alert("TRUE_POSITIVE")] * 50
 
         def cfg_labeled(r):
@@ -668,7 +667,7 @@ class TestMLTrainerNoChampion:
             await retrain_isolation_forest()
 
         registry_call_kwargs = mock_models_mod.ModelRegistry.call_args.kwargs
-        assert registry_call_kwargs.get("is_champion") is False
+        assert registry_call_kwargs.get("status") == "STAGING"
 
     @pytest.mark.asyncio
     async def test_no_depromote_call_on_session_when_no_champion_exists(self):
@@ -728,16 +727,16 @@ class TestMLTrainerPromotion:
     """
     When a current champion exists AND the new model meets both criteria
     (F1 > 0.75 AND precision >= 95% of champion precision):
-      - The old champion's is_champion attribute is set to False
+      - The old champion's status attribute is set to "archived"
       - The old champion object is passed to db.add() so the change is persisted
-      - The new ModelRegistry entry has is_champion=True
+      - The new ModelRegistry entry has status="champion"
     """
 
     @pytest.mark.asyncio
     async def test_promotes_new_model_and_depromotes_old_champion(self):
         """
         Champion precision=0.85.  New precision=0.82 >= 0.85*0.95=0.8075.  F1=0.80.
-        Expected: old champion.is_champion set to False; new entry is_champion=True.
+        Expected: old champion.status set to "archived"; new entry status="champion".
         """
         old_champion = _champion(precision=0.85)
         labeled = [_labeled_alert("TRUE_POSITIVE")] * 50
@@ -775,15 +774,15 @@ class TestMLTrainerPromotion:
             from main import retrain_isolation_forest
             await retrain_isolation_forest()
 
-        # Old champion was de-promoted (attribute set to False)
-        assert old_champion.is_champion is False
+        # Old champion was archived (attribute set to "archived")
+        assert old_champion.status == "archived"
 
-        # Old champion was added to the session to persist the de-promotion
+        # Old champion was added to the session to persist the status change
         assert old_champion in added_objects
 
         # New registry entry is champion
         registry_call_kwargs = mock_models_mod.ModelRegistry.call_args.kwargs
-        assert registry_call_kwargs.get("is_champion") is True
+        assert registry_call_kwargs.get("status") == "champion"
 
         session.commit.assert_called_once()
 
@@ -847,7 +846,7 @@ class TestMLTrainerRegression:
     """
     The promotion guard:  precision_regression = (champion_precision > 0) AND
     (new_precision < champion_precision * 0.95).
-    When True: is_champion=False and the old champion is NOT de-promoted.
+    When True: status="STAGING" and the old champion is NOT archived.
     The model is still persisted to MinIO and registered as a non-champion entry.
     """
 
@@ -855,7 +854,7 @@ class TestMLTrainerRegression:
     async def test_precision_regression_blocks_promotion(self):
         """
         Champion precision=0.90.  New precision=0.80 < 0.90*0.95=0.855.  F1=0.85.
-        Expected: is_champion=False, old champion is_champion remains True.
+        Expected: status="STAGING", old champion.status remains unchanged.
         """
         old_champion = _champion(precision=0.90)
         labeled = [_labeled_alert("TRUE_POSITIVE")] * 50
@@ -892,12 +891,12 @@ class TestMLTrainerRegression:
 
         # New registry entry must NOT be champion
         registry_call_kwargs = mock_models_mod.ModelRegistry.call_args.kwargs
-        assert registry_call_kwargs.get("is_champion") is False
+        assert registry_call_kwargs.get("status") == "STAGING"
 
-        # Old champion is_champion attribute must NOT have been set to False
-        assert old_champion.is_champion is True
+        # Old champion status must NOT have been set to "archived"
+        assert old_champion.status != "archived"
 
-        # Old champion must NOT have been added to session (no de-promotion)
+        # Old champion must NOT have been added to session (no archiving)
         added_args = [c.args[0] for c in session.add.call_args_list]
         assert old_champion not in added_args
 
@@ -1032,7 +1031,7 @@ class TestMLTrainerRegression:
 
         # Boundary: not a regression → should be promoted
         registry_call_kwargs = mock_models_mod.ModelRegistry.call_args.kwargs
-        assert registry_call_kwargs.get("is_champion") is True
+        assert registry_call_kwargs.get("status") == "champion"
 
-        # Old champion de-promoted
-        assert old_champion.is_champion is False
+        # Old champion archived
+        assert old_champion.status == "archived"

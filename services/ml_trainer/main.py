@@ -29,7 +29,7 @@ import numpy as np
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sklearn.ensemble import GradientBoostingClassifier, IsolationForest
-from sklearn.metrics import f1_score, precision_score, recall_score
+from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -165,9 +165,14 @@ async def retrain_isolation_forest() -> None:
 
                 # Avaliação in-sample (proxy; produção deve usar validação cruzada)
                 preds_bin = model.predict(X_arr)
+                preds_prob = model.predict_proba(X_arr)[:, 1]
                 precision = float(precision_score(y_arr, preds_bin, zero_division=0))
                 recall = float(recall_score(y_arr, preds_bin, zero_division=0))
                 f1 = float(f1_score(y_arr, preds_bin, zero_division=0))
+                try:
+                    auc_roc = float(roc_auc_score(y_arr, preds_prob))
+                except ValueError:
+                    auc_roc = 0.0
 
                 model_type = "GradientBoosting"
                 model_filename = f"gradient_boosting_v{version}.pkl"
@@ -237,9 +242,15 @@ async def retrain_isolation_forest() -> None:
                 # Avaliação in-sample: -1 = anomaly, 1 = normal → binariza para 0/1
                 preds = model.predict(X_arr)
                 preds_bin = np.where(preds == -1, 1, 0)
+                # decision_function: scores negativos = mais anômalo; invertemos para AUC
+                anomaly_scores = -model.decision_function(X_arr)
                 precision = float(precision_score(y_arr, preds_bin, zero_division=0))
                 recall = float(recall_score(y_arr, preds_bin, zero_division=0))
                 f1 = float(f1_score(y_arr, preds_bin, zero_division=0))
+                try:
+                    auc_roc = float(roc_auc_score(y_arr, anomaly_scores))
+                except ValueError:
+                    auc_roc = 0.0
 
                 model_type = "IsolationForest"
                 model_filename = f"isolation_forest_v{version}.pkl"
@@ -259,6 +270,7 @@ async def retrain_isolation_forest() -> None:
                 precision=round(precision, 4),
                 recall=round(recall, 4),
                 f1=round(f1, 4),
+                auc_roc=round(auc_roc, 4),
                 samples=len(X_arr),
             )
 
@@ -278,7 +290,7 @@ async def retrain_isolation_forest() -> None:
             current_champion = (
                 await db.execute(
                     select(ModelRegistry)
-                    .where(ModelRegistry.is_champion.is_(True))
+                    .where(ModelRegistry.status == "champion")
                     .order_by(ModelRegistry.trained_at.desc())
                     .limit(1)
                 )
@@ -307,20 +319,26 @@ async def retrain_isolation_forest() -> None:
 
             # De-promove champion anterior antes de promover o novo
             if is_champion and current_champion:
-                current_champion.is_champion = False
+                current_champion.status = "archived"
                 db.add(current_champion)
 
             registry_entry = ModelRegistry(
-                model_type=model_type,
-                version=version,
+                model_name=model_type,
+                model_type="ANOMALY",
+                model_version=version,
+                algorithm=model_type,
                 artifact_uri=f"s3://{bucket}/{model_filename}",
-                metadata=training_metadata,
+                training_rows=len(X_arr),
+                feature_columns=FEATURE_COLUMNS,
                 metrics={
                     "precision": precision,
                     "recall": recall,
                     "f1_score": f1,
+                    "auc_roc": auc_roc,
+                    **training_metadata,
                 },
-                is_champion=is_champion,
+                status="champion" if is_champion else "STAGING",
+                is_challenger=False,
                 trained_at=datetime.now(UTC),
             )
             db.add(registry_entry)
@@ -371,6 +389,7 @@ async def retrain_isolation_forest() -> None:
                 model_type=model_type,
                 version=version,
                 f1=round(f1, 4),
+                auc_roc=round(auc_roc, 4),
                 is_champion=is_champion,
                 admins_notified=len(admins),
             )

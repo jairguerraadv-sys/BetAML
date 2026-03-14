@@ -471,8 +471,9 @@ class NotificationCreate(BaseModel):
 class ModelRegistryOut(BaseModel):
     id: str
     tenant_id: str
-    model_name: str
+    model_name: Optional[str] = None
     model_type: str
+    algorithm: Optional[str] = None
     version: str
     training_rows: Optional[int] = None
     feature_columns: list[str] = []
