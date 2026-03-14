@@ -17,7 +17,7 @@ from sqlalchemy import select, and_
 
 from config import settings
 from database import AsyncSessionLocal
-from models import Alert, AuditLog, Case, FeatureSnapshot, Notification, Player, ScoringConfig, Tenant, User
+from models import Alert, AuditLog, Case, FeatureSnapshot, Notification, Player, ScoringConfig, Tenant, User, FinancialTransaction, Bet, IngestError
 
 logger = structlog.get_logger(__name__)
 
@@ -490,3 +490,74 @@ async def compute_feature_population_stats() -> None:
     except Exception as exc:
         logger.error("compute_feature_population_stats_failed", error=str(exc))
         await _notify_admins_job_failure("compute_feature_population_stats", str(exc))
+
+
+async def data_retention_batch() -> None:
+    """
+    Data Retention Batch — runs weekly (Sunday 03:00 UTC).
+
+    For each active tenant, reads data_retention_raw_years and data_retention_gold_years
+    from ScoringConfig (defaults: raw=5yr, gold=3yr) and:
+      - Nullifies raw_payload in FinancialTransaction + Bet older than raw_cutoff
+      - Deletes IngestError records older than raw_cutoff
+      - Deletes FeatureSnapshot records older than gold_cutoff
+
+    AuditLog records are never purged (permanent compliance archive).
+    """
+    from sqlalchemy import update as sa_update, delete as sa_delete
+
+    try:
+        async with AsyncSessionLocal() as db:
+            tenants = (await db.execute(select(Tenant).where(Tenant.active.is_(True)))).scalars().all()
+
+            for tenant in tenants:
+                sc = (await db.execute(
+                    select(ScoringConfig).where(ScoringConfig.tenant_id == tenant.id).limit(1)
+                )).scalar_one_or_none()
+
+                raw_years  = int(getattr(sc, "data_retention_raw_years",  None) or 5)
+                gold_years = int(getattr(sc, "data_retention_gold_years", None) or 3)
+                raw_cutoff  = datetime.now(UTC) - timedelta(days=raw_years  * 365)
+                gold_cutoff = datetime.now(UTC) - timedelta(days=gold_years * 365)
+
+                await db.execute(
+                    sa_update(FinancialTransaction)
+                    .where(
+                        FinancialTransaction.tenant_id == tenant.id,
+                        FinancialTransaction.occurred_at < raw_cutoff,
+                    )
+                    .values(raw_payload={})
+                )
+                await db.execute(
+                    sa_update(Bet)
+                    .where(
+                        Bet.tenant_id == tenant.id,
+                        Bet.occurred_at < raw_cutoff,
+                    )
+                    .values(raw_payload={})
+                )
+                await db.execute(
+                    sa_delete(IngestError)
+                    .where(
+                        IngestError.tenant_id == tenant.id,
+                        IngestError.created_at < raw_cutoff,
+                    )
+                )
+                await db.execute(
+                    sa_delete(FeatureSnapshot)
+                    .where(
+                        FeatureSnapshot.tenant_id == tenant.id,
+                        FeatureSnapshot.created_at < gold_cutoff,
+                    )
+                )
+                await db.commit()
+                logger.info(
+                    "data_retention_batch_completed",
+                    tenant_id=tenant.id,
+                    raw_cutoff=raw_cutoff.isoformat(),
+                    gold_cutoff=gold_cutoff.isoformat(),
+                )
+
+    except Exception as exc:
+        logger.error("data_retention_batch_failed", error=str(exc))
+        await _notify_admins_job_failure("data_retention_batch", str(exc))

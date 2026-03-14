@@ -18,6 +18,7 @@ from config import settings
 from database import get_db
 from models import Tenant, User
 from rate_limit import limiter
+from utils import write_audit
 
 logger = structlog.get_logger(__name__)
 
@@ -62,8 +63,14 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
             select(User).where(User.username == body.username, User.active.is_(True))
         )
     user = result.scalar_one_or_none()
-    if not user or not verify_password(body.password, user.password_hash):
+    if not user:
         raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
+    ip = str(request.client.host) if request.client else None
+    if not verify_password(body.password, user.password_hash):
+        await write_audit(db, user.tenant_id, user.id, "LOGIN_FAILED", "User", str(user.id), ip=ip)
+        await db.commit()
+        raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
+    await write_audit(db, user.tenant_id, user.id, "LOGIN", "User", str(user.id), ip=ip)
     token = create_access_token(
         {"sub": user.id, "tenant_id": user.tenant_id, "role": user.role}
     )
@@ -97,6 +104,7 @@ async def refresh(request: Request, current_user: User = Depends(get_current_use
 async def logout(
     token: str = Depends(oauth2_scheme),
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     from jose import JWTError
     from jose import jwt as _jwt
@@ -108,4 +116,5 @@ async def logout(
             await revoke_token(jti, exp)
     except JWTError:
         pass
+    await write_audit(db, current_user.tenant_id, current_user.id, "LOGOUT", "User", str(current_user.id))
     return {"message": "Logout realizado"}

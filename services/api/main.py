@@ -457,8 +457,21 @@ async def _startup():
             misfire_grace_time=3600,
         )
 
+        # Data Retention Batch — toda semana domingo às 03:00 UTC
+        from jobs import data_retention_batch
+        scheduler.add_job(
+            data_retention_batch,
+            trigger="cron",
+            day_of_week="sun",
+            hour=3,
+            minute=0,
+            id="data_retention_batch",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
         scheduler.start()
-        logger.info("scheduled_jobs_started", jobs=["risk_score_decay@04:00", "lgpd_data_expiration@05:00", "sla_violations_check@1h", "feature_population_stats@06:00"])
+        logger.info("scheduled_jobs_started", jobs=["risk_score_decay@04:00", "lgpd_data_expiration@05:00", "sla_violations_check@1h", "feature_population_stats@06:00", "data_retention_batch@sun03:00"])
     except ImportError:
         logger.warning("apscheduler_not_installed", hint="pip install apscheduler")
     except Exception as exc:

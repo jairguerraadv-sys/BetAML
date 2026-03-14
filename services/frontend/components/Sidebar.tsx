@@ -42,7 +42,7 @@ const ADV_NAV = [
 ];
 
 // Roles que veem o menu avançado
-const ADVANCED_ROLES = ['admin', 'senior_analyst', 'sysadmin'];
+const ADVANCED_ROLES = ['ADMIN', 'SUPER_ADMIN'];
 
 function NavItem({ href, label, icon: Icon, tooltip, active }: {
   href: string; label: string; icon: React.ElementType;

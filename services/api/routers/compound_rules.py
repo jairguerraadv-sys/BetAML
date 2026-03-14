@@ -90,6 +90,11 @@ async def delete_compound_rule(
     )).scalar_one_or_none()
     if row is None:
         raise HTTPException(404, "Compound rule not found")
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "DELETE_COMPOUND_RULE", "CompoundRule", rule_id,
+        before={"name": row.name},
+    )
     await db.delete(row)
     await db.commit()
 

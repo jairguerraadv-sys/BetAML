@@ -283,6 +283,10 @@ async def erase_player_data(
     p.name_encrypted = encrypt_pii(anon_name)  # GAP-7: also clear name_encrypted
     p.full_name = anon_name
     p.status = "ERASED"
+    p.birth_date = None
+    p.profession = None
+    p.declared_income_monthly = None
+    p.registered_since = None
     p.updated_at = _utcnow()
 
     # Audit log (LGPD Art. 37)

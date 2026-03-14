@@ -270,6 +270,9 @@ export interface ScoringConfig {
   sla_high_hours: number;
   sla_critical_hours: number;
   data_retention_days: number;
+  data_retention_raw_years: number;
+  data_retention_silver_years: number;
+  data_retention_gold_years: number;
   updated_at: string | null;
 }
 

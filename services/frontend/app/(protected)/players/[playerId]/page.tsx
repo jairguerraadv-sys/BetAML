@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
 import { fetchPlayer, fetchPlayerEconCompat, PlayerDetail, EconCompat } from '@/lib/api';
+import { useCurrentUser } from '@/hooks/useCurrentUser';
 
 const BAND_COLOR: Record<string, string> = {
   HIGH:   'bg-red-100 text-red-700 border-red-200',
@@ -95,6 +96,7 @@ export default function PlayerDetailPage() {
   const { playerId } = useParams<{ playerId: string }>();
   const router        = useRouter();
   const [tab, setTab] = useState<Tab>('profile');
+  const currentUser   = useCurrentUser();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['player', playerId],
@@ -136,7 +138,14 @@ export default function PlayerDetailPage() {
         <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
           <div>
             <dt className="text-gray-500">CPF</dt>
-            <dd className="font-mono font-medium">{p.cpf}</dd>
+            <dd className="font-mono font-medium">
+              {p.cpf}
+              {currentUser?.role === 'AUDITOR' && (
+                <span className="ml-2 rounded bg-yellow-100 px-1.5 py-0.5 text-[10px] font-semibold text-yellow-700">
+                  MASCARADO
+                </span>
+              )}
+            </dd>
           </div>
           <div>
             <dt className="text-gray-500">Score de Risco</dt>

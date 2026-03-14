@@ -400,6 +400,9 @@ class ScoringConfigOut(BaseModel):
     sla_high_hours: int = 24
     sla_critical_hours: int = 4
     data_retention_days: int = 365 * 5
+    data_retention_raw_years: int = 5
+    data_retention_silver_years: int = 5
+    data_retention_gold_years: int = 3
     updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
@@ -418,6 +421,9 @@ class ScoringConfigUpdate(BaseModel):
     sla_high_hours: Optional[int] = None
     sla_critical_hours: Optional[int] = None
     data_retention_days: Optional[int] = None
+    data_retention_raw_years: Optional[int] = None
+    data_retention_silver_years: Optional[int] = None
+    data_retention_gold_years: Optional[int] = None
 
 
 class ScoringPreviewIn(BaseModel):

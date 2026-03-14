@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import require_roles
 from database import AsyncSessionLocal, get_db
-from models import Alert, Bet, Case, FinancialTransaction, Player, RuleDefinition, User
+from models import Alert, Bet, Case, FinancialTransaction, Player, ReportPackage, RuleDefinition, User
 
 router = APIRouter(tags=["reports"])
 
@@ -151,6 +151,23 @@ async def _build_monthly_report(
         round(fp_count / total_labeled, 4) if total_labeled > 0 else None
     )
 
+    # 7. Total SAR communications submitted to COAF
+    sar_res = await db.execute(
+        select(func.count(ReportPackage.id)).where(
+            ReportPackage.tenant_id == tenant_id,
+            ReportPackage.decision == "FILE_SAR",
+            ReportPackage.created_at >= date_from,
+            ReportPackage.created_at <= date_to,
+        )
+    )
+    total_sar_reports: int = sar_res.scalar() or 0
+
+    # 8. True positive rate
+    tp_count = sum(r.cnt for r in label_rows if r.label == "TRUE_POSITIVE")
+    true_positive_rate: float | None = (
+        round(tp_count / total_labeled * 100, 1) if total_labeled else None
+    )
+
     return {
         "period": {"from": date_from.isoformat(), "to": date_to.isoformat()},
         "alerts_by_severity": alerts_by_severity,
@@ -159,6 +176,8 @@ async def _build_monthly_report(
         "top_players_by_risk": top_players_by_risk,
         "total_ingested_events": total_ingested_events,
         "false_positive_rate": false_positive_rate,
+        "total_sar_reports": total_sar_reports,
+        "true_positive_rate": true_positive_rate,
         "generated_at": datetime.now(UTC).isoformat(),
     }
 

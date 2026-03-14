@@ -19,6 +19,9 @@ interface ScoringConfig {
   sla_critical_hours: number;
   updated_at: string | null;
   data_retention_days: number;
+  data_retention_raw_years: number;
+  data_retention_silver_years: number;
+  data_retention_gold_years: number;
 }
 
 const fetchConfig = () =>
@@ -36,7 +39,10 @@ const fields: { key: keyof ScoringConfig; label: string; step: string; min: numb
   { key: 'sla_medium_hours',     label: 'SLA Médio (horas)',             step: '1',    min: 1,   max: 720 },
   { key: 'sla_high_hours',       label: 'SLA Alto (horas)',              step: '1',    min: 1,   max: 720 },
   { key: 'sla_critical_hours',   label: 'SLA Crítico (horas)',           step: '1',    min: 1,   max: 720 },
-  { key: 'data_retention_days',  label: 'Retenção de dados (dias)',      step: '1',    min: 30,  max: 1825 },
+  { key: 'data_retention_days',          label: 'Retenção de dados (dias)',              step: '1', min: 30,  max: 1825 },
+  { key: 'data_retention_raw_years',     label: 'Retenção dados brutos / Silver (anos)', step: '1', min: 1,   max: 10   },
+  { key: 'data_retention_silver_years',  label: 'Retenção canônico Silver (anos)',       step: '1', min: 1,   max: 10   },
+  { key: 'data_retention_gold_years',    label: 'Retenção features Gold (anos)',         step: '1', min: 1,   max: 10   },
 ];
 
 export default function SettingsPage() {
