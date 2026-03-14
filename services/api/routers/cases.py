@@ -371,7 +371,8 @@ async def generate_report_package(
     try:
         pdf_bytes = await asyncio.get_event_loop().run_in_executor(None, _build_report_pdf, payload)
         if pdf_bytes:
-            import os as _os, tempfile as _tmp
+            import os as _os
+            import tempfile as _tmp
             pdf_filename = f"reports/{current_user.tenant_id}/{report_id}.pdf"
             try:
                 from minio import Minio as _Minio

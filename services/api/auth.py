@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
