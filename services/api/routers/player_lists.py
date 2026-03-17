@@ -121,6 +121,11 @@ async def bulk_add_list_entries(
         ))
         added += 1
     await db.commit()
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "BULK_ADD_LIST_ENTRIES", "PlayerList", list_id,
+        after={"count": len(body.values), "value_type": body.value_type},
+    )
     return {"added": added}
 
 
@@ -132,6 +137,11 @@ async def delete_player_list(
 ):
     """Delete a player watchlist and all its entries."""
     pl = await _get_list_or_404(list_id, current_user.tenant_id, db)
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "DELETE_PLAYER_LIST", "PlayerList", list_id,
+        before={"name": pl.name},
+    )
     await db.delete(pl)
     await db.commit()
 

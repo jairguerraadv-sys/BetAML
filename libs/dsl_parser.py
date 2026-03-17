@@ -6,8 +6,10 @@ Gramática suportada:
   or_expr  := and_expr ('or' and_expr)*
   and_expr := not_expr ('and' not_expr)*
   not_expr := 'not' not_expr | compare_expr
-  compare_expr := call_expr (OP call_expr)?
+  compare_expr := add_expr (OP add_expr)?
   OP := '>' | '<' | '>=' | '<=' | '==' | '!=' | 'in' | 'contains'
+  add_expr := mul_expr (('+' | '-') mul_expr)*
+  mul_expr := call_expr (('*' | '/') call_expr)*
   call_expr := FUNC '(' args ')' | atom
   atom := NUMBER | STRING | BOOL | field_access | '(' expr ')'
   field_access := IDENT ('.' IDENT)*
@@ -51,7 +53,7 @@ from typing import Any
 # ──────────────────────────────────────────────────
 
 TOKEN_PATTERNS = [
-    ("NUMBER",   r"-?\d+(?:\.\d+)?"),
+    ("NUMBER",   r"\d+(?:\.\d+)?"),
     ("STRING",   r'"[^"]*"|\'[^\']*\''),
     ("GE",       r">="),
     ("LE",       r"<="),
@@ -63,7 +65,10 @@ TOKEN_PATTERNS = [
     ("RPAREN",   r"\)"),
     ("LBRACKET", r"\["),
     ("RBRACKET", r"\]"),
+    ("PLUS",     r"\+"),
+    ("MINUS",    r"-"),
     ("MUL",      r"\*"),
+    ("DIV",      r"/"),
     ("COMMA",    r","),
     ("IDENT",    r"[A-Za-z_][A-Za-z0-9_.]*"),
     ("SKIP",     r"[ \t\n]+"),
@@ -227,25 +232,36 @@ class DSLParser:
             return UnaryNotNode(self.parse_not_expr())
         return self.parse_compare_expr()
 
-    # mul_expr := call_expr ('*' call_expr)*
+    # mul_expr := call_expr (('*' | '/') call_expr)*
     def parse_mul_expr(self) -> ASTNode:
         node = self.parse_call_expr()
-        while self.peek_type() == "MUL":
-            self.consume("MUL")
+        while self.peek_type() in ("MUL", "DIV"):
+            op_tok = self.consume()
             right = self.parse_call_expr()
-            node = BinOpNode("*", node, right)
+            op = "*" if op_tok.type == "MUL" else "/"
+            node = BinOpNode(op, node, right)
         return node
 
-    # compare_expr := mul_expr (OP mul_expr)?
+    # add_expr := mul_expr (('+' | '-') mul_expr)*
+    def parse_add_expr(self) -> ASTNode:
+        node = self.parse_mul_expr()
+        while self.peek_type() in ("PLUS", "MINUS"):
+            op_tok = self.consume()
+            right = self.parse_mul_expr()
+            op = "+" if op_tok.type == "PLUS" else "-"
+            node = BinOpNode(op, node, right)
+        return node
+
+    # compare_expr := add_expr (OP add_expr)?
     def parse_compare_expr(self) -> ASTNode:
-        left = self.parse_mul_expr()
+        left = self.parse_add_expr()
         op_map = {
             "GT": ">", "LT": "<", "GE": ">=", "LE": "<=",
             "EQ": "==", "NE": "!=", "IN": "in", "CONTAINS": "contains",
         }
         if self.peek_type() in op_map:
             op_tok = self.consume()
-            right = self.parse_mul_expr()
+            right = self.parse_add_expr()
             return BinOpNode(op_map[op_tok.type], left, right)
         return left
 
@@ -484,6 +500,26 @@ def _eval_binop(node: BinOpNode, context: dict[str, Any]) -> Any:
     if node.op == "*":
         try:
             return _to_decimal(left) * _to_decimal(right)
+        except (DSLEvaluationError, TypeError):
+            return Decimal("0")
+
+    if node.op == "+":
+        try:
+            return _to_decimal(left) + _to_decimal(right)
+        except (DSLEvaluationError, TypeError):
+            return Decimal("0")
+
+    if node.op == "-":
+        try:
+            return _to_decimal(left) - _to_decimal(right)
+        except (DSLEvaluationError, TypeError):
+            return Decimal("0")
+
+    if node.op == "/":
+        try:
+            l_d = _to_decimal(left)
+            r_d = _to_decimal(right)
+            return l_d / r_d if r_d != 0 else Decimal("0")
         except (DSLEvaluationError, TypeError):
             return Decimal("0")
 

@@ -9,12 +9,14 @@ import {
 } from 'lucide-react';
 
 const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
-  OPEN:         { label: 'Aberto',      cls: 'bg-blue-100 text-blue-700' },
-  IN_REVIEW:    { label: 'Em revisão',  cls: 'bg-purple-100 text-purple-700' },
-  UNDER_REVIEW: { label: 'Em revisão',  cls: 'bg-purple-100 text-purple-700' },
-  CLOSED:       { label: 'Encerrado',   cls: 'bg-gray-100 text-gray-600' },
-  REPORTED:     { label: 'Reportado',   cls: 'bg-green-100 text-green-600' },
-  ARCHIVED:     { label: 'Arquivado',   cls: 'bg-gray-50 text-gray-400' },
+  OPEN:            { label: 'Aberto',          cls: 'bg-blue-100 text-blue-700' },
+  INVESTIGATING:   { label: 'Investigando',    cls: 'bg-indigo-100 text-indigo-700' },
+  PENDING_REVIEW:  { label: 'Aguarda revisão', cls: 'bg-purple-100 text-purple-700' },
+  IN_REVIEW:       { label: 'Em revisão',      cls: 'bg-purple-100 text-purple-700' },   // legacy
+  UNDER_REVIEW:    { label: 'Em revisão',      cls: 'bg-purple-100 text-purple-700' },   // legacy
+  CLOSED:          { label: 'Encerrado',       cls: 'bg-gray-100 text-gray-600' },
+  REPORTED:        { label: 'Reportado',       cls: 'bg-green-100 text-green-600' },
+  ARCHIVED:        { label: 'Arquivado',       cls: 'bg-gray-50 text-gray-400' },
 };
 
 const PRIORITY_CONFIG: Record<string, { label: string; cls: string }> = {
@@ -81,17 +83,17 @@ export default function CasesPage() {
     queryKey: ['cases', statusFilter],
     queryFn: () => fetchCases(
       statusFilter === 'active'
-        ? { per_page: '200' }
+        ? { limit: 200 }
         : statusFilter === 'closed'
-        ? { status: 'CLOSED', per_page: '200' }
-        : { per_page: '500' },
+        ? { status: 'CLOSED', limit: 200 }
+        : { limit: 500 },
     ),
   });
 
   const filtered = cases.filter((c) => {
     const matchStatus =
       statusFilter === 'active'
-        ? ['OPEN', 'IN_REVIEW', 'UNDER_REVIEW'].includes(c.status)
+        ? ['OPEN', 'INVESTIGATING', 'PENDING_REVIEW', 'IN_REVIEW', 'UNDER_REVIEW'].includes(c.status)
         : statusFilter === 'closed'
         ? ['CLOSED', 'REPORTED', 'ARCHIVED'].includes(c.status)
         : true;
@@ -154,7 +156,7 @@ export default function CasesPage() {
         <div className="flex items-center gap-1.5">
           <Filter size={13} className="text-gray-400" />
           {[
-            { val: 'active', label: `Em andamento (${cases.filter((c) => ['OPEN', 'IN_REVIEW', 'UNDER_REVIEW'].includes(c.status)).length})` },
+            { val: 'active', label: `Em andamento (${cases.filter((c) => ['OPEN', 'INVESTIGATING', 'PENDING_REVIEW', 'IN_REVIEW', 'UNDER_REVIEW'].includes(c.status)).length})` },
             { val: 'closed', label: 'Encerrados' },
             { val: 'all',    label: 'Todos' },
           ].map(({ val, label }) => (

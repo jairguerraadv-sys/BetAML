@@ -207,7 +207,7 @@ class PlayerFeatures(BaseModel):
 
     @classmethod
     def from_redis_dict(cls, data: dict[str, str]) -> "PlayerFeatures":
-        return cls(**data)
+        return cls.model_validate(data)
 
 
 # ──────────────────────────────────────────────────
@@ -400,6 +400,11 @@ class ScoringConfigOut(BaseModel):
     sla_high_hours: int = 24
     sla_critical_hours: int = 4
     data_retention_days: int = 365 * 5
+    data_retention_raw_years: int = 5
+    data_retention_silver_years: int = 5
+    data_retention_gold_years: int = 3
+    auto_case_threshold: float = 0.75
+    ingest_rate_limit_tpm: int = 1000
     updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
@@ -418,6 +423,11 @@ class ScoringConfigUpdate(BaseModel):
     sla_high_hours: Optional[int] = None
     sla_critical_hours: Optional[int] = None
     data_retention_days: Optional[int] = None
+    data_retention_raw_years: Optional[int] = None
+    data_retention_silver_years: Optional[int] = None
+    data_retention_gold_years: Optional[int] = None
+    auto_case_threshold: Optional[float] = None
+    ingest_rate_limit_tpm: Optional[int] = None
 
 
 class ScoringPreviewIn(BaseModel):
@@ -471,8 +481,9 @@ class NotificationCreate(BaseModel):
 class ModelRegistryOut(BaseModel):
     id: str
     tenant_id: str
-    model_name: str
+    model_name: Optional[str] = None
     model_type: str
+    algorithm: Optional[str] = None
     version: str
     training_rows: Optional[int] = None
     feature_columns: list[str] = []
@@ -525,6 +536,22 @@ class FeatureStoreHistoryOut(BaseModel):
     items: list[FeatureStoreHistoryItemOut]
 
     model_config = {"populate_by_name": True}
+
+
+class FeatureStat(BaseModel):
+    mean: float
+    std: float
+    p10: float
+    p25: float
+    p50: float
+    p75: float
+    p90: float
+    count: int = 0  # not persisted in Redis — defaults to 0 for backward compat
+
+
+class FeaturePopulationStatsOut(BaseModel):
+    computed_at: Optional[str] = None
+    features: dict[str, FeatureStat] = Field(default_factory=dict)
 
 
 class SystemFlagOut(BaseModel):
@@ -628,3 +655,40 @@ class PlayerFeaturesV2(PlayerFeatures):
 
     def to_redis_dict(self) -> dict[str, str]:
         return {k: str(v) for k, v in self.model_dump().items()}
+
+
+# ──────────────────────────────────────────────────
+# Module 5 — Case Workflow + Player Enrichment
+# ──────────────────────────────────────────────────
+
+class CaseCommentIn(BaseModel):
+    content: str = Field(..., min_length=1, max_length=2000)
+    mentions: list[str] = Field(default_factory=list)
+
+
+class CaseLinkAlertIn(BaseModel):
+    alert_id: str
+
+
+class TransactionChartItem(BaseModel):
+    day: str            # ISO date YYYY-MM-DD
+    deposit_sum: float
+    withdrawal_sum: float
+
+
+class BetChartItem(BaseModel):
+    day: str
+    stake_sum: float
+
+
+class PaymentInstrumentSummary(BaseModel):
+    payment_instrument: Optional[str] = None
+    payment_method: Optional[str] = None
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    tx_count: int = 0
+
+
+class PlayerNetworkItem(BaseModel):
+    player_id: str
+    shared_by: list[dict[str, str]] = Field(default_factory=list)

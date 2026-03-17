@@ -3,6 +3,7 @@ routers/feature_store.py — Feature Store: histórico e online features por pla
 """
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Optional
 
@@ -14,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_user
 from database import get_db
 from libs.models import FeatureSnapshot, Player
-from libs.schemas import FeatureSnapshotOut, FeatureStoreCurrentOut, FeatureStoreHistoryOut
+from libs.schemas import FeatureSnapshotOut, FeatureStoreCurrentOut, FeatureStoreHistoryOut, FeaturePopulationStatsOut
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["feature-store"])
@@ -161,3 +162,35 @@ async def get_player_features_current(
     if not player or player.tenant_id != current_user.tenant_id:
         raise HTTPException(404, "Player não encontrado")
     return await _get_feature_store_current_payload(player_id, current_user.tenant_id)
+
+
+@router.get("/feature-store/population-stats", response_model=FeaturePopulationStatsOut)
+async def get_feature_population_stats(
+    current_user=Depends(get_current_user),
+):
+    """Retorna estatísticas de população de features do tenant (Redis, TTL 25h).
+
+    Populado pelo job compute_feature_population_stats() diariamente às 06:00 UTC.
+    Retorna objeto vazio ({computed_at: null, features: {}}) se ainda não calculado.
+    """
+    try:
+        import redis.asyncio as aioredis
+        from config import settings as _settings
+        redis_client = aioredis.from_url(_settings.redis_url, decode_responses=True)
+        key = f"feature_stats:{current_user.tenant_id}"
+        raw = await redis_client.get(key)
+        await redis_client.aclose()
+    except Exception as exc:
+        logger.warning("feature_population_stats_lookup_failed", error=str(exc))
+        raise HTTPException(503, "Feature store temporariamente indisponível.")
+
+    if raw is None:
+        return FeaturePopulationStatsOut(computed_at=None, features={})
+
+    try:
+        stats_dict = json.loads(raw)
+    except Exception as exc:
+        logger.warning("feature_population_stats_parse_failed", error=str(exc))
+        return FeaturePopulationStatsOut(computed_at=None, features={})
+
+    return FeaturePopulationStatsOut(computed_at=None, features=stats_dict)

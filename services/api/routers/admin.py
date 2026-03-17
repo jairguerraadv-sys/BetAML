@@ -13,7 +13,7 @@ import hashlib
 import secrets
 import string
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Optional
 
 import structlog
@@ -29,6 +29,7 @@ from libs.models import (
     ApiKey,
     AuditLog,
     Case,
+    IngestJob,
     RuleDefinition,
     ScoringConfig,
     SystemFlag,
@@ -230,6 +231,79 @@ async def get_aml_kpis(
         sla_breach_rate_open_cases_percent=round((cases_overdue / open_cases_den) * 100.0, 2) if cases_open else 0.0,
         avg_case_resolution_hours_30d=round(avg_case_resolution_hours_30d, 2),
     )
+
+
+# ── Usage Stats ────────────────────────────────────────────────────────────────
+
+@router.get("/admin/stats/usage", tags=["admin"])
+async def get_usage_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_roles("ADMIN")),
+):
+    """Retorna métricas de uso do tenant para o mês corrente."""
+    from sqlalchemy import text as _text
+
+    tid = current_user.tenant_id
+    first_of_month = date.today().replace(day=1)
+
+    events_this_month = int((await db.execute(
+        select(sqlfunc.coalesce(sqlfunc.sum(IngestJob.processed_records), 0)).where(
+            IngestJob.tenant_id == tid,
+            IngestJob.created_at >= first_of_month,
+        )
+    )).scalar() or 0)
+
+    alerts_this_month = int((await db.execute(
+        select(sqlfunc.count(Alert.id)).where(
+            Alert.tenant_id == tid,
+            Alert.created_at >= first_of_month,
+        )
+    )).scalar() or 0)
+
+    open_cases = int((await db.execute(
+        select(sqlfunc.count(Case.id)).where(
+            Case.tenant_id == tid,
+            Case.status.not_in(["CLOSED", "REPORTED"]),
+        )
+    )).scalar() or 0)
+
+    # DB size — best-effort, fallback 0
+    db_size_mb = 0.0
+    try:
+        result = await db.execute(_text("SELECT pg_database_size(current_database())"))
+        db_size_mb = round((result.scalar() or 0) / (1024 * 1024), 2)
+    except Exception:
+        pass
+
+    # MinIO storage — best-effort, fallback 0
+    minio_mb = 0.0
+    try:
+        from minio import Minio
+
+        mc = Minio(
+            settings.minio_endpoint.replace("http://", "").replace("https://", ""),
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            secure=settings.minio_endpoint.startswith("https"),
+        )
+        total_bytes = sum(
+            obj.size
+            for obj in mc.list_objects(settings.minio_bucket, prefix=f"{tid}/", recursive=True)
+            if obj.size
+        )
+        minio_mb = round(total_bytes / (1024 * 1024), 2)
+    except Exception:
+        pass
+
+    return {
+        "tenant_id": tid,
+        "period": str(first_of_month),
+        "events_this_month": events_this_month,
+        "alerts_this_month": alerts_this_month,
+        "open_cases": open_cases,
+        "db_size_mb": db_size_mb,
+        "minio_mb": minio_mb,
+    }
 
 
 # ── API Keys ───────────────────────────────────────────────────────────────────

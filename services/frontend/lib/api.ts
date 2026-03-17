@@ -152,6 +152,22 @@ export interface FeatureStoreHistory {
   items: FeatureStoreHistoryItem[];
 }
 
+export interface FeatureStat {
+  mean: number;
+  std: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  count: number;
+}
+
+export interface FeaturePopulationStats {
+  computed_at: string | null;
+  features: Record<string, FeatureStat>;
+}
+
 export interface EconCompat {
   player_id: string;
   declared_income_monthly: number | null;
@@ -198,7 +214,7 @@ export const fetchAlerts = (params?: Record<string, string>) =>
 export const fetchAlert = (id: string) =>
   api.get<AlertDetail>(`/alerts/${id}`).then((r) => r.data);
 
-export const fetchCases = (params?: Record<string, string>) =>
+export const fetchCases = (params?: Record<string, string | number>) =>
   api.get<Case[]>('/cases', { params }).then((r) => r.data);
 
 export const fetchCase = (id: string) =>
@@ -220,8 +236,14 @@ export const fetchPlayer = (id: string) =>
 export const fetchFeatureStoreCurrent = (playerId: string) =>
   api.get<FeatureStoreCurrent>(`/feature-store/players/${playerId}/current`).then((r) => r.data);
 
-export const fetchFeatureStoreHistory = (playerId: string) =>
-  api.get<FeatureStoreHistory>(`/feature-store/players/${playerId}/history`).then((r) => r.data);
+export const fetchFeatureStoreHistory = (
+  playerId: string,
+  params?: { from?: string; to?: string },
+) =>
+  api.get<FeatureStoreHistory>(`/feature-store/players/${playerId}/history`, { params }).then((r) => r.data);
+
+export const fetchFeaturePopulationStats = () =>
+  api.get<FeaturePopulationStats>('/feature-store/population-stats').then((r) => r.data);
 
 export const fetchPlayerEconCompat = (id: string) =>
   api.get<EconCompat>(`/players/${id}/econ-compat`).then((r) => r.data);
@@ -248,6 +270,9 @@ export interface ScoringConfig {
   sla_high_hours: number;
   sla_critical_hours: number;
   data_retention_days: number;
+  data_retention_raw_years: number;
+  data_retention_silver_years: number;
+  data_retention_gold_years: number;
   updated_at: string | null;
 }
 
@@ -279,8 +304,17 @@ export const fetchRules = () => api.get<Rule[]>('/rules').then((r) => r.data);
 export const createRule = (body: RuleCreatePayload) =>
   api.post<Rule>('/rules', body).then((r) => r.data);
 
+export const validateDsl = (condition_dsl: string) =>
+  api.post<{ valid: boolean; message?: string }>('/rules/validate', { expression: condition_dsl }).then((r) => r.data);
+
+export interface SimulateRuleResult {
+  rule_id: string;
+  results: Array<{ matched: boolean; event: Record<string, unknown>; error?: string }>;
+  matches: number;
+}
+
 export const simulateRule = (id: string, payload: object) =>
-  api.post<{ matched: boolean; detail: string }>(`/rules/${id}/simulate`, payload).then((r) => r.data);
+  api.post<SimulateRuleResult>(`/rules/${id}/simulate`, payload).then((r) => r.data);
 
 export const ingestFile = (formData: FormData) =>
   api
@@ -291,9 +325,6 @@ export const ingestFile = (formData: FormData) =>
 
 export const triageAlert = (alertId: string, disposition: string, note: string) =>
   api.post(`/alerts/${alertId}/triage`, { disposition, note }).then((r) => r.data);
-
-export const linkAlertToCase = (alertId: string, caseId: string) =>
-  api.post(`/alerts/${alertId}/link-to-case`, { case_id: caseId }).then((r) => r.data);
 
 // ── Mappings (Módulo 1) ─────────────────────────────────────────────────────
 
@@ -539,3 +570,243 @@ export interface DashboardStats {
 
 export const fetchDashboardStats = () =>
   api.get<DashboardStats>('/stats/dashboard').then((r) => r.data);
+
+// ── Ingest Jobs & Errors (Módulo 1) ──────────────────────────────────────────
+
+export type IngestJobStatus = 'QUEUED' | 'PROCESSING' | 'DONE' | 'PARTIAL' | 'FAILED';
+
+export interface IngestJob {
+  id: string;
+  source_system: string;
+  file_name: string | null;
+  status: IngestJobStatus;
+  total_records: number | null;
+  processed_records: number | null;
+  failed_records: number | null;
+  bytes_processed: number;
+  duration_ms: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IngestJobErrorSample {
+  id: string;
+  line_number: number | null;
+  error_reason: string;
+  raw_payload: string;
+  created_at: string;
+}
+
+export interface IngestJobDetail extends IngestJob {
+  error_count: number;
+  error_sample: IngestJobErrorSample[];
+  file_size_bytes: number | null;
+  reprocessed_from: string | null;
+  mapping_version_id: string | null;
+  file_path: string | null;
+}
+
+export interface IngestError {
+  id: string;
+  ingest_job_id: string | null;
+  source_system: string;
+  entity_type: string | null;
+  line_number: number | null;
+  error_reason: string;
+  error_detail: Record<string, unknown>;
+  raw_payload: string;
+  resolved: boolean;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+export const fetchIngestJobs = (params?: {
+  status?: string;
+  source_system?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}) => api.get<IngestJob[]>('/ingest/jobs', { params }).then((r) => r.data);
+
+export const fetchIngestJob = (jobId: string) =>
+  api.get<IngestJobDetail>(`/ingest/jobs/${jobId}`).then((r) => r.data);
+
+export const reprocessIngestJob = (
+  jobId: string,
+  body: { reason: string; mapping_version_id?: string },
+) =>
+  api.post<{ job_id: string; status: string }>(
+    `/ingest/jobs/${jobId}/reprocess`,
+    body,
+  ).then((r) => r.data);
+
+export const fetchIngestErrors = (params?: {
+  source_system?: string;
+  job_id?: string;
+  resolved?: boolean;
+  limit?: number;
+  offset?: number;
+}) => api.get<IngestError[]>('/ingest/errors', { params }).then((r) => r.data);
+
+export const resolveIngestError = (errorId: string, body: { note?: string }) =>
+  api.post<{ status: string; id: string }>(
+    `/ingest/errors/${errorId}/resolve`,
+    body,
+  ).then((r) => r.data);
+
+export const replayIngestError = (
+  errorId: string,
+  body: {
+    corrected_payload: Record<string, unknown>;
+    entity_type?: string;
+    mapping_config_id?: string;
+    resolve_original?: boolean;
+    note?: string;
+  },
+) =>
+  api.post<{ status: string; event_id: string; ingest_error_id: string; resolved: boolean }>(
+    `/ingest/errors/${errorId}/replay`,
+    body,
+  ).then((r) => r.data);
+
+// ── Module 5 — Case Workflow + Player Investigation ────────────────────────────
+
+export interface TransactionChartItem {
+  day: string;
+  deposit_sum: number;
+  withdrawal_sum: number;
+}
+
+export interface BetChartItem {
+  day: string;
+  stake_sum: number;
+}
+
+export interface PaymentInstrumentSummary {
+  payment_instrument: string | null;
+  payment_method: string | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  tx_count: number;
+}
+
+export interface PlayerNetworkItem {
+  player_id: string;
+  shared_by: Array<{ type: string; value: string }>;
+}
+
+export interface CaseAlertHistory {
+  player_id: string;
+  cases: Array<{ id: string; title: string; status: string; severity: string; created_at: string }>;
+  alerts: Array<{ id: string; title: string; severity: string; status: string; created_at: string }>;
+}
+
+export const fetchPlayerTransactionsChart = (playerId: string, days = 90) =>
+  api.get<{ player_id: string; days: number; data: TransactionChartItem[] }>(
+    `/players/${playerId}/transactions-chart`,
+    { params: { days } },
+  ).then((r) => r.data);
+
+export const fetchPlayerBetsChart = (playerId: string, days = 90) =>
+  api.get<{ player_id: string; days: number; data: BetChartItem[] }>(
+    `/players/${playerId}/bets-chart`,
+    { params: { days } },
+  ).then((r) => r.data);
+
+export const fetchPlayerPaymentInstruments = (playerId: string) =>
+  api.get<{ player_id: string; instruments: PaymentInstrumentSummary[] }>(
+    `/players/${playerId}/payment-instruments`,
+  ).then((r) => r.data);
+
+export const fetchPlayerNetwork = (playerId: string) =>
+  api.get<{ player_id: string; related_players: PlayerNetworkItem[] }>(
+    `/players/${playerId}/network`,
+  ).then((r) => r.data);
+
+export const fetchPlayerCaseAlertHistory = (playerId: string) =>
+  api.get<CaseAlertHistory>(`/players/${playerId}/case-alert-history`).then((r) => r.data);
+
+export const addCaseComment = (caseId: string, body: { content: string; mentions?: string[] }) =>
+  api.post<{ id: string; created_at: string }>(`/cases/${caseId}/comments`, body).then((r) => r.data);
+
+export const linkAlertToCase = (caseId: string, alertId: string) =>
+  api.post<{ case_id: string; alert_id: string; status: string }>(
+    `/cases/${caseId}/link-alert`,
+    { alert_id: alertId },
+  ).then((r) => r.data);
+
+export const updateCaseStatus = (caseId: string, newStatus: string) =>
+  api.post<{ id: string; event_type: string; created_at: string }>(
+    `/cases/${caseId}/events`,
+    { event_type: 'STATUS_CHANGE', content: { new_status: newStatus } },
+  ).then((r) => r.data);
+
+// ── Module 7 — Observabilidade e Operação ─────────────────────────────────────
+
+export interface ServiceHealth {
+  postgres: string;
+  redis: string;
+  kafka: string;
+  minio: string;
+  clickhouse: string;
+  ml_service: string;
+}
+
+export interface HealthStatus {
+  status: 'ok' | 'degraded';
+  checks: ServiceHealth;
+  timestamp: string;
+}
+
+export const fetchHealthStatus = () =>
+  api.get<HealthStatus>('/health/ready').then((r) => r.data);
+
+export interface SystemFlag {
+  key: string;
+  value: Record<string, unknown>;
+  updated_at: string | null;
+}
+
+export const fetchSystemFlags = () =>
+  api.get<SystemFlag[]>('/admin/flags').then((r) => r.data);
+
+export const toggleMaintenanceMode = (enabled: boolean) =>
+  api
+    .post<{ maintenance_mode: boolean }>(`/admin/maintenance-mode?enabled=${enabled}`)
+    .then((r) => r.data);
+
+export const fetchAmlKpis = () =>
+  api.get<Record<string, unknown>>('/admin/kpis/aml').then((r) => r.data);
+
+export const designateChallenger = (modelId: string) =>
+  api
+    .post<{ status: string; model_id: string }>(`/model-registry/${modelId}/challenger`)
+    .then((r) => r.data);
+
+// ── Module 8 — Usage stats + invites ─────────────────────────────────────────
+
+export interface UsageStats {
+  tenant_id: string;
+  period: string;
+  events_this_month: number;
+  alerts_this_month: number;
+  open_cases: number;
+  db_size_mb: number;
+  minio_mb: number;
+}
+
+export const fetchUsageStats = () =>
+  api.get<UsageStats>('/admin/stats/usage').then((r) => r.data);
+
+export interface InviteResponse {
+  invite_link: string;
+  email: string;
+  role: string;
+  expires_in_hours: number;
+}
+
+export const generateInviteLink = (body: { email: string; role: string }) =>
+  api.post<InviteResponse>('/admin/invite', body).then((r) => r.data);
+

@@ -1,0 +1,65 @@
+# Pre-commit hooks configuration for BetAML
+# See https://pre-commit.com for more information
+
+repos:
+  # Gitleaks: detect hardcoded secrets
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.2
+    hooks:
+      - id: gitleaks
+        name: Detect hardcoded secrets
+        entry: gitleaks protect --verbose --redact --staged
+        language: system
+        pass_filenames: false
+
+  # Detect plaintext PII in logs
+  - repo: local
+    hooks:
+      - id: detect-pii-logging
+        name: Detect PII in logger calls
+        entry: python scripts/detect_pii_logging.py
+        language: python
+        files: \.py$
+        pass_filenames: true
+        additional_dependencies: []
+
+  # Ruff linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.3.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # Bandit security checks
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.8
+    hooks:
+      - id: bandit
+        args: [-c, pyproject.toml, -r, services/api/, libs/]
+        pass_filenames: false
+
+  # Check for merge conflict markers
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+        args: [--unsafe]  # Allow custom YAML tags
+      - id: check-json
+      - id: check-added-large-files
+        args: [--maxkb=1024]  # Block files >1MB
+
+  # TypeScript/ESLint for frontend (optional, if needed)
+  # Uncomment if you want pre-commit to run on frontend as well
+  # - repo: https://github.com/pre-commit/mirrors-eslint
+  #   rev: v8.57.0
+  #   hooks:
+  #     - id: eslint
+  #       files: \.(ts|tsx|js|jsx)$
+  #       args: [--fix]
+  #       additional_dependencies:
+  #         - eslint@8.57.0
+  #         - typescript@5.3.3

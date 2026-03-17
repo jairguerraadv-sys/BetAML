@@ -416,8 +416,9 @@ class TestCheckSlaViolations:
                 # SELECT admins/analysts for the case's tenant
                 result.scalars.return_value.all.return_value = [admin]
             else:
-                # Dedup check: no recent SLA_VIOLATION notification exists
+                # Dedup check: no recent SLA_VIOLATION notification; approaching = []
                 result.scalar_one_or_none.return_value = None
+                result.scalars.return_value.all.return_value = []
             return result
 
         session = self._make_session(execute)
@@ -459,6 +460,7 @@ class TestCheckSlaViolations:
             else:
                 # Dedup: a SLA_VIOLATION notification was already sent within 2 h
                 result.scalar_one_or_none.return_value = recent_notif
+                result.scalars.return_value.all.return_value = []
             return result
 
         session = self._make_session(execute)

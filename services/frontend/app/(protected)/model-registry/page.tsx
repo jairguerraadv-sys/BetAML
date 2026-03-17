@@ -8,9 +8,11 @@ import {
 
 interface ModelEntry {
   id: string;
+  model_name: string | null;
   model_type: string;
+  algorithm: string | null;
   version: string;
-  status: 'champion' | 'challenger' | 'archived' | 'active';
+  status: 'champion' | 'challenger' | 'STAGING' | 'archived' | 'active';
   metrics: Record<string, number>;
   trained_at: string;
   promoted_at?: string;
@@ -20,12 +22,15 @@ const fetchModels = () =>
   api.get<ModelEntry[]>('/model-registry').then((r) => r.data);
 const promoteModel = (id: string) =>
   api.post(`/model-registry/${id}/promote`);
+const designateChallenger = (id: string) =>
+  api.post(`/model-registry/${id}/challenger`);
 
 const STATUS_LABEL: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  champion:   { label: 'Em produção',  color: 'bg-green-100 text-green-700',  icon: <Star size={10} /> },
-  challenger: { label: 'Em teste A/B', color: 'bg-blue-100 text-blue-700',    icon: <TrendingUp size={10} /> },
-  active:     { label: 'Ativo',        color: 'bg-emerald-100 text-emerald-700', icon: null },
-  archived:   { label: 'Arquivado',    color: 'bg-gray-100 text-gray-500',    icon: null },
+  champion:   { label: 'Em produção',      color: 'bg-green-100 text-green-700',   icon: <Star size={10} /> },
+  challenger: { label: 'Em teste A/B',     color: 'bg-blue-100 text-blue-700',     icon: <TrendingUp size={10} /> },
+  STAGING:    { label: 'Aguardando teste', color: 'bg-yellow-100 text-yellow-700', icon: null },
+  active:     { label: 'Ativo',            color: 'bg-emerald-100 text-emerald-700', icon: null },
+  archived:   { label: 'Arquivado',        color: 'bg-gray-100 text-gray-500',     icon: null },
 };
 
 const MODEL_TYPE_LABEL: Record<string, string> = {
@@ -84,13 +89,18 @@ export default function ModelRegistryPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['model-registry'] }),
   });
 
+  const designate = useMutation({
+    mutationFn: designateChallenger,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['model-registry'] }),
+  });
+
   const byType = models.reduce<Record<string, ModelEntry[]>>((acc, m) => {
     (acc[m.model_type] ??= []).push(m);
     return acc;
   }, {});
 
-  // Sort within each type: champion first, then challengers, then archived
-  const ORDER = { champion: 0, active: 0, challenger: 1, archived: 2 };
+  // Sort within each type: champion first, then challengers, then staging, then archived
+  const ORDER: Record<string, number> = { champion: 0, active: 0, challenger: 1, STAGING: 2, archived: 3 };
 
   return (
     <div className="space-y-6">
@@ -135,7 +145,7 @@ export default function ModelRegistryPage() {
                 const auc = m.metrics?.auc_roc;
                 const prec = m.metrics?.precision;
                 const recall = m.metrics?.recall;
-                const f1 = m.metrics?.f1;
+                const f1 = m.metrics?.f1_score;
                 const isArchived = m.status === 'archived';
 
                 return (
@@ -154,19 +164,32 @@ export default function ModelRegistryPage() {
                         <p className="text-xs text-gray-400 mt-0.5">
                           Treinado em {new Date(m.trained_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })}
                           {m.promoted_at && ` · Ativado em ${new Date(m.promoted_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })}`}
+                          {m.algorithm && <span className="ml-2 text-gray-400">· {m.algorithm}</span>}
                         </p>
                       </div>
 
-                      {m.status === 'challenger' && (
-                        <button
-                          onClick={() => promote.mutate(m.id)}
-                          disabled={promote.isPending}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold transition-colors disabled:opacity-50"
-                        >
-                          <Star size={12} />
-                          Promover para produção
-                        </button>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {m.status === 'STAGING' && (
+                          <button
+                            onClick={() => designate.mutate(m.id)}
+                            disabled={designate.isPending}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-blue-300 text-blue-700 text-xs font-semibold hover:bg-blue-50 transition-colors disabled:opacity-50"
+                          >
+                            <TrendingUp size={12} />
+                            Designar Challenger
+                          </button>
+                        )}
+                        {m.status === 'challenger' && (
+                          <button
+                            onClick={() => promote.mutate(m.id)}
+                            disabled={promote.isPending}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold transition-colors disabled:opacity-50"
+                          >
+                            <Star size={12} />
+                            Promover para produção
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {/* Metric cards */}
@@ -212,14 +235,13 @@ export default function ModelRegistryPage() {
               })}
             </div>
 
-            {/* A/B distribution hint */}
+            {/* Challenger hint */}
             {challengers.length > 0 && champion && (
               <div className="mx-5 mb-4 mt-1 flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-lg p-3">
                 <Info size={14} className="text-blue-500 flex-shrink-0 mt-0.5" />
                 <p className="text-xs text-blue-800">
-                  <strong>Teste A/B ativo:</strong> o modelo challenger está recebendo{' '}
-                  <strong>10% do tráfego</strong> de eventos para validação em produção.
-                  Se as métricas continuarem superiores, use o botão &quot;Promover&quot; para ativá-lo completamente.
+                  <strong>Challenger ativo:</strong> há um modelo em avaliação lateral.
+                  Revise as métricas e, se superiores ao champion, use &quot;Promover&quot; para ativá-lo.
                 </p>
               </div>
             )}

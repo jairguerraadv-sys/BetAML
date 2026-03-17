@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { fetchRules, simulateRule, Rule } from '@/lib/api';
+import { fetchRules, simulateRule, SimulateRuleResult, Rule } from '@/lib/api';
 import DataTable from '@/components/DataTable';
 
 export default function RulesPage() {
@@ -9,16 +9,20 @@ export default function RulesPage() {
     queryKey: ['rules'],
     queryFn:  fetchRules,
   });
-  const [selected, setSelected]   = useState<Rule | null>(null);
+  const [selected, setSelected]    = useState<Rule | null>(null);
   const [simPayload, setSimPayload] = useState('{}');
-  const [simResult, setSimResult]  = useState<{ matched: boolean; detail: string } | null>(null);
+  const [simResult, setSimResult]  = useState<SimulateRuleResult | null>(null);
 
   const simulate = useMutation({
     mutationFn: () => {
       let payload: object;
       try { payload = JSON.parse(simPayload); }
       catch { payload = {}; }
-      return simulateRule(selected!.id, payload);
+      // Wrap in events array if the user didn't already do it
+      const body = Array.isArray((payload as Record<string, unknown>).events)
+        ? payload
+        : { events: [payload] };
+      return simulateRule(selected!.id, body);
     },
     onSuccess: (data) => setSimResult(data),
   });
@@ -49,6 +53,9 @@ export default function RulesPage() {
     { header: 'Versão',  accessorKey: 'version' as keyof Rule },
   ];
 
+  const firstResult = simResult?.results?.[0];
+  const fired = (simResult?.matches ?? 0) > 0;
+
   return (
     <div>
       <h1 className="mb-6 text-2xl font-bold">Regras DSL</h1>
@@ -61,32 +68,38 @@ export default function RulesPage() {
 
       {selected && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl dark:bg-gray-900">
             <h2 className="mb-1 text-lg font-semibold">{selected.name}</h2>
             <p className="mb-3 text-xs text-gray-400">Escopo: {selected.scope} · v{selected.version}</p>
 
             <label className="mb-1 block text-xs font-medium text-gray-600">Condição DSL</label>
-            <pre className="mb-4 overflow-x-auto rounded-lg bg-gray-50 p-3 text-xs">
+            <pre className="mb-4 overflow-x-auto rounded-lg bg-gray-50 p-3 text-xs dark:bg-gray-800">
               {selected.condition_dsl}
             </pre>
 
             <label className="mb-1 block text-xs font-medium text-gray-600">
-              Contexto de simulação (JSON)
+              Contexto de simulação (JSON com campos <code>transaction</code>, <code>features</code>, <code>player</code>, <code>params</code>)
             </label>
             <textarea
               rows={5}
               value={simPayload}
               onChange={(e) => setSimPayload(e.target.value)}
-              className="mb-3 w-full rounded-lg border px-3 py-2 font-mono text-xs"
-              placeholder='{"transaction": {"amount": 5000}, "features": {"deposit_sum_24h": 10000}}'
+              className="mb-3 w-full rounded-lg border px-3 py-2 font-mono text-xs dark:bg-gray-800 dark:text-gray-200"
+              placeholder='{"transaction": {"amount": 5000, "type": "DEPOSIT"}, "features": {"deposit_sum_24h": 10000}}'
             />
 
             {simResult && (
               <div className={`mb-3 rounded-lg px-4 py-3 text-sm font-medium ${
-                simResult.matched ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'
+                fired ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'
               }`}>
-                {simResult.matched ? '⚠ Regra DISPAROU' : '✓ Regra NÃO disparou'}
-                {simResult.detail && <p className="mt-1 text-xs font-normal">{simResult.detail}</p>}
+                {fired
+                  ? `⚠ Regra DISPAROU (${simResult.matches} de ${simResult.results.length} evento(s))`
+                  : '✓ Regra NÃO disparou'}
+                {firstResult?.error && (
+                  <p className="mt-1 text-xs font-normal text-orange-700">
+                    Aviso: {firstResult.error}
+                  </p>
+                )}
               </div>
             )}
 

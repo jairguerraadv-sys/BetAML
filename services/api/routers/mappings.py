@@ -15,6 +15,7 @@ from database import get_db
 from libs.connectors import CONNECTOR_TEMPLATE_REGISTRY
 from libs.mapping import MappingConfigSchema, MappingEngine
 from models import MappingConfig, User
+from utils import write_audit
 
 try:
     import yaml
@@ -265,6 +266,11 @@ async def create_mapping(
     db.add(mc)
     await db.commit()
     await db.refresh(mc)
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "CREATE_MAPPING", "MappingConfig", str(mc.id),
+        after={"name": mc.name, "source_system": mc.source_system, "entity_type": mc.entity_type, "version_number": mc.version_number},
+    )
     return {"id": mc.id, "name": mc.name, "version_number": mc.version_number, "is_current": mc.is_current}
 
 
@@ -357,6 +363,12 @@ async def rollback_mapping_version(
     target.is_current = True
     target.active = True
     await db.commit()
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "ROLLBACK_MAPPING", "MappingConfig", str(mapping_id),
+        before={"version_number": ref.version_number},
+        after={"version_number": target.version_number},
+    )
     return {"status": "activated", "id": target.id, "version_number": target.version_number}
 
 
@@ -410,6 +422,12 @@ async def create_new_mapping_version(
     db.add(new_row)
     await db.commit()
     await db.refresh(new_row)
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "UPDATE_MAPPING", "MappingConfig", str(mapping_id),
+        before={"version_number": current.version_number, "name": current.name},
+        after={"version_number": new_row.version_number, "name": new_row.name},
+    )
     return {
         "id": new_row.id,
         "name": new_row.name,

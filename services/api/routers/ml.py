@@ -80,3 +80,28 @@ async def promote_model(
                        {"model_type": model.model_type})
     await db.commit()
     return {"status": "promoted", "model_id": model_id}
+
+
+@router.post("/model-registry/{model_id}/challenger")
+async def designate_challenger(
+    model_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_roles("ADMIN")),
+):
+    """Designa um modelo STAGING como challenger para A/B evaluation."""
+    model = (await db.execute(
+        select(ModelRegistry).where(
+            ModelRegistry.id == model_id,
+            _tenant_filter(ModelRegistry, current_user.tenant_id),
+        )
+    )).scalar_one_or_none()
+    if model is None:
+        raise HTTPException(404, "Modelo não encontrado")
+    if model.status == "champion":
+        raise HTTPException(400, "Champion não pode ser designado como challenger diretamente; use /promote")
+    model.is_challenger = True
+    await _write_audit(db, current_user.tenant_id, current_user.id,
+                       "DESIGNATE_CHALLENGER", "ModelRegistry", model_id,
+                       {"model_type": model.model_type, "algorithm": model.algorithm})
+    await db.commit()
+    return {"status": "challenger", "model_id": model_id}

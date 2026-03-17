@@ -1,5 +1,4 @@
 """routers/alerts.py — Listagem, detalhe, triage, close, link-to-case, SSE stream, labeling."""
-from __future__ import annotations
 
 import asyncio
 import json
@@ -317,7 +316,7 @@ async def label_alert(
     await write_audit(
         db,
         tenant_id=current_user.tenant_id,
-        actor_id=current_user.id,
+        user_id=current_user.id,
         action="LABEL_ALERT",
         entity_type="Alert",
         entity_id=alert_id,
@@ -337,12 +336,12 @@ async def _enqueue_feedback_event(alert_id: str, label: str, tenant_id: str) -> 
     MAX_RETRIES = 2
     last_exc: Exception | None = None
 
-    payload = json.dumps({
+    payload = {
         "alert_id": alert_id,
         "label": label,
         "tenant_id": tenant_id,
         "ts": datetime.now(UTC).isoformat(),
-    }).encode()
+    }
 
     for attempt in range(MAX_RETRIES + 1):
         try:
