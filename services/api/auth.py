@@ -22,6 +22,7 @@ from models import ApiKey, User
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 ROLES = {"SUPER_ADMIN", "ADMIN", "AML_ANALYST", "AUDITOR"}
 
@@ -124,6 +125,9 @@ async def get_current_user(
     )
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        token_type = payload.get("token_type")
+        if token_type and token_type != "access":
+            raise credentials_exception
         user_id: str = payload.get("sub")
         if not user_id:
             raise credentials_exception

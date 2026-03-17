@@ -113,6 +113,7 @@ app.add_middleware(RequestIDMiddleware)
 @app.middleware("http")
 async def set_rls_tenant_middleware(request: Request, call_next):
     from jose import jwt as _jwt, JWTError
+    request.state.user_role = None
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         try:
@@ -120,8 +121,11 @@ async def set_rls_tenant_middleware(request: Request, call_next):
                 auth_header[7:], settings.jwt_secret, algorithms=[settings.jwt_algorithm]
             )
             tid = payload.get("tenant_id")
+            role = payload.get("role")
             if tid:
                 current_tenant_id.set(tid)
+            if role:
+                request.state.user_role = role
         except JWTError:
             pass  # token inválido — get_current_user rejeitará na rota
     try:

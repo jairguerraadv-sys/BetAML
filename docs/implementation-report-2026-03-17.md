@@ -22,54 +22,74 @@
 - ✅ **Resultado:** 0 PII logging violations detected
 - ✅ Código já está seguro (usa mask_cpf() corretamente)
 
-### 4. Refresh Token Rotation — Fundação (80%)
-- ✅ `infra/migration_v14.sql` — Adiciona coluna `users.refresh_token_jti`
+### 4. Refresh Token Rotation — Completo (100%)
+- ✅ `infra/migration_v15.sql` — Adiciona coluna `users.refresh_token_jti` (corrigido de v14 para v15)
+- ✅ `services/api/models.py` — Coluna ORM `User.refresh_token_jti`
 - ✅ `services/api/auth.py` — Funções:
-  - `create_refresh_token(data) -> tuple[str, str]` (7 dias sliding)
-  - `store_refresh_token_jti(db, user_id, jti)` (invalida anterior)
-  - `revoke_refresh_token(db, user_id)` (nullify JTI)
-- ⚠️ **Pendente:** Atualizar `routers/auth.py` para usar refresh token em login/refresh/logout (requer 2-3 horas adicionais)
+   - `create_refresh_token(data) -> tuple[str, str]` (7 dias sliding)
+   - `store_refresh_token_jti(db, user_id, jti)` (invalida anterior)
+   - `revoke_refresh_token(db, user_id)` (nullify JTI)
+   - `get_current_user()` bloqueia refresh token em rotas de access token
+- ✅ `services/api/routers/auth.py` — `login`, `refresh`, `logout` com rotação de JTI e cookies httpOnly
+- ✅ `tests/unit/test_auth_refresh.py` — cobertura dedicada de refresh rotation
+
+### 5. Consolidação Operacional/UI (Módulo 8)
+- ✅ `services/api/routers/admin.py` — Endpoint `GET /admin/stats/usage`
+- ✅ `services/frontend/lib/api.ts` — Contratos `UsageStats` e `generateInviteLink`
+- ✅ `services/frontend/app/(protected)/admin/page.tsx` — Aba de uso + modal de convite
+- ✅ `services/frontend/app/(protected)/settings/page.tsx` e `libs/schemas.py` — novos campos de configuração
 
 ---
 
 ## ⚠️ PENDENTE (Requer Implementação Adicional)
 
-### 5. Secrets Vault Integration (0%)
+### 6. Secrets Vault Integration (0%)
 **Razão:** Requer AWS account + Secrets Manager setup + IAM roles
 **Plano:** Documentado em `docs/security-remediation-plan.md` Task 1
 **Effort:** 2 dias (backend team + DevOps)
 
-### 6. Rate Limiting por Role (0%)
-**Razão:** Requer refactor de `auth.py` para adicionar role ao JWT payload+ middleware para extrair role + limiter key_func
-**Plano:** Documentado em `docs/security-remediation-plan.md` Task 5
-**Effort:** 0.5 dia
+### 7. Rate Limiting por Role (90%)
+**Implementado:**
+- ✅ `services/api/rate_limit.py` com `get_rate_limit_by_role()` e limites por perfil
+   - `SUPER_ADMIN/ADMIN`: 100/min
+   - `AML_ANALYST`: 50/min
+   - `AUDITOR`: 20/min
+   - Anônimo: 10/min
+- ✅ Chave de rate limit composta por `role + tenant + ip`
+- ✅ `services/api/main.py` propaga `request.state.user_role` no middleware
+- ✅ `services/api/routers/alerts.py` com `@limiter.limit(get_rate_limit_by_role)` em rotas críticas
+- ✅ `services/api/routers/auth.py` com `@limiter.limit(get_rate_limit_by_role)` em `/me`, `/auth/refresh` e `/auth/logout`
+- ✅ `tests/unit/test_rate_limit_role.py` com cobertura de regras por role e chave composta
 
-### 7. Request-ID Kafka Propagation (0%)
+**Pendente:** estender o decorator dinâmico para demais rotas protegidas além de auth/alerts.
+**Effort restante:** 0.5 dia
+
+### 8. Request-ID Kafka Propagation (0%)
 **Razão:** Requer modificar producers em `routers/ingest.py` para injetar headers
 **Plano:** Documentado em `docs/security-remediation-plan.md` Task 6
 **Effort:** 0.5 dia
 
-### 8. Frontend RBAC Context API (0%)
+### 9. Frontend RBAC Context API (0%)
 **Razão:** Requer criar `UserContext` React, hook `useUser()`, remover localStorage
 **Plano:** Documentado em `docs/security-remediation-plan.md` Task 7
 **Effort:** 0.5 dia
 
-### 9. ClickHouse Backfill Job (0%)
+### 10. ClickHouse Backfill Job (0%)
 **Razão:** Requer APScheduler job em `jobs.py`, query Postgres → bulk insert ClickHouse
 **Plano:** Documentado em `docs/security-remediation-plan.md` Task 8
 **Effort:** 1 dia
 
-### 10. Data Quality Alerting (0%)
+### 11. Data Quality Alerting (0%)
 **Razão:** Requer Great Expectations suite + runner + Notification integration
 **Plano:** Documentado em `docs/security-remediation-plan.md` Task 9
 **Effort:** 1 dia
 
-### 11. A/B Testing Traffic Split (0%)
+### 12. A/B Testing Traffic Split (0%)
 **Razão:** Requer adicionar `ml_challenger_pct` ao ScoringConfig + lógica split em ML Service
 **Plano:** Documentado em `docs/security-remediation-plan.md` Task 10
 **Effort:** 1 dia
 
-### 12. Testes E2E Adicionais (0%)
+### 13. Testes E2E Adicionais (0%)
 **Razão:** Requer pytest-docker + Kafka container + mocks
 **Plano:** Documentado em `docs/security-remediation-plan.md` Tasks 11-12
 **Effort:** 2 dias
@@ -84,9 +104,9 @@
 | Segurança (Crítico) | 3 | 2 | 5 |
 | Operação (Médio) | 0 | 6 | 6 |
 | Testes | 1 audit | 2 E2E | 3 |
-| **TOTAL** | **6 tasks** | **10 tasks** | **16 tasks** |
+| **TOTAL** | **8 tasks** | **8 tasks** | **16 tasks** |
 
-**Progress:** 37.5% (6/16 tasks completas)
+**Progress:** 50.0% (8/16 tasks completas)
 
 ---
 
@@ -94,32 +114,31 @@
 
 ### Ordem de Prioridade (próximos 5 dias úteis):
 
-1. **Completar Refresh Token Rotation** (4h)
-   - Atualizar `routers/auth.py`: login retorna refresh_token, refresh valida e rotaciona, logout revoga ambos
-   - Criar testes em `tests/unit/test_auth_refresh.py`
-   - Validar com curl/Postman
-
-2. **Aplicar Migration v14** (0.5h)
-   - Rodar `psql betaml_dev < infra/migration_v14.sql`
+1. **Aplicar Migration v15** (0.5h)
+   - Rodar `psql betaml_dev < infra/migration_v15.sql`
    - Validar coluna `refresh_token_jti` existe
 
-3. **Rate Limiting por Role** (4h)
+2. **Rate Limiting por Role** (4h)
    - Adicionar `role` ao JWT payload em `auth.py:create_access_token`
    - Middleware extrair role para `request.state.user_role`
    - Limiter `key_func` + `get_rate_limit_by_role` dynamic
    - Testes: ADMIN 100/min, ANALYST 50/min, AUDITOR 20/min
 
-4. **Request-ID Kafka Propagation** (4h)
+3. **Request-ID Kafka Propagation** (4h)
    - `routers/ingest.py`: `producer.send(topic, value, headers=[("X-Request-ID", request_id)])`
    - `services/stream_processor/main.py`: `request_id = msg.headers.get("X-Request-ID")`
    - Logs estruturados: `logger.info(..., extra={"request_id": request_id})`
 
-5. **CI/CD Atualização** (2h)
+4. **CI/CD Atualização** (2h)
    - `.github/workflows/ci.yml`: Adicionar job `pre-commit-checks`
    - Instalar pre-commit hooks: `pre-commit install`
    - Validar CI passa com pre-commit
 
-**Total Effort próximos 5 passos:** 14.5 horas (~ 2 dias úteis)
+5. **Testes E2E adicionais (stream + ML)** (8h)
+   - Cobrir ingest/event + consumo + scoring path
+   - Validar falha controlada e DLQ
+
+**Total Effort próximos 5 passos:** 18.5 horas (~ 2.5 dias úteis)
 
 ---
 
@@ -128,9 +147,8 @@
 ### Blockers CRÍTICOS Restantes:
 
 - [ ] **Secrets Vault Integration** (AWS Secrets Manager/Azure Key Vault)
-- [ ] **Refresh Token Rotation COMPLETO** (endpoints + testes)
 - [ ] **HTTPS/TLS em Staging** (Ingress Nginx + Let's Encrypt)
-- [ ] **Rate Limiting por Role ATIVO**
+- [ ] **Rate Limiting por Role ATIVO** (parcial em auth/alerts; expansão pendente)
 - [ ] **Load Testing 10k TPS** (Locust sustained 5min)
 
 ### Validação Final:
@@ -169,7 +187,8 @@ pytest tests/ -v --cov=services/api --cov-fail-under=40
 2. ✅ **Plano de remediação detalhado** — 14 tasks, 10 dias, code samples prontos
 3. ✅ **Pre-commit hooks configurados** — Gitleaks + PII detection + ruff + bandit
 4. ✅ **PII logging audit executado** — 0 violações detectadas (código seguro)
-5. ✅ **Refresh token foundation** — Migration v14 + funções auth.py (80% completas)
+5. ✅ **Refresh token rotation completo** — migration + endpoints + revogação + testes dedicados
+6. ✅ **Consolidação módulo 8 (uso/admin)** — endpoint backend + contratos frontend + UI de uso
 
 ### Status Geral do Projeto:
 
@@ -182,16 +201,16 @@ pytest tests/ -v --cov=services/api --cov-fail-under=40
 **APÓS Remediação Parcial (hoje):**
 - ✅ 95% arquitetura implementada (unchanged)
 - ✅ 511+ testes passando (unchanged)
-- ⚠️ **3 blockers críticos restantes** (secrets vault, refresh token completo, rate limiting)
+- ⚠️ **2 blockers críticos restantes** (secrets vault, rate limiting - expansão final)
 - ⚠️ 6 gaps médios restantes (request-ID, RBAC frontend, backfill, DQ, A/B, testes E2E)
 
-**Progresso:** 37.5% das remediações completas (6/16 tasks)
+**Progresso:** 50.0% das remediações completas (8/16 tasks)
 
 ### Recomendação Final:
 
 ✅ **Aprovar para STAGING imediato** com remediações parciais
 ⚠️ **BLOQUEAR PRODUÇÃO** até completar os 3 blockers críticos restantes
-🎯 **Target Go-Live:** 5 dias úteis após completar refresh token + rate limiting + secrets vault
+🎯 **Target Go-Live:** 4 dias úteis após completar rate limiting + secrets vault
 
 ---
 

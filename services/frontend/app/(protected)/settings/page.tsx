@@ -22,6 +22,8 @@ interface ScoringConfig {
   data_retention_raw_years: number;
   data_retention_silver_years: number;
   data_retention_gold_years: number;
+  auto_case_threshold: number;
+  ingest_rate_limit_tpm: number;
 }
 
 const fetchConfig = () =>
@@ -43,6 +45,8 @@ const fields: { key: keyof ScoringConfig; label: string; step: string; min: numb
   { key: 'data_retention_raw_years',     label: 'Retenção dados brutos / Silver (anos)', step: '1', min: 1,   max: 10   },
   { key: 'data_retention_silver_years',  label: 'Retenção canônico Silver (anos)',       step: '1', min: 1,   max: 10   },
   { key: 'data_retention_gold_years',    label: 'Retenção features Gold (anos)',         step: '1', min: 1,   max: 10   },
+  { key: 'auto_case_threshold',          label: 'Threshold auto-criação de caso (0–1)',  step: '0.01', min: 0, max: 1   },
+  { key: 'ingest_rate_limit_tpm',        label: 'Rate limit de ingestão (req/min)',      step: '1',    min: 10, max: 10000 },
 ];
 
 export default function SettingsPage() {

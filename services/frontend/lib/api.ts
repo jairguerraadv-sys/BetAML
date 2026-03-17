@@ -785,3 +785,28 @@ export const designateChallenger = (modelId: string) =>
     .post<{ status: string; model_id: string }>(`/model-registry/${modelId}/challenger`)
     .then((r) => r.data);
 
+// ── Module 8 — Usage stats + invites ─────────────────────────────────────────
+
+export interface UsageStats {
+  tenant_id: string;
+  period: string;
+  events_this_month: number;
+  alerts_this_month: number;
+  open_cases: number;
+  db_size_mb: number;
+  minio_mb: number;
+}
+
+export const fetchUsageStats = () =>
+  api.get<UsageStats>('/admin/stats/usage').then((r) => r.data);
+
+export interface InviteResponse {
+  invite_link: string;
+  email: string;
+  role: string;
+  expires_in_hours: number;
+}
+
+export const generateInviteLink = (body: { email: string; role: string }) =>
+  api.post<InviteResponse>('/admin/invite', body).then((r) => r.data);
+

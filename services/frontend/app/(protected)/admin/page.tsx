@@ -7,11 +7,12 @@ import {
   TenantOut, TenantCreatePayload,
   fetchAdminUsers, createAdminUser, updateAdminUser, deleteAdminUser, resetUserPassword,
   AdminUser, AdminUserCreateIn,
+  fetchUsageStats, generateInviteLink, UsageStats,
 } from '@/lib/api';
 import {
   Shield, Key, Trash2, Plus, Power, Building2,
   CheckCircle2, XCircle, Users, ChevronDown, ChevronUp,
-  UserPlus, RefreshCw, Lock,
+  UserPlus, RefreshCw, Lock, BarChart3, Copy,
 } from 'lucide-react';
 
 interface ApiKey { id: string; name: string; prefix: string; created_at: string; last_used_at?: string; is_active: boolean; }
@@ -23,7 +24,7 @@ const deleteKey      = (id: string) => api.delete(`/admin/api-keys/${id}`);
 const toggleMaint    = (enabled: boolean) => api.post('/admin/maintenance-mode', null, { params: { enabled } });
 const updateFlag     = (flagName: string, value: string) => api.put(`/admin/flags/${flagName}`, { value });
 
-type Tab = 'tenants' | 'keys' | 'flags' | 'users';
+type Tab = 'tenants' | 'keys' | 'flags' | 'users' | 'usage';
 
 const ROLES = ['ADMIN', 'AML_ANALYST', 'AUDITOR'] as const;
 const ROLE_COLORS: Record<string, string> = {
@@ -103,6 +104,70 @@ function ResetPwModal({ user, onClose }: { user: AdminUser; onClose: () => void 
           </button>
         </div>
         {mut.isError && <p className="mt-2 text-xs text-red-600">Erro ao redefinir senha.</p>}
+      </div>
+    </div>
+  );
+}
+
+// ── Invite Modal ───────────────────────────────────────────────────────────────
+function InviteModal({ onClose }: { onClose: () => void }) {
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState('AML_ANALYST');
+  const [result, setResult] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const mut = useMutation({
+    mutationFn: () => generateInviteLink({ email, role }),
+    onSuccess: (data) => setResult(data.invite_link),
+  });
+  const copy = () => {
+    if (result) { navigator.clipboard.writeText(result); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="mb-4 text-sm font-semibold text-gray-800">Convidar Usuário</h3>
+        {!result ? (
+          <>
+            <div className="space-y-3">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600">Email *</label>
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                  placeholder="usuario@bet.com"
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600">Perfil *</label>
+                <select value={role} onChange={(e) => setRole(e.target.value)}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                  <option value="AML_ANALYST">AML_ANALYST</option>
+                  <option value="AUDITOR">AUDITOR</option>
+                  <option value="ADMIN">ADMIN</option>
+                </select>
+              </div>
+            </div>
+            <div className="mt-4 flex gap-3">
+              <button onClick={onClose} className="flex-1 rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
+              <button onClick={() => mut.mutate()} disabled={!email || mut.isPending}
+                className="flex-1 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+                {mut.isPending ? 'Gerando…' : 'Gerar Link'}
+              </button>
+            </div>
+            {mut.isError && <p className="mt-2 text-xs text-red-600">Erro ao gerar convite.</p>}
+          </>
+        ) : (
+          <>
+            <p className="mb-2 text-xs text-gray-500">Link de convite — válido por 48 horas. Compartilhe manualmente.</p>
+            <div className="flex gap-2">
+              <input readOnly value={result}
+                className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-mono text-gray-700" />
+              <button onClick={copy}
+                className="flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-600 hover:bg-gray-50">
+                <Copy size={13} /> {copied ? 'Copiado!' : 'Copiar'}
+              </button>
+            </div>
+            <button onClick={onClose} className="mt-4 w-full rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50">Fechar</button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -220,6 +285,7 @@ export default function AdminPage() {
   const [showCreateTenant, setShowCreateTenant] = useState(false);
   const [showCreateUser, setShowCreateUser]     = useState(false);
   const [resetTarget, setResetTarget]           = useState<AdminUser | null>(null);
+  const [showInvite, setShowInvite]             = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
   const [newKeyRaw, setNewKeyRaw]   = useState('');
   const [maintOn, setMaintOn]       = useState(false);
@@ -229,6 +295,7 @@ export default function AdminPage() {
   const { data: flags  = [], isLoading: loadingFlags }     = useQuery({ queryKey: ['system-flags'], queryFn: fetchFlags });
   const { data: tenants = [], isLoading: loadingTenants }  = useQuery({ queryKey: ['tenants'],      queryFn: fetchTenants });
   const { data: users  = [], isLoading: loadingUsers }     = useQuery({ queryKey: ['admin-users'],  queryFn: fetchAdminUsers, enabled: activeTab === 'users' });
+  const { data: usageStats, isLoading: loadingUsage }      = useQuery<UsageStats>({ queryKey: ['usage-stats'], queryFn: fetchUsageStats, refetchInterval: 60_000, enabled: activeTab === 'usage' });
 
   // Mutations
   const createKey = useMutation({
@@ -260,6 +327,7 @@ export default function AdminPage() {
     { id: 'users',   label: 'Usuários',     icon: <Users size={14} /> },
     { id: 'keys',    label: 'Chaves de API',icon: <Key size={14} /> },
     { id: 'flags',   label: 'Feature Flags',icon: <Shield size={14} /> },
+    { id: 'usage',   label: 'Uso',          icon: <BarChart3 size={14} /> },
   ];
 
   return (
@@ -383,13 +451,21 @@ export default function AdminPage() {
       {/* ── Tab: Usuários ─────────────────────────────────────────────────── */}
       {activeTab === 'users' && (
         <section className="space-y-4">
-          <button
-            onClick={() => setShowCreateUser(v => !v)}
-            className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
-          >
-            <UserPlus size={15} /> Novo Usuário
-            {showCreateUser ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setShowCreateUser(v => !v)}
+              className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+            >
+              <UserPlus size={15} /> Novo Usuário
+              {showCreateUser ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+            <button
+              onClick={() => setShowInvite(true)}
+              className="flex items-center gap-2 rounded-lg border border-purple-200 bg-purple-50 px-4 py-2 text-sm font-semibold text-purple-700 hover:bg-purple-100"
+            >
+              <UserPlus size={15} /> Convidar
+            </button>
+          </div>
 
           {showCreateUser && (
             <UserCreateForm onSuccess={() => { qc.invalidateQueries({ queryKey: ['admin-users'] }); setShowCreateUser(false); }} />
@@ -572,8 +648,43 @@ export default function AdminPage() {
         </section>
       )}
 
+      {/* ── Tab: Uso ───────────────────────────────────────────────────── */}
+      {activeTab === 'usage' && (
+        <section className="space-y-4">
+          <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+            <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold text-gray-700">
+              <BarChart3 size={15} /> Uso do Mês Corrente
+              {usageStats && <span className="ml-1 text-xs font-normal text-gray-400">— desde {usageStats.period}</span>}
+            </h2>
+            {loadingUsage ? (
+              <p className="text-sm text-gray-400">Carregando…</p>
+            ) : usageStats ? (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {[
+                  { label: 'Eventos este mês', value: usageStats.events_this_month.toLocaleString('pt-BR') },
+                  { label: 'Alertas este mês',  value: usageStats.alerts_this_month.toLocaleString('pt-BR') },
+                  { label: 'Casos abertos',     value: usageStats.open_cases.toLocaleString('pt-BR') },
+                  { label: 'Banco de dados',    value: `${usageStats.db_size_mb} MB` },
+                  { label: 'Armazenamento MinIO', value: `${usageStats.minio_mb} MB` },
+                ].map((s) => (
+                  <div key={s.label} className="rounded-lg bg-gray-50 p-4 dark:bg-gray-800">
+                    <p className="text-xs text-gray-500">{s.label}</p>
+                    <p className="mt-1 text-xl font-bold text-gray-900 dark:text-gray-100">{s.value}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400">Sem dados disponíveis.</p>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* Reset password modal */}
       {resetTarget && <ResetPwModal user={resetTarget} onClose={() => setResetTarget(null)} />}
+
+      {/* Invite modal */}
+      {showInvite && <InviteModal onClose={() => setShowInvite(false)} />}
     </div>
   );
 }

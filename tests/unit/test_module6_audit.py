@@ -58,6 +58,7 @@ async def test_login_success_writes_audit():
     """Valid credentials must produce a LOGIN AuditLog entry."""
     from routers.auth import login, LoginRequest
     from starlette.requests import Request as StarletteRequest
+    from starlette.responses import Response as StarletteResponse
 
     db = _make_db()
     user_mock = MagicMock()
@@ -80,7 +81,7 @@ async def test_login_success_writes_audit():
          patch("routers.auth.write_audit", AsyncMock()) as mock_audit, \
          patch("slowapi.Limiter._check_request_limit", MagicMock()):
         body = LoginRequest(username="admin", password="correct")
-        await login(request=request, body=body, db=db)
+        await login(request=request, body=body, response=StarletteResponse(), db=db)
 
     mock_audit.assert_awaited_once()
     args = mock_audit.call_args[0]
@@ -93,6 +94,7 @@ async def test_login_failure_wrong_password_writes_audit():
     from routers.auth import login, LoginRequest
     from fastapi import HTTPException as FastAPIHTTPException
     from starlette.requests import Request as StarletteRequest
+    from starlette.responses import Response as StarletteResponse
 
     db = _make_db()
     user_mock = MagicMock()
@@ -114,7 +116,7 @@ async def test_login_failure_wrong_password_writes_audit():
          patch("slowapi.Limiter._check_request_limit", MagicMock()):
         body = LoginRequest(username="admin", password="wrong")
         with pytest.raises(FastAPIHTTPException) as exc_info:
-            await login(request=request, body=body, db=db)
+            await login(request=request, body=body, response=StarletteResponse(), db=db)
 
     assert exc_info.value.status_code == 401
     mock_audit.assert_awaited_once()
@@ -129,6 +131,7 @@ async def test_login_unknown_user_no_audit():
     from routers.auth import login, LoginRequest
     from fastapi import HTTPException as FastAPIHTTPException
     from starlette.requests import Request as StarletteRequest
+    from starlette.responses import Response as StarletteResponse
 
     db = _make_db()
     result_mock = MagicMock()
@@ -143,7 +146,7 @@ async def test_login_unknown_user_no_audit():
          patch("slowapi.Limiter._check_request_limit", MagicMock()):
         body = LoginRequest(username="ghost", password="x")
         with pytest.raises(FastAPIHTTPException) as exc_info:
-            await login(request=request, body=body, db=db)
+            await login(request=request, body=body, response=StarletteResponse(), db=db)
 
     assert exc_info.value.status_code == 401
     mock_audit.assert_not_awaited()
@@ -153,13 +156,25 @@ async def test_login_unknown_user_no_audit():
 async def test_logout_writes_audit():
     """Logout must produce a LOGOUT AuditLog entry."""
     from routers.auth import logout
+    from starlette.requests import Request as StarletteRequest
+    from starlette.responses import Response as StarletteResponse
 
     db = _make_db()
     current_user = _make_user()
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/auth/logout",
+        "headers": [],
+        "query_string": b"",
+        "client": ("127.0.0.1", 1234),
+    }
+    request = StarletteRequest(scope)
 
     with patch("routers.auth.revoke_token", AsyncMock()), \
+         patch("routers.auth.revoke_refresh_token", AsyncMock()), \
          patch("routers.auth.write_audit", AsyncMock()) as mock_audit:
-        await logout(token="tok", current_user=current_user, db=db)
+        await logout(request=request, response=StarletteResponse(), token="tok", current_user=current_user, db=db)
 
     mock_audit.assert_awaited_once()
     args = mock_audit.call_args[0]

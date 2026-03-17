@@ -403,6 +403,8 @@ class ScoringConfigOut(BaseModel):
     data_retention_raw_years: int = 5
     data_retention_silver_years: int = 5
     data_retention_gold_years: int = 3
+    auto_case_threshold: float = 0.75
+    ingest_rate_limit_tpm: int = 1000
     updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
@@ -424,6 +426,8 @@ class ScoringConfigUpdate(BaseModel):
     data_retention_raw_years: Optional[int] = None
     data_retention_silver_years: Optional[int] = None
     data_retention_gold_years: Optional[int] = None
+    auto_case_threshold: Optional[float] = None
+    ingest_rate_limit_tpm: Optional[int] = None
 
 
 class ScoringPreviewIn(BaseModel):

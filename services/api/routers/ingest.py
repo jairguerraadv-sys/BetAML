@@ -28,7 +28,7 @@ from pydantic import BaseModel
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import require_roles
+from auth import IngestPrincipal, get_ingest_principal, require_roles
 from config import settings
 from database import AsyncSessionLocal, get_db
 from libs.connectors import (
@@ -241,18 +241,18 @@ def _build_envelope(
 @router.post("/ingest/event", status_code=202)
 async def ingest_event(
     body: IngestEventRequest,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    principal: IngestPrincipal = Depends(get_ingest_principal),
     db: AsyncSession = Depends(get_db),
 ):
-    max_requests = await _tenant_ingest_rate_limit(db, current_user.tenant_id, default_limit=300)
-    await redis_rate_limit(current_user.tenant_id, "ingest.event", max_requests=max_requests)
+    max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=300)
+    await redis_rate_limit(principal.tenant_id, "ingest.event", max_requests=max_requests)
 
     if body.source_system not in ALLOWED_SOURCE_SYSTEMS:
         raise HTTPException(400, f"source_system '{body.source_system}' não reconhecido. Permitidos: {sorted(ALLOWED_SOURCE_SYSTEMS)}")
 
     source_event_id = body.source_event_id or str(uuid.uuid4())
     envelope = _build_envelope(
-        tenant_id=current_user.tenant_id,
+        tenant_id=principal.tenant_id,
         source_system=body.source_system,
         entity_type=body.entity_type,
         payload=body.payload,
@@ -267,7 +267,7 @@ async def ingest_event(
             topic=topic,
             payload=envelope,
             key=source_event_id,
-            tenant_id=current_user.tenant_id,
+            tenant_id=principal.tenant_id,
             source_system=body.source_system,
             context={"endpoint": "/ingest/event"},
         )
@@ -279,11 +279,11 @@ async def ingest_event(
 @router.post("/ingest/batch", status_code=202)
 async def ingest_batch(
     events: list[IngestEventRequest],
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    principal: IngestPrincipal = Depends(get_ingest_principal),
     db: AsyncSession = Depends(get_db),
 ):
-    max_requests = await _tenant_ingest_rate_limit(db, current_user.tenant_id, default_limit=50)
-    await redis_rate_limit(current_user.tenant_id, "ingest.batch", max_requests=max_requests)
+    max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=50)
+    await redis_rate_limit(principal.tenant_id, "ingest.batch", max_requests=max_requests)
 
     producer = await get_producer()
     results = []
@@ -297,7 +297,7 @@ async def ingest_batch(
 
         source_event_id = body.source_event_id or str(uuid.uuid4())
         envelope = _build_envelope(
-            tenant_id=current_user.tenant_id,
+            tenant_id=principal.tenant_id,
             source_system=body.source_system,
             entity_type=body.entity_type,
             payload=body.payload,
@@ -311,7 +311,7 @@ async def ingest_batch(
                 topic=topic,
                 payload=envelope,
                 key=source_event_id,
-                tenant_id=current_user.tenant_id,
+                tenant_id=principal.tenant_id,
                 source_system=body.source_system,
                 context={"endpoint": "/ingest/batch"},
             )
@@ -329,12 +329,12 @@ async def ingest_file(
     file: UploadFile = File(...),
     source_system: str = Form(...),
     mapping_config_id: Optional[str] = Form(None),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    principal: IngestPrincipal = Depends(get_ingest_principal),
     db: AsyncSession = Depends(get_db),
 ):
     _ = background_tasks
-    max_requests = await _tenant_ingest_rate_limit(db, current_user.tenant_id, default_limit=20)
-    await redis_rate_limit(current_user.tenant_id, "ingest.file", max_requests=max_requests)
+    max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=20)
+    await redis_rate_limit(principal.tenant_id, "ingest.file", max_requests=max_requests)
 
     content = await file.read()
 
@@ -348,13 +348,13 @@ async def ingest_file(
     mapping_version_id = None
     if mapping_config_id:
         mc = await db.get(MappingConfig, mapping_config_id)
-        if not mc or mc.tenant_id != current_user.tenant_id:
+        if not mc or mc.tenant_id != principal.tenant_id:
             raise HTTPException(404, "MappingConfig não encontrado para o tenant")
         if not mc.is_current:
             mapping_version_id = mc.id
 
     job = IngestJob(
-        tenant_id=current_user.tenant_id,
+        tenant_id=principal.tenant_id,
         source_system=source_system,
         mapping_config_id=mapping_config_id,
         mapping_version_id=mapping_version_id,
@@ -363,14 +363,14 @@ async def ingest_file(
         file_path=None,
         bytes_processed=0,
         status="QUEUED",
-        created_by=current_user.id,
+        created_by=principal.id,
     )
     db.add(job)
     await db.commit()
     await db.refresh(job)
 
     bronze_path = _upload_bronze_file(
-        tenant_id=current_user.tenant_id,
+        tenant_id=principal.tenant_id,
         job_id=job.id,
         file_name=file.filename or "ingest.csv",
         content=content,
@@ -384,7 +384,7 @@ async def ingest_file(
     if producer:
         msg = {
             "job_id": job.id,
-            "tenant_id": current_user.tenant_id,
+            "tenant_id": principal.tenant_id,
             "source_system": source_system,
             "mapping_config_id": mapping_config_id,
             "mapping_version_id": mapping_version_id,
@@ -397,7 +397,7 @@ async def ingest_file(
             topic="ingest.jobs",
             payload=msg,
             key=job.id,
-            tenant_id=current_user.tenant_id,
+            tenant_id=principal.tenant_id,
             source_system=source_system,
             context={"endpoint": "/ingest/file", "job_id": job.id},
         )
@@ -410,11 +410,11 @@ async def ingest_file(
 @router.post("/ingest/webhook/epsilon", status_code=202)
 async def ingest_epsilon_webhook(
     request: Request,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    principal: IngestPrincipal = Depends(get_ingest_principal),
     db: AsyncSession = Depends(get_db),
 ):
-    max_requests = await _tenant_ingest_rate_limit(db, current_user.tenant_id, default_limit=300)
-    await redis_rate_limit(current_user.tenant_id, "ingest.webhook.epsilon", max_requests=max_requests)
+    max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=300)
+    await redis_rate_limit(principal.tenant_id, "ingest.webhook.epsilon", max_requests=max_requests)
 
     body = await request.body()
     connector = ConnectorEpsilon(signing_secret=settings.jwt_secret)
@@ -433,7 +433,7 @@ async def ingest_epsilon_webhook(
     for rec in result.records:
         source_event_id = rec.get("event_id") or str(uuid.uuid4())
         envelope = _build_envelope(
-            tenant_id=current_user.tenant_id,
+            tenant_id=principal.tenant_id,
             source_system="ConnectorEpsilon",
             entity_type="TRANSACTION",
             payload=rec,
@@ -446,7 +446,7 @@ async def ingest_epsilon_webhook(
                 topic="raw.transactions",
                 payload=envelope,
                 key=source_event_id,
-                tenant_id=current_user.tenant_id,
+                tenant_id=principal.tenant_id,
                 source_system="ConnectorEpsilon",
                 context={"endpoint": "/ingest/webhook/epsilon"},
             )
