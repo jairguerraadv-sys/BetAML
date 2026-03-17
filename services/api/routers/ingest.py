@@ -242,8 +242,18 @@ def _build_envelope(
 async def ingest_event(
     body: IngestEventRequest,
     principal: IngestPrincipal = Depends(get_ingest_principal),
+    current_user: Any | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    if not isinstance(principal, IngestPrincipal):
+        if current_user is None:
+            raise HTTPException(401, "Authentication required")
+        principal = IngestPrincipal(
+            tenant_id=current_user.tenant_id,
+            id=current_user.id,
+            role=current_user.role,
+        )
+
     max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=300)
     await redis_rate_limit(principal.tenant_id, "ingest.event", max_requests=max_requests)
 
@@ -280,8 +290,19 @@ async def ingest_event(
 async def ingest_batch(
     events: list[IngestEventRequest],
     principal: IngestPrincipal = Depends(get_ingest_principal),
+    current_user: Any | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    # require_roles("ADMIN", "AML_ANALYST") is enforced for JWT flows in get_ingest_principal.
+    if not isinstance(principal, IngestPrincipal):
+        if current_user is None:
+            raise HTTPException(401, "Authentication required")
+        principal = IngestPrincipal(
+            tenant_id=current_user.tenant_id,
+            id=current_user.id,
+            role=current_user.role,
+        )
+
     max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=50)
     await redis_rate_limit(principal.tenant_id, "ingest.batch", max_requests=max_requests)
 

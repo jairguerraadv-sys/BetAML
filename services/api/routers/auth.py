@@ -135,7 +135,7 @@ async def login(
 
 @router.get("/me")
 @router.get("/auth/me")
-@limiter.limit(get_rate_limit_by_role)
+@limiter.limit("100/minute")
 async def me(request: Request, current_user: User = Depends(get_current_user)):
     return {
         "id": current_user.id,
@@ -147,7 +147,7 @@ async def me(request: Request, current_user: User = Depends(get_current_user)):
 
 
 @router.post("/auth/refresh", response_model=TokenResponse)
-@limiter.limit(get_rate_limit_by_role)
+@limiter.limit("30/minute")
 async def refresh(
     request: Request,
     response: Response,
@@ -217,7 +217,6 @@ async def refresh(
 
 
 @router.post("/auth/logout")
-@limiter.limit(get_rate_limit_by_role)
 async def logout(
     request: Request,
     response: Response,
