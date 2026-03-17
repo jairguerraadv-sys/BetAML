@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,8 +19,9 @@ os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MIN", "15")
 os.environ.setdefault("PII_ENCRYPTION_KEY", "test-pii-encryption-key-32bytes!!")
 
-sys.path.insert(0, "/workspaces/BetAML/libs")
-sys.path.insert(0, "/workspaces/BetAML/services/api")
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "libs"))
+sys.path.insert(0, str(ROOT / "services/api"))
 
 
 def _request_with_refresh_cookie(token: str) -> StarletteRequest:

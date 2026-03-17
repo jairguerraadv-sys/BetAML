@@ -124,6 +124,7 @@ async def login(
 
     # Audit log
     await write_audit(db, user.tenant_id, user.id, "LOGIN", "User", str(user.id), ip=ip)
+    await db.commit()
 
     return TokenResponse(
         access_token=access_token,
@@ -207,6 +208,7 @@ async def refresh(
     )
 
     await write_audit(db, user.tenant_id, user.id, "TOKEN_REFRESH", "User", str(user.id))
+    await db.commit()
 
     return TokenResponse(
         access_token=new_access_token,
@@ -238,4 +240,5 @@ async def logout(
     response.delete_cookie(key="betaml_token")
     response.delete_cookie(key="betaml_refresh_token")
     await write_audit(db, current_user.tenant_id, current_user.id, "LOGOUT", "User", str(current_user.id))
+    await db.commit()
     return {"message": "Logout realizado"}

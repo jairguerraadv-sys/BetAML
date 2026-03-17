@@ -57,7 +57,7 @@ structlog.configure(
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.dev.ConsoleRenderer()
-        if True  # always human-readable in dev; swap for JSONRenderer in prod
+        if settings.environment in {"development", "test"}
         else structlog.processors.JSONRenderer(),
     ],
     wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),

@@ -305,7 +305,7 @@ export const createRule = (body: RuleCreatePayload) =>
   api.post<Rule>('/rules', body).then((r) => r.data);
 
 export const validateDsl = (condition_dsl: string) =>
-  api.post<{ valid: boolean; error?: string }>('/rules/validate', { condition_dsl }).then((r) => r.data);
+  api.post<{ valid: boolean; message?: string }>('/rules/validate', { expression: condition_dsl }).then((r) => r.data);
 
 export interface SimulateRuleResult {
   rule_id: string;

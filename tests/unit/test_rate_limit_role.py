@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import sys
 
+from pathlib import Path
+
 from starlette.requests import Request as StarletteRequest
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
@@ -12,7 +14,8 @@ os.environ.setdefault("JWT_SECRET", "test-secret-only-for-unit-tests")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("ENVIRONMENT", "test")
 
-sys.path.insert(0, "/workspaces/BetAML/services/api")
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "services/api"))
 
 
 def _request(auth: str | None = None) -> StarletteRequest:
