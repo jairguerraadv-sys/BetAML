@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -52,6 +53,33 @@ async def revoke_token(jti: str, exp: int) -> None:
         pass  # não bloquear logout por falha de Redis
 
 
+async def revoke_refresh_token(db: AsyncSession, user_id: str) -> None:
+    """Revoke refresh token by nullifying refresh_token_jti in users table.
+
+    Args:
+        db: Database session
+        user_id: UUID of the user
+    """
+    from sqlalchemy import update
+
+    await db.execute(update(User).where(User.id == user_id).values(refresh_token_jti=None))
+    await db.commit()
+
+
+async def store_refresh_token_jti(db: AsyncSession, user_id: str, jti: str) -> None:
+    """Store refresh token JTI in users table (invalidates previous refresh token).
+
+    Args:
+        db: Database session
+        user_id: UUID of the user
+        jti: JWT ID of the refresh token
+    """
+    from sqlalchemy import update
+
+    await db.execute(update(User).where(User.id == user_id).values(refresh_token_jti=jti))
+    await db.commit()
+
+
 def hash_password(plain: str) -> str:
     return pwd_context.hash(plain)
 
@@ -64,8 +92,25 @@ def create_access_token(data: dict[str, Any], expires_delta: timedelta | None = 
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=settings.access_token_expire_min))
     # jti (JWT ID) único por token – usado para revogação/blacklist
-    to_encode.update({"exp": expire, "jti": str(uuid.uuid4())})
+    to_encode.update({"exp": expire, "jti": str(uuid.uuid4()), "token_type": "access"})
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def create_refresh_token(data: dict[str, Any]) -> tuple[str, str]:
+    """Create refresh token with 7-day expiration (sliding window).
+
+    Args:
+        data: Payload dict with user_id, tenant_id, role
+
+    Returns:
+        tuple[str, str]: (refresh_token, jti)
+    """
+    to_encode = data.copy()
+    jti = str(uuid.uuid4())
+    expire = datetime.now(timezone.utc) + timedelta(days=7)  # 7 days sliding window
+    to_encode.update({"exp": expire, "jti": jti, "token_type": "refresh"})
+    token = jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return token, jti
 
 
 async def get_current_user(
@@ -183,6 +228,46 @@ async def validate_api_key(
         pass  # falha de Redis não bloqueia autenticação
 
     return api_key
+
+
+# ── Dual-auth principal for ingest endpoints ──────────────────────────────────
+
+@dataclass
+class IngestPrincipal:
+    """Duck-typed auth principal for ingest endpoints (JWT user or API key)."""
+    tenant_id: str
+    id: str | None = None  # User.id for JWT auth; None for API key requests
+    role: str = "API_KEY"
+
+
+async def get_ingest_principal(
+    authorization: str | None = Header(None, alias="Authorization"),
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+    db: AsyncSession = Depends(get_db),
+) -> IngestPrincipal:
+    """Accept either X-API-Key header or Bearer JWT for ingest endpoints."""
+    if x_api_key:
+        ak = await validate_api_key(x_api_key=x_api_key, db=db)
+        perms: list[str] = ak.permissions or ["ingest"]
+        if "ingest" not in perms:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="API key não tem permissão 'ingest'",
+            )
+        return IngestPrincipal(tenant_id=ak.tenant_id, id=None, role="API_KEY")
+    if authorization and authorization.startswith("Bearer "):
+        user = await get_current_user(token=authorization[7:], db=db)
+        if user.role not in ("ADMIN", "AML_ANALYST"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Acesso negado para role '{user.role}'",
+            )
+        return IngestPrincipal(tenant_id=user.tenant_id, id=user.id, role=user.role)
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required: use Bearer token or X-API-Key header",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 # ── PII Encryption (Fernet = AES-128-CBC + HMAC-SHA-256) ─────────────────────
