@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import os
 import pickle
 import sys
@@ -274,6 +275,23 @@ async def retrain_isolation_forest() -> None:
                 samples=len(X_arr),
             )
 
+            run_id = f"{model_type.lower()}-{version}"
+            metrics_artifact = {
+                "run_id": run_id,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "model_type": model_type,
+                "version": version,
+                "metrics": {
+                    "precision": precision,
+                    "recall": recall,
+                    "f1_score": f1,
+                    "auc_roc": auc_roc,
+                },
+                "training_metadata": training_metadata,
+                "samples": len(X_arr),
+                "window_days": 30,
+            }
+
             # ── 5. Persiste modelo no MinIO ─────────────────────────────────────
             model_bytes = pickle.dumps(model)
             minio_client.put_object(
@@ -283,7 +301,18 @@ async def retrain_isolation_forest() -> None:
                 length=len(model_bytes),
                 content_type="application/octet-stream",
             )
+
+            metrics_filename = f"metrics/{model_type.lower()}_metrics_v{version}.json"
+            metrics_bytes = json.dumps(metrics_artifact).encode("utf-8")
+            minio_client.put_object(
+                bucket_name=bucket,
+                object_name=metrics_filename,
+                data=io.BytesIO(metrics_bytes),
+                length=len(metrics_bytes),
+                content_type="application/json",
+            )
             logger.info("ml_model_persisted", filename=model_filename, bytes=len(model_bytes))
+            logger.info("ml_metrics_persisted", filename=metrics_filename, run_id=run_id)
 
             # ── 6. Registra no model_registry ───────────────────────────────────
             # Busca champion atual para comparação de regressão de qualidade
@@ -331,6 +360,8 @@ async def retrain_isolation_forest() -> None:
                 training_rows=len(X_arr),
                 feature_columns=FEATURE_COLUMNS,
                 metrics={
+                    "run_id": run_id,
+                    "metrics_artifact_uri": f"s3://{bucket}/{metrics_filename}",
                     "precision": precision,
                     "recall": recall,
                     "f1_score": f1,

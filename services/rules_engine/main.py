@@ -443,6 +443,7 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
 
     def _write(item: dict):
         alert = item["alert"]
+        created_at = datetime.now(timezone.utc).replace(tzinfo=None)
         with engine.begin() as conn:
             # Define contexto do tenant para respeitar FORCE ROW LEVEL SECURITY
             conn.execute(
@@ -469,8 +470,79 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                 "description":    alert.get("description", ""),
                 "evidence":       json.dumps(alert.get("evidence", {})),
                 "source_event_id": alert.get("source_event_id"),
-                "created_at":     datetime.now(timezone.utc).replace(tzinfo=None),
+                "created_at":     created_at,
             })
+
+            # Auto-case: alertas CRITICAL geram (ou reaproveitam) caso OPEN/IN_REVIEW do player.
+            if alert.get("severity") == "CRITICAL" and alert.get("player_id"):
+                existing_case = conn.execute(sa.text("""
+                    SELECT id
+                    FROM cases
+                    WHERE tenant_id = :tenant_id
+                      AND player_id = :player_id
+                      AND status IN ('OPEN', 'IN_REVIEW')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """), {
+                    "tenant_id": alert["tenant_id"],
+                    "player_id": alert["player_id"],
+                }).fetchone()
+
+                case_id = str(existing_case.id) if existing_case else str(uuid.uuid4())
+                if not existing_case:
+                    conn.execute(sa.text("""
+                        INSERT INTO cases (
+                            id, tenant_id, player_id, title, description, status,
+                            severity, priority, auto_created, auto_created_reason,
+                            source_alert_id, created_at, updated_at
+                        ) VALUES (
+                            :id, :tenant_id, :player_id, :title, :description, 'OPEN',
+                            :severity, 'HIGH', true, :reason,
+                            :source_alert_id, :created_at, :created_at
+                        )
+                    """), {
+                        "id": case_id,
+                        "tenant_id": alert["tenant_id"],
+                        "player_id": alert["player_id"],
+                        "title": f"Auto-case: {alert.get('title', 'Alerta crítico')}",
+                        "description": "Caso criado automaticamente a partir de alerta CRITICAL.",
+                        "severity": alert["severity"],
+                        "reason": f"rules_engine:auto_case alert_id={alert['alert_id']} severity={alert['severity']}",
+                        "source_alert_id": alert["alert_id"],
+                        "created_at": created_at,
+                    })
+                    conn.execute(sa.text("""
+                        INSERT INTO case_events (
+                            id, case_id, tenant_id, event_type, content, created_at
+                        ) VALUES (
+                            :id, :case_id, :tenant_id, :event_type, CAST(:content AS jsonb), :created_at
+                        )
+                    """), {
+                        "id": str(uuid.uuid4()),
+                        "case_id": case_id,
+                        "tenant_id": alert["tenant_id"],
+                        "event_type": "AUTO_CREATED_FROM_ALERT",
+                        "content": json.dumps({
+                            "alert_id": alert["alert_id"],
+                            "severity": alert["severity"],
+                            "rule_id": alert.get("rule_id"),
+                        }),
+                        "created_at": created_at,
+                    })
+
+                conn.execute(sa.text("""
+                    UPDATE alerts
+                    SET case_id = :case_id,
+                        updated_at = NOW()
+                    WHERE id = :alert_id
+                      AND tenant_id = :tenant_id
+                      AND (case_id IS NULL OR case_id <> :case_id)
+                """), {
+                    "case_id": case_id,
+                    "alert_id": alert["alert_id"],
+                    "tenant_id": alert["tenant_id"],
+                })
+
             # RuleExecutionLog
             conn.execute(sa.text("""
                 INSERT INTO rule_execution_logs

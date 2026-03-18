@@ -1,9 +1,21 @@
 'use client';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
-import { fetchPlayer, fetchPlayerEconCompat, PlayerDetail, EconCompat } from '@/lib/api';
+import {
+  fetchLatestPlayerExternalValidation,
+  fetchPlayerExternalValidationHistory,
+  fetchPlayer,
+  fetchPlayerCaseAlertHistory,
+  fetchPlayerEconCompat,
+  fetchPlayerNetwork,
+  PlayerDetail,
+  EconCompat,
+  retryExternalValidation,
+  requestPlayerExternalValidation,
+} from '@/lib/api';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
+import PlayerNetworkGraph from '@/components/PlayerNetworkGraph';
 
 const BAND_COLOR: Record<string, string> = {
   HIGH:   'bg-red-100 text-red-700 border-red-200',
@@ -18,7 +30,7 @@ const TIER_COLOR: Record<string, string> = {
   UNKNOWN: 'bg-gray-100 text-gray-500',
 };
 
-type Tab = 'profile' | 'econ';
+type Tab = 'profile' | 'econ' | 'network';
 
 function EconCompatPanel({ player_id }: { player_id: string }) {
   const { data, isLoading, error } = useQuery({
@@ -92,11 +104,82 @@ function EconCompatPanel({ player_id }: { player_id: string }) {
   );
 }
 
+function NetworkPanel({ player_id }: { player_id: string }) {
+  const { data: networkData, isLoading: isNetworkLoading, error: networkError } = useQuery({
+    queryKey: ['player-network', player_id],
+    queryFn: () => fetchPlayerNetwork(player_id),
+  });
+
+  const { data: historyData, isLoading: isHistoryLoading } = useQuery({
+    queryKey: ['player-case-alert-history', player_id],
+    queryFn: () => fetchPlayerCaseAlertHistory(player_id),
+  });
+
+  if (isNetworkLoading || isHistoryLoading) {
+    return <p className="text-sm text-gray-400">Carregando vínculos de rede e histórico investigativo…</p>;
+  }
+
+  if (networkError || !networkData) {
+    return <p className="text-sm text-red-600">Não foi possível carregar a análise de rede deste jogador.</p>;
+  }
+
+  const related = networkData.related_players ?? [];
+  const cases = historyData?.cases ?? [];
+  const alerts = historyData?.alerts ?? [];
+
+  return (
+    <div className="space-y-4">
+      <PlayerNetworkGraph playerId={player_id} relatedPlayers={related} />
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div className="rounded-xl border border-gray-200 p-4">
+          <h4 className="text-sm font-semibold text-gray-900">Relações Detectadas</h4>
+          <div className="mt-3 space-y-2">
+            {related.length === 0 ? (
+              <p className="text-sm text-gray-500">Sem relações correlatas no momento.</p>
+            ) : (
+              related.slice(0, 8).map((item) => (
+                <div key={item.player_id} className="rounded-lg bg-gray-50 p-2">
+                  <p className="text-xs font-semibold text-gray-900">{item.player_id}</p>
+                  <p className="mt-1 text-xs text-gray-600">
+                    {item.shared_by.map((r) => `${r.type}:${r.value}`).join(' • ')}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-gray-200 p-4">
+          <h4 className="text-sm font-semibold text-gray-900">Contexto Investigativo</h4>
+          <div className="mt-3 space-y-2 text-xs text-gray-700">
+            <p>
+              <span className="font-semibold">Casos:</span> {cases.length}
+            </p>
+            <p>
+              <span className="font-semibold">Alertas:</span> {alerts.length}
+            </p>
+            {alerts.slice(0, 4).map((a) => (
+              <div key={a.id} className="rounded-lg bg-gray-50 p-2">
+                <p className="font-medium text-gray-900">{a.title}</p>
+                <p className="text-gray-600">{a.severity} • {a.status}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PlayerDetailPage() {
   const { playerId } = useParams<{ playerId: string }>();
   const router        = useRouter();
   const [tab, setTab] = useState<Tab>('profile');
+  const [historyStatus, setHistoryStatus] = useState<string>('');
+  const [historyProvider, setHistoryProvider] = useState<string>('');
   const currentUser   = useCurrentUser();
+  const queryClient = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['player', playerId],
@@ -109,6 +192,45 @@ export default function PlayerDetailPage() {
   if (!data)     return null;
 
   const p = data as PlayerDetail;
+
+  const { data: extLatest } = useQuery({
+    queryKey: ['player-external-validation-latest', playerId],
+    queryFn: () => fetchLatestPlayerExternalValidation(playerId),
+    enabled: !!playerId,
+    retry: false,
+    refetchInterval: (q) => (q.state.data?.status === 'PENDING' ? 2000 : false),
+  });
+
+  const { data: extHistory } = useQuery({
+    queryKey: ['player-external-validation-history', playerId, historyStatus, historyProvider],
+    queryFn: () => fetchPlayerExternalValidationHistory(playerId, 5, 0, {
+      status: historyStatus || undefined,
+      provider: historyProvider || undefined,
+    }),
+    enabled: !!playerId,
+    retry: false,
+  });
+
+  const validationMutation = useMutation({
+    mutationFn: () =>
+      requestPlayerExternalValidation(playerId, {
+        provider: 'mock_identity',
+        validation_type: 'CPF_IDENTITY',
+        payload: { trigger: 'manual_player_screen' },
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['player-external-validation-latest', playerId] });
+      await queryClient.invalidateQueries({ queryKey: ['player-external-validation-history', playerId] });
+    },
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: (requestId: string) => retryExternalValidation(requestId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['player-external-validation-latest', playerId] });
+      await queryClient.invalidateQueries({ queryKey: ['player-external-validation-history', playerId] });
+    },
+  });
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -177,7 +299,7 @@ export default function PlayerDetailPage() {
       {/* Tabs */}
       <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="flex border-b border-gray-200">
-          {(['profile', 'econ'] as Tab[]).map((t) => (
+          {(['profile', 'econ', 'network'] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -187,7 +309,11 @@ export default function PlayerDetailPage() {
                   : 'text-gray-500 hover:text-gray-700'
               }`}
             >
-              {t === 'profile' ? 'Perfil' : 'Compatibilidade Econômica'}
+              {t === 'profile'
+                ? 'Perfil'
+                : t === 'econ'
+                  ? 'Compatibilidade Econômica'
+                  : 'Rede & Contexto'}
             </button>
           ))}
         </div>
@@ -199,9 +325,104 @@ export default function PlayerDetailPage() {
                 depósito/renda dos últimos 30 dias (COAF Res. 40/2021).</p>
               <p>A banda de risco (<strong>{p.risk_band}</strong>) é atualizada automaticamente
                 após cada alerta disparado pelo motor de regras.</p>
+
+              <div className="mt-4 rounded-xl border border-gray-200 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h4 className="text-sm font-semibold text-gray-900">Validação Externa de Identidade</h4>
+                  <button
+                    onClick={() => validationMutation.mutate()}
+                    disabled={validationMutation.isPending}
+                    className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    {validationMutation.isPending ? 'Solicitando...' : 'Validar CPF (externo)'}
+                  </button>
+                </div>
+
+                <div className="mt-3 text-xs text-gray-700">
+                  <p>
+                    <span className="font-semibold">Último status:</span>{' '}
+                    <span className={`inline-flex rounded px-2 py-0.5 font-semibold ${
+                      extLatest?.status === 'COMPLETED'
+                        ? 'bg-green-100 text-green-700'
+                        : extLatest?.status === 'FAILED'
+                          ? 'bg-red-100 text-red-700'
+                          : extLatest?.status === 'IN_PROGRESS' || extLatest?.status === 'PENDING'
+                            ? 'bg-yellow-100 text-yellow-700'
+                            : 'bg-gray-100 text-gray-600'
+                    }`}>
+                      {extLatest?.status ?? 'SEM VALIDAÇÃO'}
+                    </span>
+                  </p>
+                  {extLatest?.completed_at && (
+                    <p>
+                      <span className="font-semibold">Concluído em:</span>{' '}
+                      {new Date(extLatest.completed_at).toLocaleString('pt-BR')}
+                    </p>
+                  )}
+                  {typeof extLatest?.response?.latency_ms === 'number' && (
+                    <p>
+                      <span className="font-semibold">Latência:</span>{' '}
+                      {String(extLatest.response.latency_ms)} ms
+                    </p>
+                  )}
+                  {typeof extLatest?.response?.retries_count === 'number' && (
+                    <p>
+                      <span className="font-semibold">Retries:</span>{' '}
+                      {String(extLatest.response.retries_count)}
+                    </p>
+                  )}
+                  {(extLatest?.status === 'PENDING' || extLatest?.status === 'IN_PROGRESS') && (
+                    <p className="mt-1 text-yellow-700">Processamento em andamento; atualização automática ativa.</p>
+                  )}
+                </div>
+
+                {extLatest?.status === 'FAILED' && extLatest.request_id && (
+                  <div className="mt-3">
+                    <button
+                      onClick={() => retryMutation.mutate(extLatest.request_id)}
+                      disabled={retryMutation.isPending}
+                      className="rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 disabled:opacity-50"
+                    >
+                      {retryMutation.isPending ? 'Reprocessando...' : 'Reprocessar validação falha'}
+                    </button>
+                  </div>
+                )}
+
+                {(extHistory?.items?.length ?? 0) > 0 && (
+                  <div className="mt-3 space-y-1 text-xs">
+                    <div className="mb-2 grid grid-cols-2 gap-2">
+                      <select
+                        value={historyStatus}
+                        onChange={(e) => setHistoryStatus(e.target.value)}
+                        className="rounded border border-gray-200 bg-white px-2 py-1 text-xs"
+                      >
+                        <option value="">Status: todos</option>
+                        <option value="PENDING">PENDING</option>
+                        <option value="IN_PROGRESS">IN_PROGRESS</option>
+                        <option value="COMPLETED">COMPLETED</option>
+                        <option value="FAILED">FAILED</option>
+                      </select>
+                      <select
+                        value={historyProvider}
+                        onChange={(e) => setHistoryProvider(e.target.value)}
+                        className="rounded border border-gray-200 bg-white px-2 py-1 text-xs"
+                      >
+                        <option value="">Provider: todos</option>
+                        <option value="mock_identity">mock_identity</option>
+                      </select>
+                    </div>
+                    {extHistory!.items.map((it) => (
+                      <div key={it.request_id} className="rounded bg-gray-50 px-2 py-1">
+                        {it.provider} • {it.validation_type} • <span className="font-semibold">{it.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
           {tab === 'econ' && <EconCompatPanel player_id={playerId} />}
+          {tab === 'network' && <NetworkPanel player_id={playerId} />}
         </div>
       </div>
     </div>

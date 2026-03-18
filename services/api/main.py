@@ -566,7 +566,7 @@ async def health():
 # ROUTERS — cada domínio em seu próprio módulo
 # ═══════════════════════════════════════════════════
 
-from routers import auth, alerts, audit, cases, ingest, mappings, players, rules  # noqa: E402
+from routers import auth, alerts, audit, cases, ingest, mappings, players, rules, external_validation  # noqa: E402
 from routers.admin import router as admin_router                # noqa: E402
 from routers.compound_rules import router as compound_rules_router  # noqa: E402
 from routers.feature_store import router as feature_store_router  # noqa: E402
@@ -598,4 +598,5 @@ app.include_router(notifications_router)
 app.include_router(internal_router)
 app.include_router(search_router)
 app.include_router(stats_router)
+app.include_router(external_validation.router)
 

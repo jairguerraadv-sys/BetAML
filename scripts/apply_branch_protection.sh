@@ -25,6 +25,7 @@ REQUIRED_CHECKS_JSON='[
   {"context":"Frontend TypeScript Check"},
   {"context":"Security Scan (bandit)"},
   {"context":"Docker Build Check"},
+  {"context":"External Validation Endpoints (Docker)"},
   {"context":"Migration Idempotency Check"},
   {"context":"Alembic Baseline Check"}
 ]'

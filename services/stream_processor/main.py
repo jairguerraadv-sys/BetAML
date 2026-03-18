@@ -806,12 +806,11 @@ async def process_device_event(msg_value: dict, redis_client, ch_client, produce
 async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer) -> None:
     """
     Consome mensagem de ingest.jobs:
-      - Decodifica conteúdo do arquivo (base64 CSV ou JSON)
+            - Carrega arquivo no Data Lake (MinIO) por file_path
       - Aplica MappingConfig (via MappingEngine) se mapping_config_id fornecido
       - Publica eventos em raw.{entity_type}s
       - Atualiza IngestJob no Postgres com DONE/FAILED + contagens
     """
-    import base64
     import csv
     import io
     import sqlalchemy as sa
@@ -823,7 +822,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
     tenant_id = msg_value.get("tenant_id")
     source_system = msg_value.get("source_system", "")
     mapping_config_id = msg_value.get("mapping_config_id")
-    file_content_b64 = msg_value.get("file_content_b64", "")
+    file_name = msg_value.get("file_name", "")
     file_path = msg_value.get("file_path")
 
     if not job_id or not tenant_id:
@@ -921,27 +920,23 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
             )
         engine.dispose()
 
+    stream: io.TextIOWrapper | None = None
+    obj = None
     try:
-        if file_content_b64:
-            content = base64.b64decode(file_content_b64).decode("utf-8", errors="replace")
-        elif file_path:
-            endpoint = os.getenv("MINIO_ENDPOINT", "http://minio:9000").replace("http://", "").replace("https://", "")
-            secure = os.getenv("MINIO_ENDPOINT", "http://minio:9000").startswith("https://")
-            bucket = os.getenv("MINIO_BUCKET", "betaml-lakehouse")
-            client = Minio(
-                endpoint,
-                access_key=os.getenv("MINIO_ACCESS_KEY", "minio"),
-                secret_key=os.getenv("MINIO_SECRET_KEY", "minio123"),
-                secure=secure,
-            )
-            obj = client.get_object(bucket, file_path)
-            try:
-                content = obj.read().decode("utf-8", errors="replace")
-            finally:
-                obj.close()
-                obj.release_conn()
-        else:
-            raise ValueError("missing file_content_b64 and file_path")
+        if not file_path:
+            raise ValueError("missing file_path")
+
+        endpoint = os.getenv("MINIO_ENDPOINT", "http://minio:9000").replace("http://", "").replace("https://", "")
+        secure = os.getenv("MINIO_ENDPOINT", "http://minio:9000").startswith("https://")
+        bucket = os.getenv("MINIO_BUCKET", "betaml-lakehouse")
+        client = Minio(
+            endpoint,
+            access_key=os.getenv("MINIO_ACCESS_KEY", "minio"),
+            secret_key=os.getenv("MINIO_SECRET_KEY", "minio123"),
+            secure=secure,
+        )
+        obj = client.get_object(bucket, file_path)
+        stream = io.TextIOWrapper(obj, encoding="utf-8", errors="replace", newline="")
     except Exception as exc:
         await asyncio.to_thread(_update_job, "FAILED", 0, 0, 0, f"file load error: {exc}")
         return
@@ -967,20 +962,25 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
         except Exception as exc:
             logger.warning("ingest_job_invalid_mapping", job_id=job_id, error=str(exc))
 
-    rows: list[dict] = []
-    try:
-        reader = csv.DictReader(io.StringIO(content))
-        rows = list(reader)
-    except Exception:
-        for line in content.splitlines():
-            line = line.strip()
-            if line:
-                try:
-                    rows.append(json.loads(line))
-                except Exception:
-                    pass
+    def _iter_json_lines(text_stream: io.TextIOBase):
+        for raw_line in text_stream:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+                if isinstance(parsed, dict):
+                    yield parsed
+            except Exception:
+                continue
 
-    total = len(rows)
+    normalized_file_name = str(file_name or "").lower()
+    if normalized_file_name.endswith((".jsonl", ".ndjson", ".json")):
+        row_iter = _iter_json_lines(stream)
+    else:
+        row_iter = csv.DictReader(stream)
+
+    total = 0
     processed = 0
     failed = 0
     bytes_processed = 0
@@ -1018,76 +1018,90 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                 await asyncio.sleep(0.1 * attempt)
         return False
 
-    for idx, row_data in enumerate(rows, start=1):
-        try:
-            payload = mapper.apply(row_data) if mapper else row_data
+    try:
+        for idx, row_data in enumerate(row_iter, start=1):
+            total += 1
+            try:
+                payload = mapper.apply(row_data) if mapper else row_data
 
-            entity_type = str(
-                payload.get("entity_type")
-                or (mapping_cfg.get("entity_type", "transaction") if mapping_cfg else "transaction")
-            ).lower()
+                entity_type = str(
+                    payload.get("entity_type")
+                    or (mapping_cfg.get("entity_type", "transaction") if mapping_cfg else "transaction")
+                ).lower()
 
-            envelope = {
-                "event_id": str(__import__("uuid").uuid4()),
-                "tenant_id": tenant_id,
-                "source_system": source_system,
-                "source_event_id": payload.get("id") or payload.get("external_id", ""),
-                "schema_version": 1,
-                "entity_type": entity_type,
-                "occurred_at": datetime.now(timezone.utc).isoformat(),
-                "payload": payload,
-                "raw_payload": row_data,
-                "ingest_metadata": {"job_id": job_id, "source": "file"},
-            }
-            topic = f"raw.{entity_type}s"
-            ok = await _publish_with_retries(
-                topic,
-                envelope,
-                envelope["source_event_id"] or envelope["event_id"],
-                row_data,
-                idx,
-            )
-            if ok:
-                processed += 1
-                bytes_processed += len(json.dumps(row_data, ensure_ascii=False).encode("utf-8"))
-            else:
+                envelope = {
+                    "event_id": str(__import__("uuid").uuid4()),
+                    "tenant_id": tenant_id,
+                    "source_system": source_system,
+                    "source_event_id": payload.get("id") or payload.get("external_id", ""),
+                    "schema_version": 1,
+                    "entity_type": entity_type,
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                    "payload": payload,
+                    "raw_payload": row_data,
+                    "ingest_metadata": {"job_id": job_id, "source": "file"},
+                }
+                topic = f"raw.{entity_type}s"
+                ok = await _publish_with_retries(
+                    topic,
+                    envelope,
+                    envelope["source_event_id"] or envelope["event_id"],
+                    row_data,
+                    idx,
+                )
+                if ok:
+                    processed += 1
+                    bytes_processed += len(json.dumps(row_data, ensure_ascii=False).encode("utf-8"))
+                else:
+                    failed += 1
+                    if len(error_sample) < 10:
+                        error_sample.append({"line": idx, "reason": "publish_failed_after_retries", "raw": row_data})
+                    await asyncio.to_thread(
+                        _insert_ingest_error,
+                        raw_payload=row_data,
+                        line_number=idx,
+                        reason="publish_failed_after_retries",
+                    )
+            except Exception as exc:
+                reason = str(exc)
+                logger.warning("ingest_row_failed", job_id=job_id, line=idx, error=reason)
                 failed += 1
                 if len(error_sample) < 10:
-                    error_sample.append({"line": idx, "reason": "publish_failed_after_retries", "raw": row_data})
-                await asyncio.to_thread(
-                    _insert_ingest_error,
-                    raw_payload=row_data,
-                    line_number=idx,
-                    reason="publish_failed_after_retries",
-                )
-        except Exception as exc:
-            reason = str(exc)
-            logger.warning("ingest_row_failed", job_id=job_id, line=idx, error=reason)
-            failed += 1
-            if len(error_sample) < 10:
-                error_sample.append({"line": idx, "reason": reason, "raw": row_data})
+                    error_sample.append({"line": idx, "reason": reason, "raw": row_data})
 
-            await asyncio.to_thread(_insert_ingest_error, raw_payload=row_data, line_number=idx, reason=reason)
+                await asyncio.to_thread(_insert_ingest_error, raw_payload=row_data, line_number=idx, reason=reason)
 
-            try:
-                await producer.send(
-                    "raw.transactions.dlq",
-                    {
-                        "tenant_id": tenant_id,
-                        "job_id": job_id,
-                        "source_system": source_system,
-                        "line_number": idx,
-                        "reason": reason,
-                        "attempt": max_retries,
-                        "max_retries": max_retries,
-                        "failed_at": datetime.now(timezone.utc).isoformat(),
-                        "target_topic": "raw.transactions",
-                        "raw_payload": row_data,
-                    },
-                    key=str(job_id),
-                )
-            except Exception as dlq_exc:
-                logger.warning("dlq_publish_failed", job_id=job_id, error=str(dlq_exc))
+                try:
+                    await producer.send(
+                        "raw.transactions.dlq",
+                        {
+                            "tenant_id": tenant_id,
+                            "job_id": job_id,
+                            "source_system": source_system,
+                            "line_number": idx,
+                            "reason": reason,
+                            "attempt": max_retries,
+                            "max_retries": max_retries,
+                            "failed_at": datetime.now(timezone.utc).isoformat(),
+                            "target_topic": "raw.transactions",
+                            "raw_payload": row_data,
+                        },
+                        key=str(job_id),
+                    )
+                except Exception as dlq_exc:
+                    logger.warning("dlq_publish_failed", job_id=job_id, error=str(dlq_exc))
+    except Exception as stream_exc:
+        failed += 1
+        reason = f"stream_parse_error: {stream_exc}"
+        logger.warning("ingest_stream_failed", job_id=job_id, error=str(stream_exc))
+        if len(error_sample) < 10:
+            error_sample.append({"line": total + 1, "reason": reason, "raw": {}})
+    finally:
+        if stream is not None:
+            stream.close()
+        if obj is not None:
+            obj.close()
+            obj.release_conn()
 
     final_status = "DONE" if failed == 0 else ("PARTIAL" if processed > 0 else "FAILED")
     duration_ms = int((datetime.now(timezone.utc).replace(tzinfo=None) - started_at).total_seconds() * 1000)

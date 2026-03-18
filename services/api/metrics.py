@@ -10,7 +10,7 @@ Gauges:
 from __future__ import annotations
 
 import structlog
-from prometheus_client import Gauge
+from prometheus_client import Counter, Gauge
 from sqlalchemy import func, select
 
 from database import AsyncSessionLocal
@@ -41,6 +41,26 @@ KAFKA_LAG_GAUGE = Gauge(
     "Kafka consumer group lag per tenant (best-effort)",
     ["tenant_id"],
 )
+
+EXTERNAL_VALIDATION_REQUESTS = Counter(
+    "betaml_external_validation_requests_total",
+    "Total de solicitações de validação externa por provider e tipo",
+    ["provider", "validation_type"],
+)
+
+EXTERNAL_VALIDATION_RESULTS = Counter(
+    "betaml_external_validation_results_total",
+    "Total de resultados de validação externa por provider e status",
+    ["provider", "status"],
+)
+
+
+def observe_external_validation_request(provider: str, validation_type: str) -> None:
+    EXTERNAL_VALIDATION_REQUESTS.labels(provider=provider, validation_type=validation_type).inc()
+
+
+def observe_external_validation_result(provider: str, status: str) -> None:
+    EXTERNAL_VALIDATION_RESULTS.labels(provider=provider, status=status).inc()
 
 
 async def update_business_metrics() -> None:

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import uuid
 from datetime import datetime, timezone
@@ -411,7 +410,6 @@ async def ingest_file(
             "mapping_version_id": mapping_version_id,
             "file_name": file.filename,
             "file_path": job.file_path,
-            "file_content_b64": base64.b64encode(content).decode(),
         }
         ok = await _publish_with_retries(
             producer=producer,

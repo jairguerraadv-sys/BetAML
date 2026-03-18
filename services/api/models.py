@@ -487,6 +487,25 @@ class Notification(Base):
     created_at     = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class ExternalValidationRequest(Base):
+    __tablename__ = "external_validation_requests"
+
+    id                  = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id           = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    player_id           = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
+    provider            = Column(String(40), nullable=False, default="mock_identity")
+    validation_type     = Column(String(40), nullable=False, default="CPF_IDENTITY")
+    status              = Column(String(20), nullable=False, default="PENDING")  # PENDING/COMPLETED/FAILED
+    request_payload     = Column(JSONB, nullable=False, default={})
+    response_payload    = Column(JSONB, default={})
+    external_request_id = Column(Text)
+    error_message       = Column(Text)
+    requested_by        = Column(UUID(as_uuid=False), ForeignKey("users.id"))
+    requested_at        = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at        = Column(DateTime(timezone=True))
+    updated_at          = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class SystemFlag(Base):
     __tablename__ = "system_flags"
 
