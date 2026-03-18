@@ -19,6 +19,7 @@ import os
 import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import cast
 
 import logging
 
@@ -86,7 +87,13 @@ app = FastAPI(
 
 # Attach slowapi limiter to app state
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+async def _rate_limit_exception_handler(request: Request, exc: Exception):
+    return _rate_limit_exceeded_handler(request, cast(RateLimitExceeded, exc))
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exception_handler)
 
 # Em desenvolvimento aceita localhost; em produção exige CORS_ALLOW_ORIGINS explícito.
 _cors_origins: list[str] = (
