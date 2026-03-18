@@ -6,7 +6,7 @@ import base64
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Optional, cast
 
 import structlog
 from fastapi import (
@@ -141,7 +141,7 @@ async def _publish_with_retries(
     return False
 
 
-def _get_minio_client() -> Minio | None:
+def _get_minio_client() -> Any | None:
     if Minio is None:
         return None
     endpoint = settings.minio_endpoint.replace("http://", "").replace("https://", "")
@@ -194,14 +194,14 @@ async def _tenant_ingest_rate_limit(db: AsyncSession, tenant_id: str, default_li
             row = (await db.execute(stmt)).scalar_one_or_none()
             if not row:
                 return default_limit
-            return max(1, int(row.flag_value))
+            return max(1, int(cast(Any, row.flag_value)))
 
         if all(hasattr(SystemFlag, attr) for attr in ("key", "value")):
             stmt = select(SystemFlag).where(SystemFlag.key == "ingest_rate_limit_per_min")
             row = (await db.execute(stmt)).scalar_one_or_none()
             if not row:
                 return default_limit
-            return max(1, int(row.value))
+            return max(1, int(cast(Any, row.value)))
     except Exception:
         return default_limit
 
@@ -392,7 +392,7 @@ async def ingest_file(
 
     bronze_path = _upload_bronze_file(
         tenant_id=principal.tenant_id,
-        job_id=job.id,
+        job_id=str(job.id),
         file_name=file.filename or "ingest.csv",
         content=content,
     )
@@ -417,10 +417,10 @@ async def ingest_file(
             producer=producer,
             topic="ingest.jobs",
             payload=msg,
-            key=job.id,
+            key=str(job.id),
             tenant_id=principal.tenant_id,
             source_system=source_system,
-            context={"endpoint": "/ingest/file", "job_id": job.id},
+            context={"endpoint": "/ingest/file", "job_id": str(job.id)},
         )
         if not ok:
             raise HTTPException(503, "Falha ao enfileirar job de ingestão após retries; enviado para DLQ")
@@ -684,8 +684,8 @@ async def replay_ingest_error(
         raise HTTPException(503, "Kafka indisponível para replay do erro")
 
     envelope = _build_envelope(
-        tenant_id=current_user.tenant_id,
-        source_system=err.source_system,
+        tenant_id=str(current_user.tenant_id),
+        source_system=str(err.source_system),
         entity_type=entity_type,
         payload=body.corrected_payload,
         source_event_id=source_event_id,
@@ -703,8 +703,8 @@ async def replay_ingest_error(
         topic=topic,
         payload=envelope,
         key=source_event_id,
-        tenant_id=current_user.tenant_id,
-        source_system=err.source_system,
+        tenant_id=str(current_user.tenant_id),
+        source_system=str(err.source_system),
         context={"endpoint": "/ingest/errors/{error_id}/replay", "ingest_error_id": err.id},
     )
     if not ok:
@@ -794,10 +794,10 @@ async def reprocess_job(
         producer=producer,
         topic="ingest.jobs",
         payload=msg,
-        key=new_job.id,
-        tenant_id=current_user.tenant_id,
-        source_system=new_job.source_system,
-        context={"endpoint": "/ingest/jobs/{job_id}/reprocess", "job_id": new_job.id},
+        key=str(new_job.id),
+        tenant_id=str(current_user.tenant_id),
+        source_system=str(new_job.source_system),
+        context={"endpoint": "/ingest/jobs/{job_id}/reprocess", "job_id": str(new_job.id)},
     )
     if not ok:
         new_job.status = "FAILED"
@@ -948,8 +948,8 @@ async def parse_connector_payload(
     if name not in {"gamma", "delta"}:
         raise HTTPException(400, "connector_name deve ser 'gamma' ou 'delta' para este endpoint")
 
-    max_requests = await _tenant_ingest_rate_limit(db, current_user.tenant_id, default_limit=120)
-    await redis_rate_limit(current_user.tenant_id, f"ingest.connector.{name}", max_requests=max_requests)
+    max_requests = await _tenant_ingest_rate_limit(db, str(current_user.tenant_id), default_limit=120)
+    await redis_rate_limit(str(current_user.tenant_id), f"ingest.connector.{name}", max_requests=max_requests)
 
     content = await file.read()
     source_system = "ConnectorGamma" if name == "gamma" else "ConnectorDelta"
@@ -976,8 +976,8 @@ async def parse_connector_payload(
     await db.refresh(job)
 
     bronze_path = _upload_bronze_file(
-        tenant_id=current_user.tenant_id,
-        job_id=job.id,
+        tenant_id=str(current_user.tenant_id),
+        job_id=str(job.id),
         file_name=file.filename or f"{name}.payload",
         content=content,
     )
@@ -993,7 +993,7 @@ async def parse_connector_payload(
     for rec in parse_result.records:
         source_event_id = str(rec.get("event_id") or uuid.uuid4())
         envelope = _build_envelope(
-            tenant_id=current_user.tenant_id,
+            tenant_id=str(current_user.tenant_id),
             source_system=source_system,
             entity_type=entity_type,
             payload=rec,
@@ -1007,9 +1007,9 @@ async def parse_connector_payload(
                 topic=topic,
                 payload=envelope,
                 key=source_event_id,
-                tenant_id=current_user.tenant_id,
+                tenant_id=str(current_user.tenant_id),
                 source_system=source_system,
-                context={"endpoint": "/ingest/connectors/{connector_name}/parse", "job_id": job.id},
+                context={"endpoint": "/ingest/connectors/{connector_name}/parse", "job_id": str(job.id)},
             )
             if not ok:
                 failed += 1
