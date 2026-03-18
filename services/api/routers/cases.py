@@ -530,7 +530,7 @@ async def submit_report_package(
     Returns:
         JSON com status da submissão e identificador de rastreamento.
     """
-        await redis_rate_limit(str(current_user.tenant_id), "cases.report.submit", max_requests=10)
+    await redis_rate_limit(str(current_user.tenant_id), "cases.report.submit", max_requests=10)
 
     c = await db.get(Case, case_id)
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
