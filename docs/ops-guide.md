@@ -167,6 +167,9 @@ Use `stamp` somente quando o schema ja estiver sincronizado (ex.: ambiente legad
 | v11 | Índices de performance em queries de alta frequência: alerts, cases, players, transactions, audit_logs, etc. (30+ índices) |
 | v12 | Coluna `label_note TEXT` em `alerts` — nota de investigação do analista ao rotular alertas (LGPD conformidade + feedback loop) |
 | v13 | Coluna `cnpj VARCHAR(14)` em `tenants` (COAF MIFD v3 obrigatório); coluna `pii_accessed TEXT` em `audit_logs` + índice para rastreabilidade LGPD Art. 37 |
+| v14 | Índices de performance para SLA dashboard e sino de notificações (Module 5) |
+| v15 | Suporte a refresh token rotation: `users.refresh_token_jti` + índice |
+| v16 | A/B testing traffic split: `scoring_configs.ml_challenger_pct` + tabela `model_inference_logs` (analytics) |
 
 ### Aplicar Migration Individual
 

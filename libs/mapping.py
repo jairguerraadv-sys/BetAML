@@ -269,7 +269,8 @@ class MappingEngine:
 
 def get_default_mapping(source_system: str, entity_type: str) -> dict[str, Any] | None:
     """Retorna config padrão pré-definida ou None."""
-    return BACKOFFICE_CONFIGS.get(f"{source_system}:{entity_type}")
+    normalized_entity_type = entity_type.strip().upper()
+    return BACKOFFICE_CONFIGS.get(f"{source_system}:{normalized_entity_type}")
 
 
 # ──────────────────────────────────────────────────

@@ -111,34 +111,29 @@ class TestDSLIntegration:
     """Valida que as 12 regras seed podem ser parseadas sem erros."""
 
     def _rules(self):
-        # Importar as regras default do seeds.py sem executar o seed
-        import importlib.util, pathlib
-        spec = importlib.util.spec_from_file_location(
-            "seeds", "/workspaces/BetAML/services/api/seeds.py"
-        )
-        mod = importlib.util.module_from_spec(spec)
-        # Patch imports que dependem de DB para não explodir
-        import unittest.mock as mock
-        with mock.patch.dict("sys.modules", {
-            "config":   mock.MagicMock(settings=mock.MagicMock(
-                database_url="sqlite+aiosqlite:///:memory:",
-                pii_encryption_key="test-key",
-            )),
-            "database": mock.MagicMock(),
-            "models":   mock.MagicMock(),
-        }):
-            try:
-                spec.loader.exec_module(mod)
-                return mod.DEFAULT_RULES
-            except Exception:
-                # Se falhar por qualquer dep, importa direto
-                return []
+        """Extrai DEFAULT_RULES de seeds.py sem importar o módulo.
+
+        Importar `services/api/seeds.py` dispara setup de engine/sessão; para
+        manter teste puramente unitário, parseamos o AST e fazemos literal_eval.
+        """
+        import ast
+        import pathlib
+
+        seeds_path = pathlib.Path("/workspaces/BetAML/services/api/seeds.py")
+        src = seeds_path.read_text(encoding="utf-8")
+        tree = ast.parse(src, filename=str(seeds_path))
+
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "DEFAULT_RULES":
+                        return ast.literal_eval(node.value)
+        raise AssertionError("DEFAULT_RULES não encontrado em services/api/seeds.py")
 
     def test_all_default_rules_have_valid_dsl(self):
         from libs.dsl_parser import validate_dsl
         rules = self._rules()
-        if not rules:
-            pytest.skip("Não foi possível importar DEFAULT_RULES do seeds.py")
+        assert rules and isinstance(rules, list), "DEFAULT_RULES vazio ou inválido"
         errors = []
         for rule in rules:
             ok, msg = validate_dsl(rule["condition_dsl"])
@@ -258,8 +253,7 @@ class TestMappingEngine:
     def test_backoffice_alpha_transaction_mapping(self):
         from libs.mapping import MappingEngine, get_default_mapping
         cfg = get_default_mapping("BackofficeAlpha", "transaction")
-        if cfg is None:
-            pytest.skip("Mapping BackofficeAlpha/transaction não disponível")
+        assert cfg is not None
         raw = {
             "transactionId":   "TXN-001",
             "playerId":        "PLY-001",
@@ -277,8 +271,7 @@ class TestMappingEngine:
     def test_backoffice_beta_transaction_mapping(self):
         from libs.mapping import MappingEngine, get_default_mapping
         cfg = get_default_mapping("BackofficeBeta", "transaction")
-        if cfg is None:
-            pytest.skip("Mapping BackofficeBeta/transaction não disponível")
+        assert cfg is not None
         raw = {
             "txn_id":       "B-001",
             "user_id":      "CUS-001",
@@ -293,8 +286,7 @@ class TestMappingEngine:
     def test_mapping_engine_apply_returns_dict(self):
         from libs.mapping import get_default_mapping, MappingEngine
         cfg = get_default_mapping("BackofficeAlpha", "transaction")
-        if cfg is None:
-            pytest.skip("Mapping BackofficeAlpha não disponível")
+        assert cfg is not None
         raw = {
             "transactionId": "T-X",
             "playerId":      "P-X",
@@ -313,17 +305,7 @@ class TestMappingEngine:
 # ────────────────────────────────────────────────────────────────────────────
 
 class TestFeatureComputation:
-    def _make_txn(self, hours_ago: float, amount: float, txn_type: str = "DEPOSIT",
-                  currency: str = "BRL", result: str | None = None) -> dict:
-        from datetime import datetime, timedelta
-        ts = (datetime.utcnow() - timedelta(hours=hours_ago)).isoformat()
-        return {
-            "created_at": ts,
-            "amount":     amount,
-            "txn_type":   txn_type,
-            "currency":   currency,
-            "result":     result,
-        }
+    # Nota: existe um único helper _make_txn (abaixo). Mantemos timezone-aware.
 
     def test_deposit_velocity_basic(self):
         from services.stream_processor.main import compute_features_offline  # type: ignore
@@ -364,8 +346,8 @@ class TestFeatureComputation:
     def _make_txn(self, hours_ago: float, amount: float, txn_type: str = "DEPOSIT",
                   currency: str = "BRL", result: str | None = None,
                   is_chargeback: bool = False) -> dict:
-        from datetime import datetime, timedelta
-        ts = (datetime.utcnow() - timedelta(hours=hours_ago)).isoformat()
+        from datetime import UTC, datetime, timedelta
+        ts = (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat()
         return {
             "created_at":   ts,
             "amount":       amount,

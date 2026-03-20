@@ -4,7 +4,7 @@ Unit tests for M2 feature computation logic in services/stream_processor/main.py
 These tests exercise the compute_features() helper in isolation.
 """
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -40,7 +40,7 @@ def _make_txn(
     is_chargeback: bool = False,
     result: str = "WIN",
 ):
-    ts = datetime.utcnow() - timedelta(hours=hours_ago)
+    ts = datetime.now(UTC) - timedelta(hours=hours_ago)
     return {
         "amount":        amount,
         "txn_type":      txn_type,

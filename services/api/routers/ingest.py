@@ -23,7 +23,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from jose import JWTError, jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,6 +68,48 @@ class IngestEventRequest(BaseModel):
     payload: dict[str, Any]
     mapping_config_id: Optional[str] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_shape(cls, data: Any) -> Any:
+        """Backward-compat: aceita payload "flat" (GAP-7) e converte para envelope canônico.
+
+        Alguns testes/integrações antigas enviam:
+          {player_id, event_type, amount, currency, metadata}
+        Em vez de:
+          {source_system, entity_type, payload, ...}
+        """
+        if not isinstance(data, dict):
+            return data
+
+        if {"source_system", "entity_type", "payload"}.issubset(data.keys()):
+            return data
+
+        legacy_keys = {"player_id", "event_type", "amount", "currency"}
+        if not legacy_keys.issubset(data.keys()):
+            return data
+
+        occurred_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        payload: dict[str, Any] = {
+            "player_id": data.get("player_id"),
+            "amount": data.get("amount"),
+            "currency": data.get("currency"),
+            "transaction_type": data.get("event_type") or "DEPOSIT",
+            "occurred_at": data.get("occurred_at") or occurred_at,
+            "method": data.get("method") or "PIX",
+            "status": data.get("status") or "SETTLED",
+        }
+        metadata = data.get("metadata")
+        if isinstance(metadata, dict) and metadata:
+            payload["metadata"] = metadata
+
+        return {
+            "source_system": data.get("source_system") or "BackofficeAlpha",
+            "entity_type": data.get("entity_type") or "transaction",
+            "source_event_id": data.get("source_event_id"),
+            "mapping_config_id": data.get("mapping_config_id"),
+            "payload": payload,
+        }
+
 
 class ReprocessRequest(BaseModel):
     mapping_version_id: Optional[str] = None
@@ -100,6 +142,21 @@ class ConnectorParseSummary(BaseModel):
     errors: list[dict[str, Any]]
 
 
+def _kafka_headers_from_context() -> list[tuple[str, bytes]] | None:
+    """Build Kafka headers for request correlation (best-effort).
+
+    If RequestIDMiddleware ran, `structlog.contextvars` contains `request_id`.
+    """
+    try:
+        ctx = structlog.contextvars.get_contextvars()
+        request_id = ctx.get("request_id")
+        if isinstance(request_id, str) and request_id:
+            return [("X-Request-ID", request_id.encode("utf-8"))]
+    except Exception:
+        return None
+    return None
+
+
 async def _publish_with_retries(
     *,
     producer: Any,
@@ -109,16 +166,29 @@ async def _publish_with_retries(
     tenant_id: str,
     source_system: str,
     context: dict[str, Any] | None = None,
+    headers: list[tuple[str, bytes]] | None = None,
 ) -> bool:
     max_retries = int(getattr(settings, "dlq_max_retries", 3) or 3)
+    effective_headers = headers if headers is not None else _kafka_headers_from_context()
+
+    async def _send_best_effort(_topic: str, _payload: dict[str, Any]) -> None:
+        try:
+            await producer.send(_topic, _payload, key=key, headers=effective_headers)
+        except TypeError as exc:
+            # Alguns producers/fakes não aceitam `headers`.
+            if "headers" in str(exc) and "unexpected keyword" in str(exc):
+                await producer.send(_topic, _payload, key=key)
+                return
+            raise
+
     for attempt in range(1, max_retries + 1):
         try:
-            await producer.send(topic, payload, key=key)
+            await _send_best_effort(topic, payload)
             return True
         except Exception as exc:  # noqa: BLE001
             if attempt >= max_retries:
                 try:
-                    await producer.send(
+                    await _send_best_effort(
                         f"{topic}.dlq",
                         {
                             "tenant_id": tenant_id,
@@ -131,7 +201,6 @@ async def _publish_with_retries(
                             "payload": payload,
                             "context": context or {},
                         },
-                        key=key,
                     )
                 except Exception as dlq_exc:  # noqa: BLE001
                     logger.error("ingest_dlq_publish_failed", error=str(dlq_exc), topic=topic)
@@ -218,6 +287,8 @@ def _build_envelope(
     ingest_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     event_id = str(uuid.uuid4())
+    ctx = structlog.contextvars.get_contextvars()
+    request_id = ctx.get("request_id")
     return {
         "event_id": event_id,
         "tenant_id": tenant_id,
@@ -232,6 +303,7 @@ def _build_envelope(
         "ingest_metadata": {
             "received_at": datetime.now(timezone.utc).isoformat(),
             "mapper_version": "1.0",
+            **({"request_id": request_id} if request_id else {}),
             **(ingest_metadata or {}),
         },
     }

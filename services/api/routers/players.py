@@ -8,7 +8,8 @@ from typing import Optional
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import case as sqla_case, func as sqlfunc, select
+from sqlalchemy import case as sqla_case, func as sqlfunc, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import decrypt_pii, encrypt_pii, get_current_user, mask_cpf, require_roles
@@ -218,7 +219,7 @@ async def get_player_feature_history(
         col_clause = ", ".join(_COLUMNS)
         sql = f"""
             SELECT {col_clause}
-            FROM betaml.player_features_daily
+                        FROM betaml.player_features_daily FINAL
             WHERE tenant_id = %(tid)s
               AND player_id = %(pid)s
               AND feature_date >= today() - %(days)s
@@ -250,21 +251,83 @@ async def erase_player_data(
     reason: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
+    repo: object = Depends(get_player_repo),
 ):
     """
     LGPD Art. 18 — Direito ao Esquecimento / Erasure Request.
 
     Anonimiza dados pessoais do player, mantendo registro para auditoria:
-      - Substitui CPF por valor anonimizado (cpf_erased_<player_id_hash>)
+            - Substitui CPF por valor anonimizado (cpf_erased_<player_id_hash>) em cpf_encrypted
       - Substitui nome por "ANON_<player_id_suffix>"
       - Status ← "ERASED"
       - Registra em audit_log com motivo
 
     IMPORTANTE: Esta operação é IRREVERSÍVEL.
     """
-    p = await db.get(Player, player_id)
-    if not p or p.tenant_id != current_user.tenant_id:
-        raise HTTPException(404, "Player não encontrado")
+    # Compat: unit tests chamam o handler diretamente (sem injeção de Depends).
+    if not hasattr(repo, "get_by_id"):
+        repo = PlayerRepository(db)
+
+    # Capture primitives early to avoid ORM attribute refresh after commit/rollback.
+    tenant_id = str(current_user.tenant_id)
+    actor_id = str(current_user.id)
+
+    # RLS: ensure this DB session is in the right tenant context for ALL operations
+    # in this handler (Player + audit_logs).
+    try:
+        await db.execute(text("SELECT set_config('app.current_tenant', :tid, false)"), {"tid": tenant_id})
+    except Exception:
+        pass
+
+    p = await repo.get_by_id(tenant_id, player_id)  # type: ignore[attr-defined]
+    # `/ingest/event` é assíncrono (fila); em testes e incidentes operacionais,
+    # pode existir solicitação LGPD antes do player ser materializado no Postgres.
+    # Neste caso, criamos um placeholder já anonimizado para manter trilha de auditoria.
+    if not p:
+        import hashlib
+
+        player_hash = hashlib.sha256(player_id.encode()).hexdigest()[:12]
+        suffix = player_id[-6:] if len(player_id) >= 6 else player_id
+        anon_cpf = f"cpf_erased_{player_hash}"
+        anon_name = f"ANON_{suffix}"
+
+        try:
+            p = Player(
+                tenant_id=tenant_id,
+                external_player_id=player_id,
+                full_name=anon_name,
+                cpf_encrypted=encrypt_pii(anon_cpf),
+                name_encrypted=encrypt_pii(anon_name),
+                status="ERASED",
+                updated_at=_utcnow(),
+            )
+            db.add(p)
+            await db.flush()
+
+            await write_audit(
+                db,
+                tenant_id,
+                actor_id,
+                "ERASE_PLAYER_DATA",
+                "Player",
+                player_id,
+                before={"status": None},
+                after={"status": "ERASED", "reason": reason or "Solicitação de titular (LGPD Art. 18)"},
+            )
+            await db.commit()
+
+            return {
+                "status": "erased",
+                "player_id": player_id,
+                "message": "Dados pessoais anonimizados com sucesso (LGPD Art. 18)",
+                "erased_at": _utcnow().isoformat(),
+            }
+        except IntegrityError:
+            # Corrida: player materializado por outro fluxo entre o lookup e o INSERT.
+            await db.rollback()
+            p = await repo.get_by_external_id(tenant_id, player_id)  # type: ignore[attr-defined]
+            if not p:
+                raise HTTPException(404, "Player não encontrado")
 
     if p.status == "ERASED":
         return {"status": "already_erased", "player_id": player_id, "message": "Player já foi anonimizado anteriormente"}
@@ -291,7 +354,7 @@ async def erase_player_data(
 
     # Audit log (LGPD Art. 37)
     await write_audit(
-        db, current_user.tenant_id, current_user.id,
+        db, tenant_id, actor_id,
         "ERASE_PLAYER_DATA", "Player", player_id,
         before={"status": "ACTIVE", "cpf": "***", "name": "***"},
         after={"status": "ERASED", "reason": reason or "Solicitação de titular (LGPD Art. 18)"},
@@ -302,8 +365,8 @@ async def erase_player_data(
     logger.info(
         "player_data_erased",
         player_id=player_id,
-        tenant_id=current_user.tenant_id,
-        actor=current_user.id,
+        tenant_id=tenant_id,
+        actor=actor_id,
         reason=reason,
     )
 

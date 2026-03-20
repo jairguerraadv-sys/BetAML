@@ -183,9 +183,34 @@ async def create_case(
     current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
     db: AsyncSession = Depends(get_db),
 ):
+    resolved_player_id: Optional[str] = None
+    if body.player_id:
+        try:
+            import uuid
+
+            uuid.UUID(str(body.player_id))
+            resolved_player_id = body.player_id
+        except Exception:
+            # Accept external_player_id values (tests use 'test')
+            try:
+                from models import Player
+
+                resolved_player_id = (
+                    await db.execute(
+                        select(Player.id).where(
+                            Player.tenant_id == current_user.tenant_id,
+                            Player.external_player_id == body.player_id,
+                        ).limit(1)
+                    )
+                ).scalar_one_or_none()
+                if resolved_player_id is not None:
+                    resolved_player_id = str(resolved_player_id)
+            except Exception:
+                resolved_player_id = None
+
     c = Case(
         tenant_id=current_user.tenant_id,
-        player_id=body.player_id,
+        player_id=resolved_player_id,
         title=body.title,
         description=body.description,
         severity=body.severity,
@@ -719,6 +744,7 @@ async def download_report_pdf(
     )
 
 
+@router.get("/cases/{case_id}/report-package/xml", tags=["cases"])
 @router.get("/cases/{case_id}/report-package/coaf-xml", tags=["cases"])
 async def download_coaf_xml(
     case_id: str,

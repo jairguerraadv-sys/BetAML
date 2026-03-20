@@ -23,6 +23,19 @@ import structlog
 # quanto em desenvolvimento local (raiz do projeto no PYTHONPATH)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
+structlog.configure(
+    processors=[
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.dev.ConsoleRenderer()
+        if os.getenv("ENVIRONMENT", "development").lower() in {"development", "test"}
+        else structlog.processors.JSONRenderer(),
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+    logger_factory=structlog.PrintLoggerFactory(),
+)
+
 logger = structlog.get_logger()
 
 KAFKA_SERVERS  = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
@@ -845,6 +858,11 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
     ):
         engine = sa.create_engine(sync_url, pool_pre_ping=True)
         with engine.begin() as conn:
+            # RLS: ensure UPDATE is visible for this tenant.
+            conn.execute(
+                sa.text("SELECT set_config('app.current_tenant', :tid, true)"),
+                {"tid": str(tenant_id)},
+            )
             conn.execute(
                 sa.text(
                     """
@@ -878,6 +896,11 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
     def _insert_ingest_error(*, raw_payload: dict, line_number: int, reason: str):
         engine = sa.create_engine(sync_url, pool_pre_ping=True)
         with engine.begin() as conn:
+            # RLS: ensure INSERT is allowed/visible for this tenant.
+            conn.execute(
+                sa.text("SELECT set_config('app.current_tenant', :tid, true)"),
+                {"tid": str(tenant_id)},
+            )
             conn.execute(
                 sa.text(
                     """
@@ -936,7 +959,10 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
             secure=secure,
         )
         obj = client.get_object(bucket, file_path)
-        stream = io.TextIOWrapper(obj, encoding="utf-8", errors="replace", newline="")
+        # Evita problemas de stream fechado (urllib3/HTTPResponse) lendo em memória.
+        raw_bytes = obj.read()  # type: ignore[attr-defined]
+        text = raw_bytes.decode("utf-8", errors="replace")
+        stream = io.StringIO(text)
     except Exception as exc:
         await asyncio.to_thread(_update_job, "FAILED", 0, 0, 0, f"file load error: {exc}")
         return

@@ -6,6 +6,7 @@ from contextvars import ContextVar
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from config import settings
 
@@ -14,7 +15,15 @@ _url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
 
 # SQLite (testes unitários) não suporta pool_size/max_overflow
 _is_sqlite = _url.startswith("sqlite")
-_engine_kwargs: dict = {} if _is_sqlite else {"pool_size": 10, "max_overflow": 20}
+
+# Em testes de integração (fora do container), o módulo pode ser importado e suas
+# coroutines rodadas via múltiplos `asyncio.run(...)`, cada um com um event loop
+# diferente. Pools (asyncpg) podem ficar presos ao loop anterior, causando
+# "Future attached to a different loop". NullPool evita reuso entre loops.
+if settings.environment == "test" and not _is_sqlite:
+    _engine_kwargs: dict = {"poolclass": NullPool}
+else:
+    _engine_kwargs = {} if _is_sqlite else {"pool_size": 10, "max_overflow": 20}
 
 engine = create_async_engine(_url, echo=False, **_engine_kwargs)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)

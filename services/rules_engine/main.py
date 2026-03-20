@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
@@ -23,6 +24,19 @@ import structlog
 # Garante que 'from libs.xxx import' funcione tanto no Docker (/app/libs montado)
 # quanto em desenvolvimento local (raiz do projeto no PYTHONPATH)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+structlog.configure(
+    processors=[
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.dev.ConsoleRenderer()
+        if os.getenv("ENVIRONMENT", "development").lower() in {"development", "test"}
+        else structlog.processors.JSONRenderer(),
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+    logger_factory=structlog.PrintLoggerFactory(),
+)
 
 logger = structlog.get_logger()
 

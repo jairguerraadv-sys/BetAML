@@ -28,12 +28,18 @@
 - Fluxo de alertas: listar, rotular, mudar status.
 - Fluxo de casos: criar caso, abrir detalhe, exportar PDF.
 - Ingestao smoke: `raw.* -> canonical.* -> features.*` observada em logs.
+- E2E (pipeline + ML): `TEST_STACK_UP=1 pytest tests/integration/ -v` executado em staging.
 
 ## 5. Observabilidade e operacao
 
 - Dashboards Grafana revisados (API latency, DLQ, ingest throughput).
 - Alertas ativos: erros de migracao, backlog de fila, 5xx API.
 - On-call informado com janela de deploy e rollback procedure.
+
+## 5.1 Backups
+
+- Backup diario habilitado (Helm CronJob) ou rotina equivalente em producao.
+- Teste de restore (Postgres + artefatos MinIO) executado em ambiente de homologacao.
 
 ## 6. Pos-deploy (primeiros 60 minutos)
 

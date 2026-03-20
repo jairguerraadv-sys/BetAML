@@ -236,5 +236,82 @@ class TestTrainResponseSchema(unittest.TestCase):
         self.assertEqual(resp.training_rows, 1000)
 
 
+class _DummyClf:
+    def __init__(self, raw_score: float = 0.0):
+        self._raw_score = raw_score
+
+    def decision_function(self, X):
+        import numpy as np
+        return np.array([self._raw_score], dtype=np.float32)
+
+
+class TestABTrafficSplit(unittest.TestCase):
+    def test_choose_model_variant_is_deterministic(self):
+        ml = _load_module()
+        tid = "tenant-1"
+        pid = "player-1"
+        v1 = ml._choose_model_variant(tid, pid, 50)
+        v2 = ml._choose_model_variant(tid, pid, 50)
+        self.assertIn(v1, {"champion", "challenger"})
+        self.assertEqual(v1, v2)
+
+    def test_pct_zero_always_champion(self):
+        ml = _load_module()
+        req = ml.ScoreRequest(player_id="p1", tenant_id="t1", features={})
+
+        calls = []
+
+        def _load_side_effect(tenant_id: str, model_type: str = "champion"):
+            calls.append(model_type)
+            return {"clf": _DummyClf(0.0), "model_id": "00000000-0000-0000-0000-000000000001"}
+
+        with patch.object(ml, "_db_engine", return_value=MagicMock()), \
+             patch.object(ml, "_get_ml_challenger_pct", return_value=0), \
+             patch.object(ml, "_load_tenant_model", side_effect=_load_side_effect), \
+             patch.object(ml, "_log_inference", return_value=None):
+            resp = ml.score(req)
+
+        self.assertEqual(resp.model_id, "00000000-0000-0000-0000-000000000001")
+        self.assertEqual(calls, ["champion"])
+
+    def test_pct_hundred_uses_challenger_when_available(self):
+        ml = _load_module()
+        req = ml.ScoreRequest(player_id="p1", tenant_id="t1", features={})
+
+        def _load_side_effect(tenant_id: str, model_type: str = "champion"):
+            if model_type == "challenger":
+                return {"clf": _DummyClf(0.0), "model_id": "00000000-0000-0000-0000-000000000002"}
+            return {"clf": _DummyClf(0.0), "model_id": "00000000-0000-0000-0000-000000000001"}
+
+        with patch.object(ml, "_db_engine", return_value=MagicMock()), \
+             patch.object(ml, "_get_ml_challenger_pct", return_value=100), \
+             patch.object(ml, "_load_tenant_model", side_effect=_load_side_effect), \
+             patch.object(ml, "_log_inference", return_value=None):
+            resp = ml.score(req)
+
+        self.assertEqual(resp.model_id, "00000000-0000-0000-0000-000000000002")
+
+    def test_pct_hundred_falls_back_to_champion_when_challenger_missing(self):
+        ml = _load_module()
+        req = ml.ScoreRequest(player_id="p1", tenant_id="t1", features={})
+
+        calls = []
+
+        def _load_side_effect(tenant_id: str, model_type: str = "champion"):
+            calls.append(model_type)
+            if model_type == "challenger":
+                return None
+            return {"clf": _DummyClf(0.0), "model_id": "00000000-0000-0000-0000-000000000001"}
+
+        with patch.object(ml, "_db_engine", return_value=MagicMock()), \
+             patch.object(ml, "_get_ml_challenger_pct", return_value=100), \
+             patch.object(ml, "_load_tenant_model", side_effect=_load_side_effect), \
+             patch.object(ml, "_log_inference", return_value=None):
+            resp = ml.score(req)
+
+        self.assertEqual(resp.model_id, "00000000-0000-0000-0000-000000000001")
+        self.assertEqual(calls, ["challenger", "champion"])
+
+
 if __name__ == "__main__":
     unittest.main()

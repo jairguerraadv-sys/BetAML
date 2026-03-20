@@ -840,7 +840,7 @@ async def test_rate_limit_auditor_20_per_minute():
 
 ### Task 10: A/B Testing Traffic Split
 - ScoringConfig.ml_challenger_pct (0-100)
-- ML Service /score lê config, random() < pct → challenger
+- ML Service /score lê config e faz split determinístico por player (bucket stable) para evitar flapping
 - ModelInference log table para analytics
 
 ### Task 11-14: Testes E2E

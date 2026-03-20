@@ -105,7 +105,7 @@ docker compose -f infra/docker-compose.yml up -d
 > PostgreSQL na ordem: `init-db.sql` → `migration_v2.sql` → `migration_v3.sql` → `migration_v4.sql`
 > → `migration_v5.sql` → `migration_v6.sql` → `migration_v7.sql` → `migration_v8.sql`
 > → `migration_v9.sql` → `migration_v10.sql` → `migration_v11.sql` → `migration_v12.sql`
-> → `migration_v13.sql`.
+> → `migration_v13.sql` → `migration_v14.sql` → `migration_v15.sql` → `migration_v16.sql`.
 > O `migration_v4.sql` ativa as políticas **RLS** em todas as tabelas sensíveis.
 > O `migration_v6.sql` adiciona colunas de threshold (`low_threshold`, `medium_threshold`, etc.)
 > à tabela `scoring_configs`.
@@ -197,6 +197,15 @@ npx playwright test tests/auth.spec.ts tests/cases.spec.ts
 Observacoes:
 - `e2e/.env.e2e` e local e nao deve ser versionado.
 - O Playwright carrega automaticamente `e2e/.env.e2e` e usa `e2e/.env.e2e.example` como fallback.
+
+### 5.1 Testes E2E (Pipeline / Stream Processor / ML Service)
+
+Os testes em `tests/integration/` são pulados por padrão.
+
+```bash
+docker compose -f infra/docker-compose.yml up -d --build
+TEST_STACK_UP=1 pytest tests/integration/ -v --tb=short
+```
 
 ### 5. Ingestão de arquivo CSV (pipeline completo)
 

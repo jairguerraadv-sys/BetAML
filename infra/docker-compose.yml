@@ -31,6 +31,10 @@ services:
       - ./migration_v11.sql:/docker-entrypoint-initdb.d/11-migration.sql
       - ./migration_v12.sql:/docker-entrypoint-initdb.d/12-migration.sql
       - ./migration_v13.sql:/docker-entrypoint-initdb.d/13-migration.sql
+      - ./migration_v14.sql:/docker-entrypoint-initdb.d/14-migration.sql
+      - ./migration_v15.sql:/docker-entrypoint-initdb.d/15-migration.sql
+      - ./migration_v16.sql:/docker-entrypoint-initdb.d/16-migration.sql
+      - ./migration_v17.sql:/docker-entrypoint-initdb.d/17-migration.sql
     ports:
       - "5432:5432"
     healthcheck:
@@ -166,7 +170,9 @@ services:
       redis:    {condition: service_healthy}
       redpanda: {condition: service_healthy}
     environment:
-      DATABASE_URL:            ${DATABASE_URL:-postgresql://betaml:devpass@postgres:5432/betaml_dev}
+      # Use betaml_app by default so RLS/FORCE RLS is effective in dev.
+      # Override via DATABASE_URL in .env if needed.
+      DATABASE_URL:            ${DATABASE_URL:-postgresql://betaml_app:app_devpass_change_me@postgres:5432/betaml_dev}
       REDIS_URL:               ${REDIS_URL:-redis://:devpass@redis:6379/0}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-redpanda:29092}
       JWT_SECRET:              ${JWT_SECRET:-dev-secret-change-me}
@@ -190,9 +196,13 @@ services:
       - ../services/api:/app
       - ../libs:/app/libs
     command: >
-      bash -c "python seeds.py && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+      bash -c "set -euo pipefail; \
+      APP_DATABASE_URL=\"$$DATABASE_URL\"; \
+      SEED_DATABASE_URL=\"postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@postgres:5432/$$POSTGRES_DB\"; \
+      DATABASE_URL=\"$$SEED_DATABASE_URL\" python seeds.py; \
+      DATABASE_URL=\"$$APP_DATABASE_URL\" uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health/live"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=2).read()"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -210,7 +220,7 @@ services:
       redis:    {condition: service_healthy}
       clickhouse: {condition: service_healthy}
     environment:
-      DATABASE_URL:            ${DATABASE_URL:-postgresql://betaml:devpass@postgres:5432/betaml_dev}
+      DATABASE_URL:            ${DATABASE_URL:-postgresql://betaml_app:app_devpass_change_me@postgres:5432/betaml_dev}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-redpanda:29092}
       REDIS_URL:               ${REDIS_URL:-redis://:devpass@redis:6379/0}
       MINIO_ENDPOINT:          ${MINIO_ENDPOINT:-http://minio:9000}
@@ -237,7 +247,7 @@ services:
       redis:    {condition: service_healthy}
       postgres: {condition: service_healthy}
     environment:
-      DATABASE_URL:            ${DATABASE_URL:-postgresql://betaml:devpass@postgres:5432/betaml_dev}
+      DATABASE_URL:            ${DATABASE_URL:-postgresql://betaml_app:app_devpass_change_me@postgres:5432/betaml_dev}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-redpanda:29092}
       REDIS_URL:               ${REDIS_URL:-redis://:devpass@redis:6379/0}
       ENVIRONMENT:             ${ENVIRONMENT:-development}
@@ -257,7 +267,7 @@ services:
       postgres: {condition: service_healthy}
       redis:    {condition: service_healthy}
     environment:
-      DATABASE_URL:    ${DATABASE_URL:-postgresql://betaml:devpass@postgres:5432/betaml_dev}
+      DATABASE_URL:    ${DATABASE_URL:-postgresql://betaml_app:app_devpass_change_me@postgres:5432/betaml_dev}
       REDIS_URL:       ${REDIS_URL:-redis://:devpass@redis:6379/0}
       MINIO_ENDPOINT:  ${MINIO_ENDPOINT:-http://minio:9000}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio}
@@ -282,7 +292,7 @@ services:
       postgres: {condition: service_healthy}
       minio:    {condition: service_started}
     environment:
-      DATABASE_URL:     ${DATABASE_URL:-postgresql://betaml:devpass@postgres:5432/betaml_dev}
+      DATABASE_URL:     ${DATABASE_URL:-postgresql://betaml_app:app_devpass_change_me@postgres:5432/betaml_dev}
       MINIO_ENDPOINT:   ${MINIO_ENDPOINT:-http://minio:9000}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minio123}

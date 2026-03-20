@@ -299,6 +299,7 @@ class TestAdminUsersCRUD:
     def test_admin_can_create_and_delete_user(self):
         admin_token = _login("admin_a", "admin123")["access_token"]
         username = f"gap7_{uuid.uuid4().hex[:8]}"
+        email = f"{username}@test.com"
 
         # Create
         create_resp = api(
@@ -306,7 +307,7 @@ class TestAdminUsersCRUD:
             "POST",
             json={
                 "username": username,
-                "email": "gap7@test.com",
+                "email": email,
                 "password": "Str0ng!Pass",
                 "role": "AML_ANALYST",
             },

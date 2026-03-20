@@ -405,6 +405,7 @@ class ScoringConfigOut(BaseModel):
     data_retention_gold_years: int = 3
     auto_case_threshold: float = 0.75
     ingest_rate_limit_tpm: int = 1000
+    ml_challenger_pct: int = 0
     updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
@@ -428,6 +429,7 @@ class ScoringConfigUpdate(BaseModel):
     data_retention_gold_years: Optional[int] = None
     auto_case_threshold: Optional[float] = None
     ingest_rate_limit_tpm: Optional[int] = None
+    ml_challenger_pct: Optional[int] = None
 
 
 class ScoringPreviewIn(BaseModel):
@@ -496,7 +498,7 @@ class ModelRegistryOut(BaseModel):
     trained_at: Optional[datetime] = None
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
 class FeatureSnapshotOut(BaseModel):

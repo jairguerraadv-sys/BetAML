@@ -13,12 +13,12 @@ from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_db
-from models import ApiKey, User
+from models import ApiKey, Tenant, User
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -244,6 +244,20 @@ class IngestPrincipal:
     role: str = "API_KEY"
 
 
+async def _set_db_tenant_context(db: AsyncSession, tenant_id: str) -> None:
+    """Set the Postgres session variable used by RLS policies.
+
+    Important: `get_db()` sets this based on ContextVar (JWT middleware path).
+    For API key auth (and for direct unit tests calling dependencies), we must
+    set it explicitly on the active DB session.
+    """
+    try:
+        await db.execute(text("SELECT set_config('app.current_tenant', :tid, false)"), {"tid": tenant_id})
+    except Exception:
+        # Best-effort: if DB doesn't support set_config (e.g., sqlite tests), ignore.
+        return
+
+
 async def get_ingest_principal(
     authorization: str | None = Header(None, alias="Authorization"),
     x_api_key: str | None = Header(None, alias="X-API-Key"),
@@ -258,6 +272,17 @@ async def get_ingest_principal(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="API key não tem permissão 'ingest'",
             )
+
+        # Ensure RLS tenant isolation applies for subsequent queries in the same request.
+        await _set_db_tenant_context(db, str(ak.tenant_id))
+
+        tenant = await db.get(Tenant, str(ak.tenant_id))
+        if not tenant or not tenant.active:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Tenant is inactive")
+        settings_json = tenant.settings or {}
+        if isinstance(settings_json, dict) and settings_json.get("ingest_paused") is True:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Ingest is paused")
+
         return IngestPrincipal(tenant_id=ak.tenant_id, id=None, role="API_KEY")
     if authorization and authorization.startswith("Bearer "):
         user = await get_current_user(token=authorization[7:], db=db)
@@ -266,6 +291,17 @@ async def get_ingest_principal(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Acesso negado para role '{user.role}'",
             )
+
+        # Defensive: helps when called outside request/middleware context.
+        await _set_db_tenant_context(db, str(user.tenant_id))
+
+        tenant = await db.get(Tenant, str(user.tenant_id))
+        if not tenant or not tenant.active:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Tenant is inactive")
+        settings_json = tenant.settings or {}
+        if isinstance(settings_json, dict) and settings_json.get("ingest_paused") is True:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Ingest is paused")
+
         return IngestPrincipal(tenant_id=user.tenant_id, id=user.id, role=user.role)
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

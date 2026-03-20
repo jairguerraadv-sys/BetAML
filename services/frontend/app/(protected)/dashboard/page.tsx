@@ -1,7 +1,7 @@
 'use client';
 import { useQuery } from '@tanstack/react-query';
 import { fetchAlerts, fetchCases, fetchDashboardStats } from '@/lib/api';
-import { useEffect, useState } from 'react';
+import { useUser } from '@/contexts/UserContext';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts';
@@ -72,14 +72,8 @@ function KpiCard({
 }
 
 export default function DashboardPage() {
-  const [userName, setUserName] = useState('');
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem('betaml_user');
-      if (raw) setUserName(JSON.parse(raw)?.username ?? '');
-    } catch {}
-  }, []);
+  const { user } = useUser();
+  const userName = user?.username ?? '';
 
   // Pre-aggregated KPIs — single DB query, no 500-record pagination
   const { data: stats } = useQuery({

@@ -191,10 +191,7 @@ def test_rules_engine_redis_cache_miss_continues():
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
     # Verificar que _try_float produz valor seguro mesmo com None
-    try:
-        from services.rules_engine.main import _try_float
-    except ImportError:
-        pytest.skip("rules_engine não importável neste contexto")
+    from services.rules_engine.main import _try_float
 
     assert _try_float(None) == 0.0
     assert _try_float("") == 0.0
@@ -215,10 +212,7 @@ async def test_stream_processor_clickhouse_down_continues():
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
-    try:
-        from libs.clients import ClickHouseClient
-    except ImportError:
-        pytest.skip("libs.clients não importável neste contexto")
+    from libs.clients import ClickHouseClient
 
     broken_client = MagicMock()
     broken_client.execute = MagicMock(side_effect=Exception("ClickHouse connection refused"))

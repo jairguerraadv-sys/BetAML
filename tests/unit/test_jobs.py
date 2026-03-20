@@ -25,6 +25,7 @@ def _make_mock_session(tenants=None, scoring_cfg=None, players=None, alerts=None
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.commit = AsyncMock()
+    session.add = MagicMock()
 
     call_log = []
 
@@ -104,11 +105,14 @@ async def test_risk_score_decay_no_recent_alerts_reduces_score():
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.commit = AsyncMock()
+    session.add = MagicMock()
 
     calls = []
 
     async def execute(stmt):
         result = MagicMock()
+        if "set_config('app.current_tenant'" in str(stmt):
+            return result
         calls.append(len(calls))
         if len(calls) == 1:
             result.scalars.return_value.all.return_value = [tenant]
@@ -143,10 +147,13 @@ async def test_risk_score_decay_with_critical_alerts_computes_weighted_score():
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.commit = AsyncMock()
+    session.add = MagicMock()
     calls = []
 
     async def execute(stmt):
         result = MagicMock()
+        if "set_config('app.current_tenant'" in str(stmt):
+            return result
         calls.append(len(calls))
         if len(calls) == 1:
             result.scalars.return_value.all.return_value = [tenant]
@@ -184,10 +191,13 @@ async def test_risk_score_decay_score_capped_at_1():
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.commit = AsyncMock()
+    session.add = MagicMock()
     calls = []
 
     async def execute(stmt):
         result = MagicMock()
+        if "set_config('app.current_tenant'" in str(stmt):
+            return result
         calls.append(len(calls))
         if len(calls) == 1:
             result.scalars.return_value.all.return_value = [tenant]
@@ -217,10 +227,13 @@ async def test_risk_score_decay_no_scoring_config_skips_tenant():
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.commit = AsyncMock()
+    session.add = MagicMock()
     calls = []
 
     async def execute(stmt):
         result = MagicMock()
+        if "set_config('app.current_tenant'" in str(stmt):
+            return result
         calls.append(len(calls))
         if len(calls) == 1:
             result.scalars.return_value.all.return_value = [tenant]
@@ -257,10 +270,13 @@ async def test_lgpd_expiration_anonymizes_expired_player():
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.commit = AsyncMock()
+    session.add = MagicMock()
     calls = []
 
     async def execute(stmt):
         result = MagicMock()
+        if "set_config('app.current_tenant'" in str(stmt):
+            return result
         calls.append(len(calls))
         if len(calls) == 1:
             result.scalars.return_value.all.return_value = [tenant]
@@ -296,10 +312,13 @@ async def test_lgpd_expiration_respects_data_retention_days():
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.commit = AsyncMock()
+    session.add = MagicMock()
     calls = []
 
     async def execute(stmt):
         result = MagicMock()
+        if "set_config('app.current_tenant'" in str(stmt):
+            return result
         calls.append(len(calls))
         if len(calls) == 1:
             result.scalars.return_value.all.return_value = [tenant]
@@ -329,10 +348,13 @@ async def test_lgpd_expiration_skips_tenant_without_scoring_config():
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.commit = AsyncMock()
+    session.add = MagicMock()
     calls = []
 
     async def execute(stmt):
         result = MagicMock()
+        if "set_config('app.current_tenant'" in str(stmt):
+            return result
         calls.append(len(calls))
         if len(calls) == 1:
             result.scalars.return_value.all.return_value = [tenant]
@@ -523,6 +545,84 @@ class TestCheckSlaViolations:
 
         session.add.assert_not_called()
         session.commit.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Data Quality Alerting Tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_data_quality_alerting_creates_notification_and_pauses_ingest_on_critical_failure():
+    from jobs import data_quality_alerting
+
+    tenant = _tenant("t1")
+    tenant.settings = {}
+
+    admin = MagicMock()
+    admin.id = "admin-1"
+    admin.tenant_id = "t1"
+    admin.role = "ADMIN"
+    admin.active = True
+
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+
+    async def execute(stmt, *args, **kwargs):
+        result = MagicMock()
+        stmt_s = str(stmt)
+
+        # Tenants list
+        if "FROM tenants" in stmt_s:
+            result.scalars.return_value.all.return_value = [tenant]
+            return result
+
+        # RLS context
+        if "set_config('app.current_tenant'" in stmt_s:
+            return result
+
+        # alerts_invalid_status = 0
+        if "FROM alerts" in stmt_s and "count" in stmt_s.lower():
+            result.scalar_one.return_value = 0
+            return result
+
+        # snapshots_missing_version = 1 (critical)
+        if "FROM feature_snapshots" in stmt_s and "count" in stmt_s.lower():
+            result.scalar_one.return_value = 1
+            return result
+
+        # unresolved_ingest_errors_24h = 0
+        if "FROM ingest_errors" in stmt_s and "count" in stmt_s.lower():
+            result.scalar_one.return_value = 0
+            return result
+
+        # admins list
+        if "FROM users" in stmt_s:
+            result.scalars.return_value.all.return_value = [admin]
+            return result
+
+        # dedup lookup (notifications)
+        if "FROM notifications" in stmt_s:
+            result.scalar_one_or_none.return_value = None
+            return result
+
+        return result
+
+    session.execute = execute
+
+    with patch("jobs.AsyncSessionLocal", return_value=session):
+        await data_quality_alerting()
+
+    # Notification enfileirada e commit realizado
+    assert session.add.call_count >= 1
+    session.commit.assert_called_once()
+
+    # Falha crítica deve pausar ingest no settings do tenant
+    assert isinstance(tenant.settings, dict)
+    assert tenant.settings.get("ingest_paused") is True
 
 
 # ─────────────────────────────────────────────────────────────────────────────

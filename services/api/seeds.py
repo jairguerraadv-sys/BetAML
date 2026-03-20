@@ -180,6 +180,10 @@ async def seed(db: AsyncSession):
         await db.flush()
         print(f"  Tenant: {tenant.name} ({tenant.id})")
 
+        # RLS: from here on, all tenant-scoped tables require app.current_tenant.
+        # This makes seeds work even when the app connects as betaml_app under FORCE RLS.
+        await db.execute(text("SELECT set_config('app.current_tenant', :tid, false)"), {"tid": str(tenant.id)})
+
         # Users
         users = []
         for ut in USERS_TEMPLATE:
@@ -392,7 +396,7 @@ async def seed(db: AsyncSession):
         wl_pep = PlayerList(
             tenant_id=tenant.id,
             name="pep_watchlist",
-            list_type="WATCHLIST",
+            list_type="WATCH_LIST",
             description="Jogadores identificados como PEP ou conexão com PEP",
             active=True,
             source="MANUAL",
@@ -401,7 +405,7 @@ async def seed(db: AsyncSession):
         wl_susp = PlayerList(
             tenant_id=tenant.id,
             name="internal_suspects",
-            list_type="SUSPECT",
+            list_type="CUSTOM",
             description="Lista interna de suspeitos identificados em investigações anteriores",
             active=True,
             source="MANUAL",
