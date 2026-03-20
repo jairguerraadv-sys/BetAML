@@ -17,6 +17,7 @@ Registro:  Postgres (model_registry)
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 import pickle
@@ -44,7 +45,7 @@ REDIS_URL      = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
 MINIO_ACCESS   = os.getenv("MINIO_ACCESS_KEY", "minio")
 MINIO_SECRET   = os.getenv("MINIO_SECRET_KEY", "minio123")
-BUCKET_MODELS  = "betaml-models"
+BUCKET_MODELS  = os.getenv("ML_MODEL_BUCKET", "betaml-models")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Feature columns usados no treinamento (mesma ordem no score)
@@ -100,17 +101,119 @@ _model_cache: dict[str, dict[str, Any]] = {}
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
+
+def _stable_bucket_0_99(tenant_id: str, player_id: str) -> int:
+    key = f"{tenant_id}:{player_id}".encode("utf-8")
+    digest = hashlib.sha256(key).digest()
+    return int.from_bytes(digest[:4], byteorder="big", signed=False) % 100
+
+
+def _choose_model_variant(tenant_id: str, player_id: str, challenger_pct: int) -> str:
+    pct = max(0, min(int(challenger_pct or 0), 100))
+    if pct <= 0:
+        return "champion"
+    if pct >= 100:
+        return "challenger"
+    return "challenger" if _stable_bucket_0_99(tenant_id, player_id) < pct else "champion"
+
+
+def _parse_uuid_or_none(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return str(uuid.UUID(str(value)))
+    except Exception:
+        return None
+
+
+def _get_ml_challenger_pct(engine, tenant_id: str) -> int:
+    import sqlalchemy as sa
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text("SELECT set_config('app.current_tenant', :tid, true)"),
+                {"tid": tenant_id},
+            )
+            row = conn.execute(
+                sa.text(
+                    "SELECT ml_challenger_pct FROM scoring_configs "
+                    "WHERE tenant_id = :tid LIMIT 1"
+                ),
+                {"tid": tenant_id},
+            ).fetchone()
+        if row is None:
+            return 0
+        pct = int(row[0])
+        return max(0, min(pct, 100))
+    except Exception as exc:
+        logger.warning("scoring_config_fetch_failed", tenant_id=tenant_id, error=str(exc))
+        return 0
+
+
+def _log_inference(
+    engine,
+    *,
+    tenant_id: str,
+    player_id: str,
+    model_id: str | None,
+    model_variant: str,
+    anomaly_score: float,
+    is_anomaly: bool,
+    request_id: str | None,
+) -> None:
+    import sqlalchemy as sa
+
+    tid = _parse_uuid_or_none(tenant_id)
+    if tid is None:
+        return
+
+    pid = _parse_uuid_or_none(player_id)
+    mid = _parse_uuid_or_none(model_id)
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text("SELECT set_config('app.current_tenant', :tid, true)"),
+                {"tid": tid},
+            )
+            conn.execute(
+                sa.text(
+                    "INSERT INTO model_inference_logs "
+                    "(tenant_id, player_id, model_id, model_variant, anomaly_score, is_anomaly, request_id) "
+                    "VALUES (:tenant_id, :player_id, :model_id, :model_variant, :anomaly_score, :is_anomaly, :request_id)"
+                ),
+                {
+                    "tenant_id": tid,
+                    "player_id": pid,
+                    "model_id": mid,
+                    "model_variant": model_variant,
+                    "anomaly_score": float(anomaly_score),
+                    "is_anomaly": bool(is_anomaly),
+                    "request_id": request_id,
+                },
+            )
+    except Exception as exc:
+        logger.warning(
+            "inference_log_failed",
+            tenant_id=tenant_id,
+            player_id=player_id,
+            model_id=model_id,
+            error=str(exc),
+        )
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers MinIO
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _minio_client():
     from minio import Minio
+    endpoint = MINIO_ENDPOINT.replace("http://", "").replace("https://", "")
+    secure = MINIO_ENDPOINT.startswith("https://")
     return Minio(
-        MINIO_ENDPOINT,
+        endpoint,
         access_key=MINIO_ACCESS,
         secret_key=MINIO_SECRET,
-        secure=False,
+        secure=secure,
     )
 
 
@@ -320,6 +423,8 @@ class ScoreRequest(BaseModel):
     tenant_id: str
     features: dict[str, Any] = Field(default_factory=dict)
 
+    model_config = {"protected_namespaces": ()}
+
 
 class ScoreResponse(BaseModel):
     player_id: str
@@ -330,10 +435,14 @@ class ScoreResponse(BaseModel):
     model_id: str | None = None
     scored_at: str
 
+    model_config = {"protected_namespaces": ()}
+
 
 class TrainRequest(BaseModel):
     tenant_id: str
     min_rows:  int = 500
+
+    model_config = {"protected_namespaces": ()}
 
 
 class TrainResponse(BaseModel):
@@ -342,6 +451,8 @@ class TrainResponse(BaseModel):
     algorithm:     str
     training_rows: int
     metrics:       dict
+
+    model_config = {"protected_namespaces": ()}
 
 
 class ModelInfo(BaseModel):
@@ -353,6 +464,8 @@ class ModelInfo(BaseModel):
     training_rows: int | None
     metrics:      dict | None
 
+    model_config = {"protected_namespaces": ()}
+
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
@@ -362,13 +475,23 @@ def health():
 
 
 @app.post("/score", response_model=ScoreResponse)
-def score(req: ScoreRequest):
+def score(req: ScoreRequest, x_request_id: str | None = Header(None, alias="X-Request-Id")):
     """
     Online scoring: recebe features do player e retorna anomaly_score [0,1].
     Sem modelo treinado → retorna 0.0.
     """
     normalized_features = _normalize_feature_aliases(req.features)
-    entry = _load_tenant_model(req.tenant_id)
+
+    engine = _db_engine()
+    challenger_pct = _get_ml_challenger_pct(engine, req.tenant_id)
+    preferred_variant = _choose_model_variant(req.tenant_id, req.player_id, challenger_pct)
+
+    entry = _load_tenant_model(req.tenant_id, model_type=preferred_variant)
+    chosen_variant = preferred_variant
+    if entry is None and preferred_variant == "challenger":
+        entry = _load_tenant_model(req.tenant_id, model_type="champion")
+        chosen_variant = "champion" if entry is not None else preferred_variant
+
     if entry is None:
         return ScoreResponse(
             player_id=req.player_id,
@@ -397,6 +520,21 @@ def score(req: ScoreRequest):
         reverse=True,
     )[:5]
     top_drivers = [col for col, _ in drivers if _ > 0]
+
+    try:
+        _log_inference(
+            engine,
+            tenant_id=req.tenant_id,
+            player_id=req.player_id,
+            model_id=entry.get("model_id"),
+            model_variant=chosen_variant,
+            anomaly_score=round(anomaly_score, 4),
+            is_anomaly=is_anomaly,
+            request_id=x_request_id,
+        )
+    except Exception:
+        # best-effort logging
+        pass
 
     return ScoreResponse(
         player_id=req.player_id,
@@ -547,6 +685,8 @@ class SHAPRequest(BaseModel):
     features:  dict[str, Any]
     model_type: str = "IsolationForest"
 
+    model_config = {"protected_namespaces": ()}
+
 
 class SHAPResponse(BaseModel):
     player_id:    str
@@ -555,6 +695,8 @@ class SHAPResponse(BaseModel):
     shap_values:  dict[str, float]
     baseline:     float
     scored_at:    str
+
+    model_config = {"protected_namespaces": ()}
 
 
 @app.post("/score/shap", response_model=SHAPResponse)
@@ -912,7 +1054,11 @@ def _load_tenant_model(tenant_id: str, model_type: str = "champion") -> dict | N
         engine = _db_engine()
         import sqlalchemy as sa
         status = "active" if model_type == "champion" else model_type
-        with engine.connect() as conn:
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text("SELECT set_config('app.current_tenant', :tid, true)"),
+                {"tid": tenant_id},
+            )
             row = conn.execute(
                 sa.text(
                     "SELECT id, artifact_uri, algorithm, feature_columns "

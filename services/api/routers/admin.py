@@ -472,6 +472,10 @@ async def update_scoring_config(
     )).scalar_one_or_none()
     if row is None:
         raise HTTPException(404)
+
+    if body.ml_challenger_pct is not None and not (0 <= body.ml_challenger_pct <= 100):
+        raise HTTPException(422, "ml_challenger_pct deve estar entre 0 e 100")
+
     for field, val in body.model_dump(exclude_none=True).items():
         setattr(row, field, val)
     row.updated_at = datetime.now(UTC)
@@ -647,6 +651,7 @@ async def create_tenant(
         ml_weight=0.4,
         network_weight=0.2,
         auto_case_threshold=0.75,
+        ml_challenger_pct=0,
         risk_band_low_threshold=0.35,
         risk_band_high_threshold=0.70,
         income_volume_ratio_threshold=1.5,

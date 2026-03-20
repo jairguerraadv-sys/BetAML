@@ -12,6 +12,44 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _try_get_request_id_from_context() -> str | None:
+    try:
+        import structlog  # type: ignore
+
+        ctx = structlog.contextvars.get_contextvars()
+        request_id = ctx.get("request_id")
+        if isinstance(request_id, str) and request_id:
+            return request_id
+    except Exception:
+        return None
+    return None
+
+
+def _try_bind_request_id(request_id: str | None) -> None:
+    try:
+        import structlog  # type: ignore
+
+        structlog.contextvars.clear_contextvars()
+        if request_id:
+            structlog.contextvars.bind_contextvars(request_id=request_id)
+    except Exception:
+        return
+
+
+def _request_id_from_kafka_headers(headers: list[tuple[str, bytes]] | None) -> str | None:
+    if not headers:
+        return None
+    for key, value in headers:
+        if key == "X-Request-ID":
+            try:
+                if isinstance(value, (bytes, bytearray)):
+                    decoded = value.decode("utf-8", errors="replace")
+                    return decoded or None
+            except Exception:
+                return None
+    return None
+
+
 # ──────────────────────────────────────────────────
 # Kafka Producer / Consumer wrappers
 # ──────────────────────────────────────────────────
@@ -45,10 +83,21 @@ class KafkaProducerClient:
         if self._producer:
             await self._producer.stop()
 
-    async def send(self, topic: str, value: dict[str, Any], key: str | None = None) -> None:
+    async def send(
+        self,
+        topic: str,
+        value: dict[str, Any],
+        key: str | None = None,
+        headers: list[tuple[str, bytes]] | None = None,
+    ) -> None:
         if not self._producer:
             raise RuntimeError("KafkaProducerClient não iniciado")
-        await self._producer.send_and_wait(topic, value=value, key=key)
+        effective_headers = headers
+        if effective_headers is None:
+            request_id = _try_get_request_id_from_context()
+            if request_id:
+                effective_headers = [("X-Request-ID", request_id.encode("utf-8"))]
+        await self._producer.send_and_wait(topic, value=value, key=key, headers=effective_headers)
 
 
 class KafkaConsumerClient:
@@ -91,8 +140,20 @@ class KafkaConsumerClient:
         if self._consumer:
             await self._consumer.stop()
 
+    async def _iter_messages(self):
+        if not self._consumer:
+            raise RuntimeError("KafkaConsumerClient não iniciado")
+        async for msg in self._consumer:
+            try:
+                request_id = _request_id_from_kafka_headers(getattr(msg, "headers", None))
+                _try_bind_request_id(request_id)
+            except Exception:
+                # best-effort correlation only
+                pass
+            yield msg
+
     def __aiter__(self):
-        return self._consumer.__aiter__()
+        return self._iter_messages()
 
 
 # ──────────────────────────────────────────────────

@@ -13,6 +13,7 @@ import {
 import { useTheme } from './ThemeProvider';
 import { useLocale } from '@/lib/i18n';
 import { logout as apiLogout } from '@/lib/api';
+import { useUser } from '@/contexts/UserContext';
 
 // ── Jornadas principais do analista ──────────────────────────────────────────
 const MAIN_NAV = [
@@ -75,19 +76,13 @@ export default function Sidebar() {
   const router   = useRouter();
   const { theme, toggle: toggleTheme } = useTheme();
   const [locale, setLocale] = useLocale();
-  const [role, setRole]         = useState<string>('analyst');
-  const [userName, setUserName] = useState<string>('');
   const [advOpen, setAdvOpen]   = useState(false);
+  const { user, setUser } = useUser();
+
+  const role = user?.role ?? 'analyst';
+  const userName = user?.username ?? user?.email ?? '';
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('betaml_user');
-      if (raw) {
-        const u = JSON.parse(raw);
-        setRole(u.role ?? 'analyst');
-        setUserName(u.username ?? u.email ?? '');
-      }
-    } catch {}
     // Auto-open advanced if on an advanced route
     if (ADV_NAV.some((n) => pathname.startsWith(n.href))) setAdvOpen(true);
   }, [pathname]);
@@ -96,7 +91,7 @@ export default function Sidebar() {
 
   async function logout() {
     await apiLogout();
-    localStorage.removeItem('betaml_user');
+    setUser(null);
     router.replace('/login');
   }
 

@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useUser } from '@/contexts/UserContext';
 
 export interface CurrentUser {
   id?: string;
@@ -9,12 +9,6 @@ export interface CurrentUser {
 }
 
 export function useCurrentUser(): CurrentUser | null {
-  const [user, setUser] = useState<CurrentUser | null>(null);
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem('betaml_user');
-      if (raw) setUser(JSON.parse(raw));
-    } catch {}
-  }, []);
-  return user;
+  const { user } = useUser();
+  return (user as CurrentUser | null) ?? null;
 }

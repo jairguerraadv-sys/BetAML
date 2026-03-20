@@ -112,6 +112,20 @@ probe_applied_version() {
     13)
       sql_bool "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='tenants' AND column_name='cnpj')"
       ;;
+    14)
+      sql_bool "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='idx_notifications_user_unread')"
+      ;;
+    15)
+      sql_bool "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='refresh_token_jti')"
+      ;;
+    16)
+      sql_bool "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scoring_configs' AND column_name='ml_challenger_pct')"
+      ;;
+    17)
+      # v17 remove o constraint legado players_status_check (que bloqueava status='ERASED').
+      # Considera aplicada quando o constraint NAO existe (idempotente).
+      sql_bool "SELECT CASE WHEN to_regclass('public.players') IS NULL THEN false ELSE NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='players_status_check') END"
+      ;;
     *)
       return 1
       ;;

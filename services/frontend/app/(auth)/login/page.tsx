@@ -2,9 +2,11 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { login } from '@/lib/api';
+import { useUser } from '@/contexts/UserContext';
 
 export default function LoginPage() {
   const router = useRouter();
+  const { refresh } = useUser();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError]       = useState('');
@@ -19,12 +21,8 @@ export default function LoginPage() {
       // O token NUNCA toca o localStorage — imune a XSS.
       await login(username, password);
 
-      // Carrega perfil autenticado e guarda metadados locais (sem token).
-      const meRes = await fetch('/api-proxy/me');
-      if (meRes.ok) {
-        const me = await meRes.json();
-        localStorage.setItem('betaml_user', JSON.stringify(me));
-      }
+      // Atualiza o contexto de usuário (sem persistir em localStorage).
+      await refresh();
 
       router.push('/dashboard');
     } catch {

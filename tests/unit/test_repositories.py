@@ -318,14 +318,14 @@ async def test_player_repo_get_by_id_found():
     from repositories.players import PlayerRepository
 
     player = MagicMock()
-    player.id = "p1"
+    player.id = "00000000-0000-0000-0000-000000000001"
     player.tenant_id = "t1"
 
     db = _make_session()
     db.get = AsyncMock(return_value=player)
 
     repo = PlayerRepository(db)
-    result = await repo.get_by_id("t1", "p1")
+    result = await repo.get_by_id("t1", "00000000-0000-0000-0000-000000000001")
 
     assert result is player
 
@@ -336,13 +336,13 @@ async def test_player_repo_get_by_id_wrong_tenant():
     from repositories.players import PlayerRepository
 
     player = MagicMock()
-    player.id = "p1"
+    player.id = "00000000-0000-0000-0000-000000000001"
     player.tenant_id = "t-other"
 
     db = _make_session()
     db.get = AsyncMock(return_value=player)
 
     repo = PlayerRepository(db)
-    result = await repo.get_by_id("t1", "p1")
+    result = await repo.get_by_id("t1", "00000000-0000-0000-0000-000000000001")
 
     assert result is None

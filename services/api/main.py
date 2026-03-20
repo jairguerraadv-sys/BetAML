@@ -220,30 +220,40 @@ async def _warm_feature_store_cache() -> None:
         import redis.asyncio as aioredis
 
         redis = aioredis.from_url(settings.redis_url, decode_responses=True)
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                text(
-                    """
-                    SELECT DISTINCT ON (tenant_id, player_id)
-                           tenant_id, player_id, feature_date, features, created_at
-                    FROM feature_snapshots
-                    ORDER BY tenant_id, player_id, feature_date DESC, created_at DESC
-                    """
-                )
-            )
-            rows = result.mappings().all()
-
         warmed = 0
-        for row in rows:
-            features = dict(row.get("features") or {})
-            if not features:
-                continue
-            features.setdefault("snapshot_date", str(row.get("feature_date")))
-            features.setdefault("warmed_from", "feature_snapshot")
-            key = f"betaml:{row['tenant_id']}:features:{row['player_id']}"
-            await redis.hset(key, mapping={k: str(v) for k, v in features.items()})
-            await redis.expire(key, 14400)
-            warmed += 1
+        async with AsyncSessionLocal() as db:
+            tenant_ids = list((await db.execute(select(Tenant.id))).scalars().all())
+            for tenant_id in tenant_ids:
+                # RLS: set tenant context before reading feature_snapshots.
+                try:
+                    await db.execute(text("SELECT set_config('app.current_tenant', :tid, false)"), {"tid": str(tenant_id)})
+                except Exception:
+                    pass
+
+                result = await db.execute(
+                    text(
+                        """
+                        SELECT DISTINCT ON (player_id)
+                               tenant_id, player_id, feature_date, features, created_at
+                        FROM feature_snapshots
+                        WHERE tenant_id = :tid
+                        ORDER BY player_id, feature_date DESC, created_at DESC
+                        """
+                    ),
+                    {"tid": str(tenant_id)},
+                )
+                rows = result.mappings().all()
+
+                for row in rows:
+                    features = dict(row.get("features") or {})
+                    if not features:
+                        continue
+                    features.setdefault("snapshot_date", str(row.get("feature_date")))
+                    features.setdefault("warmed_from", "feature_snapshot")
+                    key = f"betaml:{row['tenant_id']}:features:{row['player_id']}"
+                    await redis.hset(key, mapping={k: str(v) for k, v in features.items()})
+                    await redis.expire(key, 14400)
+                    warmed += 1
 
         await redis.aclose()
         logger.info("feature_store_cache_warmed", players=warmed)
@@ -444,6 +454,18 @@ async def _startup():
 
         scheduler = AsyncIOScheduler(timezone="UTC")
 
+        # ClickHouse Backfill (Features) — todo dia às 03:30 UTC
+        from jobs import clickhouse_backfill_features_daily
+        scheduler.add_job(
+            clickhouse_backfill_features_daily,
+            trigger="cron",
+            hour=3,
+            minute=30,
+            id="clickhouse_backfill_features_daily",
+            replace_existing=True,
+            misfire_grace_time=7200,
+        )
+
         # Risk Score Decay — todo dia às 04:00 UTC
         scheduler.add_job(
             calculate_risk_score_decay,
@@ -489,6 +511,18 @@ async def _startup():
             misfire_grace_time=3600,
         )
 
+        # Data Quality Alerting — todo dia às 06:30 UTC
+        from jobs import data_quality_alerting
+        scheduler.add_job(
+            data_quality_alerting,
+            trigger="cron",
+            hour=6,
+            minute=30,
+            id="data_quality_alerting",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
         # Data Retention Batch — toda semana domingo às 03:00 UTC
         from jobs import data_retention_batch
         scheduler.add_job(
@@ -514,7 +548,19 @@ async def _startup():
         )
 
         scheduler.start()
-        logger.info("scheduled_jobs_started", jobs=["risk_score_decay@04:00", "lgpd_data_expiration@05:00", "sla_violations_check@1h", "feature_population_stats@06:00", "data_retention_batch@sun03:00", "business_metrics_update@5min"])
+        logger.info(
+            "scheduled_jobs_started",
+            jobs=[
+                "clickhouse_backfill_features_daily@03:30",
+                "risk_score_decay@04:00",
+                "lgpd_data_expiration@05:00",
+                "sla_violations_check@1h",
+                "feature_population_stats@06:00",
+                "data_quality_alerting@06:30",
+                "data_retention_batch@sun03:00",
+                "business_metrics_update@5min",
+            ],
+        )
     except ImportError:
         logger.warning("apscheduler_not_installed", hint="pip install apscheduler")
     except Exception as exc:

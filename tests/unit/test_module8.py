@@ -136,6 +136,10 @@ async def test_ingest_principal_with_valid_api_key():
 
     api_key_obj = _make_api_key(tenant_id="t1", permissions=["ingest"])
     db = AsyncMock()
+    tenant = MagicMock()
+    tenant.active = True
+    tenant.settings = {}
+    db.get = AsyncMock(return_value=tenant)
 
     with patch("auth.validate_api_key", new=AsyncMock(return_value=api_key_obj)):
         principal = await get_ingest_principal(
@@ -143,6 +147,14 @@ async def test_ingest_principal_with_valid_api_key():
             x_api_key="btml_testhash",
             db=db,
         )
+
+    # RLS tenant context must be set on the active DB session.
+    assert db.execute.await_count >= 1
+    assert any(
+        "set_config('app.current_tenant'" in str(call.args[0])
+        for call in db.execute.await_args_list
+        if call.args
+    )
 
     assert principal.tenant_id == "t1"
     assert principal.id is None
@@ -156,6 +168,10 @@ async def test_ingest_principal_with_valid_jwt():
 
     user = _make_user(tenant_id="t2", role="AML_ANALYST")
     db = AsyncMock()
+    tenant = MagicMock()
+    tenant.active = True
+    tenant.settings = {}
+    db.get = AsyncMock(return_value=tenant)
 
     with patch("auth.get_current_user", new=AsyncMock(return_value=user)):
         principal = await get_ingest_principal(
@@ -164,9 +180,63 @@ async def test_ingest_principal_with_valid_jwt():
             db=db,
         )
 
+    # Defensive: also sets tenant context when called without middleware.
+    assert db.execute.await_count >= 1
+    assert any(
+        "set_config('app.current_tenant'" in str(call.args[0])
+        for call in db.execute.await_args_list
+        if call.args
+    )
+
     assert principal.tenant_id == "t2"
     assert principal.id == "user-123"
     assert principal.role == "AML_ANALYST"
+
+
+@pytest.mark.asyncio
+async def test_ingest_principal_api_key_paused_returns_503():
+    from fastapi import HTTPException
+    from auth import get_ingest_principal
+
+    api_key_obj = _make_api_key(tenant_id="t1", permissions=["ingest"])
+    db = AsyncMock()
+    tenant = MagicMock()
+    tenant.active = True
+    tenant.settings = {"ingest_paused": True}
+    db.get = AsyncMock(return_value=tenant)
+
+    with patch("auth.validate_api_key", new=AsyncMock(return_value=api_key_obj)):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_ingest_principal(
+                authorization=None,
+                x_api_key="btml_testhash",
+                db=db,
+            )
+
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_ingest_principal_jwt_paused_returns_503():
+    from fastapi import HTTPException
+    from auth import get_ingest_principal
+
+    user = _make_user(tenant_id="t2", role="AML_ANALYST")
+    db = AsyncMock()
+    tenant = MagicMock()
+    tenant.active = True
+    tenant.settings = {"ingest_paused": True}
+    db.get = AsyncMock(return_value=tenant)
+
+    with patch("auth.get_current_user", new=AsyncMock(return_value=user)):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_ingest_principal(
+                authorization="Bearer fake.jwt.token",
+                x_api_key=None,
+                db=db,
+            )
+
+    assert exc_info.value.status_code == 503
 
 
 @pytest.mark.asyncio

@@ -378,7 +378,7 @@ async def test_erase_player_data_zeros_extra_pii_fields():
     with patch("routers.players.write_audit", AsyncMock()), \
          patch("routers.players.encrypt_pii", return_value=b"ENCRYPTED"):
         await erase_player_data(
-            player_id="p1",
+            player_id="00000000-0000-0000-0000-000000000001",
             reason="LGPD request",
             db=db,
             current_user=_make_user(),

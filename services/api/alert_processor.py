@@ -132,6 +132,13 @@ async def _process_alert_event(payload: dict, Session: async_sessionmaker) -> No
         return
 
     async with Session() as db:
+        # RLS: set tenant context for this consumer session.
+        # Without this, FORCE RLS would hide tenant rows (player/scoring_config/etc.).
+        try:
+            await db.execute(text("SELECT set_config('app.current_tenant', :tid, false)"), {"tid": tenant_id})
+        except Exception:
+            pass
+
         # ── Configurações do tenant ──────────────────────────────────────────
         cfg = await _get_scoring_config(db, tenant_id)
 

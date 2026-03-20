@@ -5,7 +5,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jose import JWTError, jwt
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import (
@@ -46,8 +46,17 @@ class LoginRequest(BaseModel):
     tenant_slug: Optional[str] = None
 
 
+_AUTH_RATE_LIMIT_LOGIN = (
+    "1000/minute" if settings.environment in ("development", "test") else "10/minute"
+)
+
+_AUTH_RATE_LIMIT_REFRESH = (
+    "1000/minute" if settings.environment in ("development", "test") else "30/minute"
+)
+
+
 @router.post("/auth/login", response_model=TokenResponse)
-@limiter.limit("10/minute")
+@limiter.limit(_AUTH_RATE_LIMIT_LOGIN)
 async def login(
     request: Request,
     body: LoginRequest,
@@ -82,6 +91,14 @@ async def login(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
+
+    # Login/refresh não têm Authorization header ainda, então o middleware
+    # não consegue popular `current_tenant_id` para o get_db(). Para tabelas
+    # com RLS (ex: audit_logs), precisamos setar o tenant na própria sessão.
+    await db.execute(
+        text("SELECT set_config('app.current_tenant', :tid, false)"),
+        {"tid": str(user.tenant_id)},
+    )
 
     ip = str(request.client.host) if request.client else None
 
@@ -148,7 +165,7 @@ async def me(request: Request, current_user: User = Depends(get_current_user)):
 
 
 @router.post("/auth/refresh", response_model=TokenResponse)
-@limiter.limit("30/minute")
+@limiter.limit(_AUTH_RATE_LIMIT_REFRESH)
 async def refresh(
     request: Request,
     response: Response,
@@ -181,6 +198,12 @@ async def refresh(
     )
     if not user or user.refresh_token_jti != jti:
         raise HTTPException(status_code=401, detail="Refresh token revogado ou desatualizado")
+
+    # Refresh também é cookie-based e não carrega Bearer token; aplica RLS tenant na sessão.
+    await db.execute(
+        text("SELECT set_config('app.current_tenant', :tid, false)"),
+        {"tid": str(user.tenant_id)},
+    )
 
     new_access_token = create_access_token(
         {"sub": user.id, "tenant_id": user.tenant_id, "role": user.role}

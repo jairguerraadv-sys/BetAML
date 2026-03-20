@@ -48,9 +48,22 @@ async def alertmanager_webhook(request: Request) -> JSONResponse:
     """
     # ── Shared-secret guard (GAP-2) ──────────────────────────────────────────
     provided_secret = request.headers.get("X-Webhook-Secret", "")
-    if provided_secret != settings.internal_webhook_secret:
-        logger.warning("alertmanager_webhook_unauthorized", remote=request.client.host if request.client else "unknown")
-        raise HTTPException(status_code=403, detail="Forbidden")
+    if settings.environment not in ("development", "test"):
+        if provided_secret != settings.internal_webhook_secret:
+            logger.warning(
+                "alertmanager_webhook_unauthorized",
+                remote=request.client.host if request.client else "unknown",
+            )
+            raise HTTPException(status_code=403, detail="Forbidden")
+    else:
+        # Em dev/test, permite secret ausente (ambiente local/CI). Se enviado,
+        # ainda valida para evitar bypass acidental com valor incorreto.
+        if provided_secret and provided_secret != settings.internal_webhook_secret:
+            logger.warning(
+                "alertmanager_webhook_unauthorized",
+                remote=request.client.host if request.client else "unknown",
+            )
+            raise HTTPException(status_code=403, detail="Forbidden")
 
     try:
         body = await request.json()
