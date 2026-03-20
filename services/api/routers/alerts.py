@@ -1,5 +1,4 @@
 """routers/alerts.py — Listagem, detalhe, triage, close, link-to-case, SSE stream, labeling."""
-
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone

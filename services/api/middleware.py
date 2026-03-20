@@ -119,6 +119,8 @@ class MaintenanceModeMiddleware(BaseHTTPMiddleware):
             )
             tenant_id = payload.get("tenant_id")
         except JWTError:
+            # Best-effort fallback for unit tests/dev where the token may be
+            # signed with the default dev secret (see tests/unit/test_module7.py).
             if settings.environment in ("development", "test"):
                 try:
                     payload = _jwt.decode(

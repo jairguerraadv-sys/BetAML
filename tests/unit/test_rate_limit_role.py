@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
-
 from pathlib import Path
-
 from starlette.requests import Request as StarletteRequest
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")

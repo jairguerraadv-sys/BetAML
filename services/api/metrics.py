@@ -62,7 +62,6 @@ def observe_external_validation_request(provider: str, validation_type: str) -> 
 def observe_external_validation_result(provider: str, status: str) -> None:
     EXTERNAL_VALIDATION_RESULTS.labels(provider=provider, status=status).inc()
 
-
 async def update_business_metrics() -> None:
     """Update all business Prometheus gauges. Runs every 5 min via APScheduler."""
     try:

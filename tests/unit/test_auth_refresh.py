@@ -41,10 +41,11 @@ def _request_with_refresh_cookie(token: str) -> StarletteRequest:
 class TestRefreshTokenFlow:
     def test_create_refresh_token_contains_refresh_type_and_jti(self):
         from auth import create_refresh_token
+        from config import settings
         from jose import jwt
 
         token, jti = create_refresh_token({"sub": "u1", "tenant_id": "t1", "role": "ADMIN"})
-        payload = jwt.decode(token, os.environ["JWT_SECRET"], algorithms=["HS256"])
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
 
         assert payload["token_type"] == "refresh"
         assert payload["jti"] == jti

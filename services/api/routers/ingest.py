@@ -61,6 +61,10 @@ ALLOWED_SOURCE_SYSTEMS = frozenset(
 router = APIRouter(tags=["ingest"])
 
 
+def _optional_current_user() -> Any | None:
+    return None
+
+
 class IngestEventRequest(BaseModel):
     source_system: str
     entity_type: str
@@ -313,7 +317,7 @@ def _build_envelope(
 async def ingest_event(
     body: IngestEventRequest,
     principal: IngestPrincipal = Depends(get_ingest_principal),
-    current_user: Any | None = None,
+    current_user: Any | None = Depends(_optional_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     if not isinstance(principal, IngestPrincipal):
@@ -324,7 +328,6 @@ async def ingest_event(
             id=current_user.id,
             role=current_user.role,
         )
-
     max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=300)
     await redis_rate_limit(principal.tenant_id, "ingest.event", max_requests=max_requests)
 
@@ -361,7 +364,7 @@ async def ingest_event(
 async def ingest_batch(
     events: list[IngestEventRequest],
     principal: IngestPrincipal = Depends(get_ingest_principal),
-    current_user: Any | None = None,
+    current_user: Any | None = Depends(_optional_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     # require_roles("ADMIN", "AML_ANALYST") is enforced for JWT flows in get_ingest_principal.
@@ -373,7 +376,6 @@ async def ingest_batch(
             id=current_user.id,
             role=current_user.role,
         )
-
     max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=50)
     await redis_rate_limit(principal.tenant_id, "ingest.batch", max_requests=max_requests)
 

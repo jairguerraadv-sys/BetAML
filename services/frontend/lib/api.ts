@@ -779,7 +779,6 @@ export const fetchExternalValidationById = (requestId: string) =>
 
 export const retryExternalValidation = (requestId: string) =>
   api.post<{ status: string; request_id: string; retries_from: string }>(`/external-validation/${requestId}/retry`).then((r) => r.data);
-
 export const addCaseComment = (caseId: string, body: { content: string; mentions?: string[] }) =>
   api.post<{ id: string; created_at: string }>(`/cases/${caseId}/comments`, body).then((r) => r.data);
 

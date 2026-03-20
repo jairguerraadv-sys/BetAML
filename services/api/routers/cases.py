@@ -146,7 +146,6 @@ class CaseCommentIn(BaseModel):
 class CaseLinkAlertIn(BaseModel):
     alert_id: str
 
-
 def _suggest_analyst_narrative(case_obj: Case, alerts: list[Alert], player_info: dict) -> str:
     """Gera narrativa base para o analista revisar antes da decisão final."""
     severity_set = sorted({str(a.severity or "UNKNOWN") for a in alerts})
@@ -173,7 +172,6 @@ def _suggest_analyst_narrative(case_obj: Case, alerts: list[Alert], player_info:
         "consistência econômico-financeira e eventual padrão de structuring/round-tripping, "
         "com decisão final condicionada à validação documental complementar."
     )
-
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
