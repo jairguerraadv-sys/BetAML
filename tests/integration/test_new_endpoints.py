@@ -630,3 +630,133 @@ class TestPlayerLists:
                 "DELETE",
                 headers=_headers(admin_a_token),
             )
+
+
+# ── External Validation ───────────────────────────────────────────────────────
+
+
+@skip_unless_stack
+class TestExternalValidationEndpoints:
+    """Covers external validation request/latest/by-id/history/retry flows."""
+
+    def _first_player_id_for_tenant(self, token: str) -> str:
+        resp = api("/players", headers=_headers(token), params={"limit": 1})
+        assert resp.status_code == 200, (
+            f"Expected 200 from /players, got {resp.status_code}: {resp.text}"
+        )
+        data = resp.json()
+        assert isinstance(data, list) and data, "Expected at least one seeded player"
+        pid = data[0].get("id")
+        assert pid, f"No id in player payload: {data[0]}"
+        return pid
+
+    def test_external_validation_full_flow(self):
+        admin_token = _login("admin_a", "admin123")["access_token"]
+        player_id = self._first_player_id_for_tenant(admin_token)
+
+        # Create request
+        create_resp = api(
+            f"/players/{player_id}/external-validation",
+            "POST",
+            json={
+                "provider": "mock_identity",
+                "validation_type": "CPF_IDENTITY",
+                "payload": {"trigger": "integration_test"},
+            },
+            headers=_headers(admin_token),
+        )
+        assert create_resp.status_code == 201, (
+            f"Expected 201, got {create_resp.status_code}: {create_resp.text}"
+        )
+        req_id = create_resp.json().get("request_id")
+        assert req_id, f"request_id missing in response: {create_resp.json()}"
+
+        # Poll by id until terminal state (COMPLETED/FAILED)
+        import time
+
+        latest_payload = None
+        for _ in range(20):
+            by_id_resp = api(
+                f"/external-validation/{req_id}",
+                headers=_headers(admin_token),
+            )
+            assert by_id_resp.status_code == 200, (
+                f"Expected 200 by id, got {by_id_resp.status_code}: {by_id_resp.text}"
+            )
+            latest_payload = by_id_resp.json()
+            if latest_payload.get("status") in ("COMPLETED", "FAILED"):
+                break
+            time.sleep(0.2)
+
+        assert latest_payload is not None
+        assert latest_payload.get("status") in ("COMPLETED", "FAILED")
+
+        # Latest endpoint
+        latest_resp = api(
+            f"/players/{player_id}/external-validation/latest",
+            headers=_headers(admin_token),
+        )
+        assert latest_resp.status_code == 200, (
+            f"Expected 200 latest, got {latest_resp.status_code}: {latest_resp.text}"
+        )
+        assert latest_resp.json().get("request_id")
+
+        # History endpoint with filters
+        hist_resp = api(
+            f"/players/{player_id}/external-validation/history",
+            headers=_headers(admin_token),
+            params={"limit": 10, "offset": 0, "provider": "mock_identity"},
+        )
+        assert hist_resp.status_code == 200, (
+            f"Expected 200 history, got {hist_resp.status_code}: {hist_resp.text}"
+        )
+        hist = hist_resp.json()
+        assert isinstance(hist.get("items"), list)
+        assert "total" in hist
+
+    def test_external_validation_retry_non_failed_returns_400(self):
+        admin_token = _login("admin_a", "admin123")["access_token"]
+        player_id = self._first_player_id_for_tenant(admin_token)
+
+        create_resp = api(
+            f"/players/{player_id}/external-validation",
+            "POST",
+            json={"provider": "mock_identity", "validation_type": "CPF_IDENTITY", "payload": {}},
+            headers=_headers(admin_token),
+        )
+        assert create_resp.status_code == 201
+        req_id = create_resp.json().get("request_id")
+        assert req_id
+
+        # Retry immediately likely catches PENDING/IN_PROGRESS and must fail with 400
+        retry_resp = api(
+            f"/external-validation/{req_id}/retry",
+            "POST",
+            headers=_headers(admin_token),
+        )
+        assert retry_resp.status_code == 400, (
+            f"Expected 400 for retry non-failed, got {retry_resp.status_code}: {retry_resp.text}"
+        )
+
+    def test_external_validation_tenant_isolation_by_id(self):
+        admin_a = _login("admin_a", "admin123")["access_token"]
+        admin_b = _login("admin_b", "admin123")["access_token"]
+
+        player_id = self._first_player_id_for_tenant(admin_a)
+        create_resp = api(
+            f"/players/{player_id}/external-validation",
+            "POST",
+            json={"provider": "mock_identity", "validation_type": "CPF_IDENTITY", "payload": {}},
+            headers=_headers(admin_a),
+        )
+        assert create_resp.status_code == 201
+        req_id = create_resp.json().get("request_id")
+        assert req_id
+
+        by_id_resp_other_tenant = api(
+            f"/external-validation/{req_id}",
+            headers=_headers(admin_b),
+        )
+        assert by_id_resp_other_tenant.status_code == 404, (
+            f"Expected 404 cross-tenant, got {by_id_resp_other_tenant.status_code}: {by_id_resp_other_tenant.text}"
+        )

@@ -47,6 +47,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r services/api/requirements.txt
+          pip install -r requirements-dev.txt
 
       - name: Validate Alembic chain
         working-directory: services/api
@@ -74,6 +75,13 @@ jobs:
 
       - name: Validate legacy migration dry-run
         run: bash scripts/postgres_migrate_existing.sh --dry-run
+
+      - name: Run external validation integration smoke
+        env:
+          TEST_STACK_UP: "1"
+          API_URL: "http://localhost:8000"
+        run: |
+          pytest -q tests/integration/test_new_endpoints.py -k "TestExternalValidationEndpoints" --tb=short
 
       - name: Install Playwright deps
         working-directory: e2e

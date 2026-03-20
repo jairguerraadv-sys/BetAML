@@ -728,6 +728,58 @@ export const fetchPlayerNetwork = (playerId: string) =>
 export const fetchPlayerCaseAlertHistory = (playerId: string) =>
   api.get<CaseAlertHistory>(`/players/${playerId}/case-alert-history`).then((r) => r.data);
 
+export interface ExternalValidationResult {
+  request_id: string;
+  status: string;
+  response: Record<string, unknown>;
+  provider?: string;
+  requested_at?: string;
+  completed_at?: string;
+}
+
+export interface ExternalValidationHistoryItem {
+  request_id: string;
+  provider: string;
+  validation_type: string;
+  status: string;
+  requested_at?: string;
+  completed_at?: string;
+  error_message?: string | null;
+}
+
+export interface ExternalValidationHistory {
+  player_id: string;
+  limit: number;
+  offset: number;
+  total: number;
+  items: ExternalValidationHistoryItem[];
+}
+
+export const requestPlayerExternalValidation = (
+  playerId: string,
+  body: { provider?: string; validation_type?: string; payload?: Record<string, unknown> } = {},
+) =>
+  api.post<ExternalValidationResult>(`/players/${playerId}/external-validation`, body).then((r) => r.data);
+
+export const fetchLatestPlayerExternalValidation = (playerId: string) =>
+  api.get<ExternalValidationResult>(`/players/${playerId}/external-validation/latest`).then((r) => r.data);
+
+export const fetchPlayerExternalValidationHistory = (
+  playerId: string,
+  limit = 20,
+  offset = 0,
+  filters?: { status?: string; provider?: string },
+) =>
+  api.get<ExternalValidationHistory>(`/players/${playerId}/external-validation/history`, {
+    params: { limit, offset, ...(filters ?? {}) },
+  }).then((r) => r.data);
+
+export const fetchExternalValidationById = (requestId: string) =>
+  api.get<ExternalValidationResult>(`/external-validation/${requestId}`).then((r) => r.data);
+
+export const retryExternalValidation = (requestId: string) =>
+  api.post<{ status: string; request_id: string; retries_from: string }>(`/external-validation/${requestId}/retry`).then((r) => r.data);
+
 export const addCaseComment = (caseId: string, body: { content: string; mentions?: string[] }) =>
   api.post<{ id: string; created_at: string }>(`/cases/${caseId}/comments`, body).then((r) => r.data);
 

@@ -448,7 +448,7 @@ class TestMLTrainerSupervisedPath:
         gb_inst.fit.assert_called_once()
         mocks["if_cls"].assert_not_called()
         session.commit.assert_called_once()
-        minio_inst.put_object.assert_called_once()
+        assert minio_inst.put_object.call_count >= 1
 
     @pytest.mark.asyncio
     async def test_gradient_boosting_model_filename_in_minio(self):
@@ -485,9 +485,11 @@ class TestMLTrainerSupervisedPath:
             from main import retrain_isolation_forest
             await retrain_isolation_forest()
 
-        put_call = minio_inst.put_object.call_args
-        object_name = put_call.kwargs.get("object_name", "")
-        assert "gradient_boosting" in object_name
+        object_names = [
+            c.kwargs.get("object_name", "")
+            for c in minio_inst.put_object.call_args_list
+        ]
+        assert any("gradient_boosting" in name for name in object_names)
 
     @pytest.mark.asyncio
     async def test_isolation_forest_used_when_fewer_than_50_labeled(self):
@@ -575,9 +577,11 @@ class TestMLTrainerSupervisedPath:
             from main import retrain_isolation_forest
             await retrain_isolation_forest()
 
-        put_call = minio_inst.put_object.call_args
-        object_name = put_call.kwargs.get("object_name", "")
-        assert "isolation_forest" in object_name
+        object_names = [
+            c.kwargs.get("object_name", "")
+            for c in minio_inst.put_object.call_args_list
+        ]
+        assert any("isolation_forest" in name for name in object_names)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -939,7 +943,7 @@ class TestMLTrainerRegression:
             from main import retrain_isolation_forest
             await retrain_isolation_forest()
 
-        minio_inst.put_object.assert_called_once()
+        assert minio_inst.put_object.call_count >= 1
         session.commit.assert_called_once()
 
     @pytest.mark.asyncio

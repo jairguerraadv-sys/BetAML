@@ -18,7 +18,7 @@ from database import get_db
 from models import Alert, Case, CaseEvent, FinancialTransaction, Notification, Player, ReportPackage, ScoringConfig, Tenant, User
 from repositories import CaseRepository
 from repositories.cases import get_case_repo
-from utils import write_audit
+from utils import redis_rate_limit, write_audit
 
 logger = structlog.get_logger(__name__)
 
@@ -145,6 +145,34 @@ class CaseCommentIn(BaseModel):
 
 class CaseLinkAlertIn(BaseModel):
     alert_id: str
+
+
+def _suggest_analyst_narrative(case_obj: Case, alerts: list[Alert], player_info: dict) -> str:
+    """Gera narrativa base para o analista revisar antes da decisão final."""
+    severity_set = sorted({str(a.severity or "UNKNOWN") for a in alerts})
+    alert_types = sorted({str(a.alert_type or "RULE") for a in alerts})
+    total_alerts = len(alerts)
+    total_amount = 0.0
+    for a in alerts:
+        if isinstance(a.evidence, dict):
+            try:
+                total_amount += float(a.evidence.get("amount", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+
+    subject = player_info.get("external_player_id") or str(case_obj.player_id or "não identificado")
+    pep = "SIM" if player_info.get("pep_flag") else "NÃO"
+
+    return (
+        f"No período analisado, foram identificados {total_alerts} alerta(s) para o jogador {subject}, "
+        f"com severidades observadas: {', '.join(severity_set) if severity_set else 'N/A'} e "
+        f"tipologias: {', '.join(alert_types) if alert_types else 'N/A'}. "
+        f"A soma aproximada dos valores associados aos alertas é de R$ {total_amount:,.2f}. "
+        f"Indicativo PEP: {pep}. "
+        "A recomendação preliminar é aprofundar diligências sobre origem/destino de recursos, "
+        "consistência econômico-financeira e eventual padrão de structuring/round-tripping, "
+        "com decisão final condicionada à validação documental complementar."
+    )
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -447,10 +475,43 @@ async def generate_report_package(
     }
 
 
+@router.get("/cases/{case_id}/report-package/narrative-suggest")
+async def suggest_report_narrative(
+    case_id: str,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sugere narrativa inicial para o analista revisar no ReportPackage."""
+    c = await db.get(Case, case_id)
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Caso não encontrado")
+
+    alerts = (await db.execute(select(Alert).where(Alert.case_id == case_id))).scalars().all()
+
+    player_info: dict = {}
+    if c.player_id is not None:
+        p = await db.get(Player, c.player_id)
+        if p:
+            player_info = {
+                "player_id": p.id,
+                "external_player_id": p.external_player_id,
+                "pep_flag": p.pep_flag,
+                "risk_score": float(p.risk_score),  # type: ignore[arg-type]
+            }
+
+    narrative = _suggest_analyst_narrative(c, alerts, player_info)
+    return {
+        "case_id": case_id,
+        "suggested_narrative": narrative,
+        "alerts_considered": len(alerts),
+        "player": player_info,
+    }
+
+
 @router.post("/cases/{case_id}/report-package/submit")
 async def submit_report_package(
     case_id: str,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_roles("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -469,6 +530,8 @@ async def submit_report_package(
     Returns:
         JSON com status da submissão e identificador de rastreamento.
     """
+    await redis_rate_limit(str(current_user.tenant_id), "cases.report.submit", max_requests=10)
+
     c = await db.get(Case, case_id)
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
@@ -489,6 +552,14 @@ async def submit_report_package(
             400,
             "Nenhum ReportPackage encontrado para este caso. "
             "Gere primeiro com POST /cases/{id}/report-package."
+        )
+
+    # Maker-checker: quem gera o ReportPackage não pode submetê-lo.
+    if rp.created_by and str(rp.created_by) == str(current_user.id):
+        raise HTTPException(
+            403,
+            "Maker-checker: o usuário que gerou o ReportPackage não pode submetê-lo. "
+            "A submissão deve ser feita por outro usuário com perfil ADMIN."
         )
 
     payload_decision = (rp.payload or {}).get("decision", "PENDING") if isinstance(rp.payload, dict) else "PENDING"

@@ -107,10 +107,33 @@ class RedisClient:
 
     def __init__(self, url: str | None = None):
         self._url = url or os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        self._mode = os.getenv("REDIS_MODE", "standalone").strip().lower()
+        self._cluster_nodes = os.getenv("REDIS_CLUSTER_NODES", "")
         self._redis: Any = None
 
     async def connect(self) -> None:
         import redis.asyncio as aioredis  # type: ignore
+
+        if self._mode == "cluster":
+            from redis.asyncio.cluster import RedisCluster  # type: ignore
+
+            nodes = [n.strip() for n in self._cluster_nodes.split(",") if n.strip()]
+            if not nodes:
+                raise RuntimeError(
+                    "REDIS_MODE=cluster exige REDIS_CLUSTER_NODES com host:port (separado por vírgula)"
+                )
+
+            startup_nodes: list[dict[str, str | int]] = []
+            for node in nodes:
+                host, sep, port = node.partition(":")
+                if not host or not sep or not port.isdigit():
+                    raise RuntimeError(f"REDIS_CLUSTER_NODES inválido: '{node}' (esperado host:port)")
+                startup_nodes.append({"host": host, "port": int(port)})
+
+            self._redis = RedisCluster(startup_nodes=startup_nodes, decode_responses=True)
+            await self._redis.initialize()
+            logger.info("Redis Cluster conectado em %s", nodes)
+            return
 
         self._redis = aioredis.from_url(self._url, decode_responses=True)
         await self._redis.ping()
