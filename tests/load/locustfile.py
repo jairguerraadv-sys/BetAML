@@ -2,20 +2,20 @@
 tests/load/locustfile.py
 Locust load-test scenarios for BetAML API.
 
-Run (batch ingest throughput target — 1 000 events/s):
+Run (batch ingest throughput target — 10 000 events/s por 5min):
     locust -f tests/load/locustfile.py \
         --host http://localhost:8000 \
-        --users 100 --spawn-rate 10 \
-        --headless --run-time 60s \
+        --users 200 --spawn-rate 50 \
+        --headless --run-time 300s \
         --csv /tmp/betaml_load_results \
         --only-summary
 
 Run (full mixed load):
     locust -f tests/load/locustfile.py --host http://localhost:8000 --users 50 --spawn-rate 5
 
-Throughput target: POST /ingest/batch @ ≥1 000 events/second
-  With 100 BatchIngestUser workers, each posting 10 events with wait_time=0,
-  requests/s ≈ 100 × (events_per_batch / avg_response_s).
+Throughput target: POST /ingest/batch @ ≥10 000 events/second por 5 minutos
+    With 200 BatchIngestUser workers, each posting 10 events with wait_time=0,
+    events/s ≈ users × BATCH_SIZE / avg_latency_s.
   Tune --users and BATCH_SIZE to hit target for your hardware.
 
 Scenarios:

@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 import structlog
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -51,14 +52,16 @@ async def stop_producer():
 async def write_audit(
     db: AsyncSession,
     tenant_id: Any,
-    user_id: Any,
-    action: str,
-    entity_type: str,
+    user_id: Any = None,
+    action: str | None = None,
+    entity_type: str | None = None,
     entity_id: Any = None,
     before: Optional[dict] = None,
     after: Optional[dict] = None,
     ip: Optional[str] = None,
     pii_accessed: Optional[str] = None,
+    *,
+    actor_id: Any = None,
 ) -> None:
     """
     Persiste um registro de AuditLog. Faz flush mas não commit.
@@ -69,6 +72,25 @@ async def write_audit(
                      Exigido para LGPD Art. 37 (auditoria de acesso a dados pessoais).
     """
     from models import AuditLog  # importação local para evitar circular
+
+    if action is None or entity_type is None:
+        raise ValueError("write_audit requer 'action' e 'entity_type'")
+
+    # Backward-compat: alguns routers usam `actor_id=` (mesma coisa que `user_id`).
+    if user_id is None and actor_id is not None:
+        user_id = actor_id
+
+    # RLS/tenant isolation: garante que a sessão do Postgres está com o tenant
+    # correto antes do INSERT no audit_logs. Best-effort para não quebrar testes
+    # unitários com SQLite/mocks.
+    try:
+        if tenant_id is not None:
+            await db.execute(
+                text("SELECT set_config('app.current_tenant', :tid, false)"),
+                {"tid": str(tenant_id)},
+            )
+    except Exception:
+        pass
 
     # Se PII foi acessado, registra explicitamente
     if pii_accessed:

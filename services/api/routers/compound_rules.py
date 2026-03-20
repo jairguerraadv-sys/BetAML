@@ -42,7 +42,22 @@ async def list_compound_rules(
     result = await db.execute(
         select(CompoundRule).where(CompoundRule.tenant_id == current_user.tenant_id)
     )
-    return result.scalars().all()
+    rules = result.scalars().all()
+    # Defensive normalization: older rows or manual inserts may have null JSON fields.
+    return [
+        {
+            "id": str(r.id),
+            "tenant_id": str(r.tenant_id),
+            "name": r.name,
+            "logic": r.logic,
+            "component_rule_ids": (r.component_rule_ids or []),
+            "score_weights": (r.score_weights or {}),
+            "min_score_threshold": float(r.min_score_threshold) if r.min_score_threshold is not None else None,
+            "is_active": bool(getattr(r, "is_active", True)),
+            "created_at": r.created_at,
+        }
+        for r in rules
+    ]
 
 
 @router.post("/rules/compound", status_code=201, response_model=CompoundRuleOut)
@@ -56,8 +71,8 @@ async def create_compound_rule(
         tenant_id=current_user.tenant_id,
         name=body.name,
         logic=body.logic,
-        component_rule_ids=body.component_rule_ids,
-        score_weights=body.score_weights,
+        component_rule_ids=body.component_rule_ids or [],
+        score_weights=body.score_weights or {},
         min_score_threshold=body.min_score_threshold,
         is_active=True,
     )

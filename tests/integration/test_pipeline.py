@@ -49,6 +49,18 @@ def _headers(token: str) -> dict:
 
 
 def _load_api_main():
+    # Cachea o módulo para evitar re-registro de métricas Prometheus
+    # (CollectorRegistry é global no processo de testes).
+    global _API_MAIN_SINGLETON
+    if _API_MAIN_SINGLETON is not None:
+        return _API_MAIN_SINGLETON
+
+    # Quando importamos main.py fora do container, precisamos forçar URLs
+    # para localhost (os hostnames internos do docker network não resolvem).
+    os.environ.setdefault("DATABASE_URL", POSTGRES_DSN)
+    os.environ.setdefault("REDIS_URL", REDIS_URL)
+    os.environ.setdefault("ENVIRONMENT", "test")
+
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     api_dir = os.path.join(root, "services", "api")
     libs_dir = os.path.join(root, "libs")
@@ -72,7 +84,11 @@ def _load_api_main():
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
+    _API_MAIN_SINGLETON = module
     return module
+
+
+_API_MAIN_SINGLETON = None
 
 
 async def _pg_execute(statement: str, *args):
@@ -933,10 +949,22 @@ def test_create_and_revoke_api_key(headers_a):
     create_resp = api("/admin/api-keys", "POST", headers=headers_a, json={"name": "test-key-integration"})
     if create_resp.status_code not in (200, 201):
         pytest.skip("Criação de API key não suportada ou sem permissão")
-    key_id = create_resp.json()["id"]
+    body = create_resp.json()
+    key_id = body["id"]
+    raw_key = body.get("raw_key")
+    assert raw_key, f"Resposta sem raw_key: {body}"
+
+    # API key deve conseguir chamar ingest sem Bearer JWT.
+    ingest_headers = {"X-API-Key": raw_key}
+    ingest_resp = api("/ingest/event", "POST", headers=ingest_headers, json=_make_txn_event())
+    assert ingest_resp.status_code == 202, ingest_resp.text
 
     revoke_resp = api(f"/admin/api-keys/{key_id}", "DELETE", headers=headers_a)
     assert revoke_resp.status_code in (200, 204)
+
+    # Após revogação, ingest com a mesma chave deve falhar.
+    ingest_resp2 = api("/ingest/event", "POST", headers=ingest_headers, json=_make_txn_event())
+    assert ingest_resp2.status_code in (401, 403)
 
 
 # ── End-to-end pipeline smoke test ────────────────────────────────────────────

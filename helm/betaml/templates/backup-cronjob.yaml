@@ -1,0 +1,93 @@
+{{- if .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "betaml.fullname" . }}-backup
+  labels:
+    {{- include "betaml.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "betaml.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: OnFailure
+          volumes:
+            - name: backup-work
+              emptyDir: {}
+          containers:
+            - name: pgdump
+              image: "{{ .Values.backup.pgDumpImage.repository }}:{{ .Values.backup.pgDumpImage.tag }}"
+              imagePullPolicy: {{ .Values.backup.pgDumpImage.pullPolicy }}
+              envFrom:
+                - configMapRef:
+                    name: {{ include "betaml.fullname" . }}-config
+                - secretRef:
+                    name: {{ .Values.api.existingSecret }}
+              volumeMounts:
+                - name: backup-work
+                  mountPath: /work
+              command: ["/bin/sh","-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  TS="$(date -u +%Y%m%dT%H%M%SZ)"
+                  echo "[backup] starting pg_dump at ${TS}"
+                  : "${DATABASE_URL:?DATABASE_URL must be set}"
+                  pg_dump --no-owner --no-acl "${DATABASE_URL}" | gzip -c > "/work/postgres_${TS}.sql.gz"
+                  echo "[backup] pg_dump completed: /work/postgres_${TS}.sql.gz"
+            - name: minio-upload
+              image: "{{ .Values.backup.mcImage.repository }}:{{ .Values.backup.mcImage.tag }}"
+              imagePullPolicy: {{ .Values.backup.mcImage.pullPolicy }}
+              envFrom:
+                - configMapRef:
+                    name: {{ include "betaml.fullname" . }}-config
+                - secretRef:
+                    name: {{ .Values.api.existingSecret }}
+              env:
+                - name: BACKUP_BUCKET
+                  value: {{ .Values.backup.bucket | quote }}
+              volumeMounts:
+                - name: backup-work
+                  mountPath: /work
+              command: ["/bin/sh","-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  TS="$(ls -1 /work/postgres_*.sql.gz | sed -e 's/.*postgres_//' -e 's/\.sql\.gz//' | head -n 1)"
+                  if [ -z "${TS}" ]; then
+                    echo "[backup] no pgdump file found" >&2
+                    exit 1
+                  fi
+
+                  MINIO_URL="${MINIO_ENDPOINT}"
+                  case "${MINIO_URL}" in
+                    http://*|https://*) ;;
+                    *) MINIO_URL="http://${MINIO_URL}" ;;
+                  esac
+
+                  : "${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}"
+                  : "${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set}"
+                  : "${MINIO_BUCKET:?MINIO_BUCKET must be set}"
+                  : "${BACKUP_BUCKET:?BACKUP_BUCKET must be set}"
+
+                  mc alias set src "${MINIO_URL}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}"
+                  mc mb --ignore-existing "src/${BACKUP_BUCKET}"
+
+                  echo "[backup] uploading postgres dump"
+                  mc cp "/work/postgres_${TS}.sql.gz" "src/${BACKUP_BUCKET}/postgres/postgres_${TS}.sql.gz"
+
+                  echo "[backup] mirroring model artifacts bucket"
+                  mc mirror --overwrite "src/${MINIO_BUCKET}" "src/${BACKUP_BUCKET}/minio/${TS}" || true
+
+                  echo "[backup] done"
+{{- end }}

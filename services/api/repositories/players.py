@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from uuid import UUID
 
 from fastapi import Depends
 from sqlalchemy import select
@@ -16,11 +17,23 @@ class PlayerRepository:
         self.db = db
 
     async def get_by_id(self, tenant_id: str, player_id: str) -> Optional[Player]:
-        """Retorna player por id, validando tenant. None se não encontrado."""
-        p = await self.db.get(Player, player_id)
-        if not p or p.tenant_id != tenant_id:
-            return None
-        return p
+        """Retorna player por id (UUID interno) OU external_player_id, validando tenant."""
+        try:
+            UUID(str(player_id))
+            is_uuid = True
+        except Exception:
+            is_uuid = False
+
+        # Se parece UUID, trate como PK interna (não faz fallback), evitando
+        # leaks cross-tenant e ambiguidades quando external IDs coincidem.
+        if is_uuid:
+            p = await self.db.get(Player, player_id)
+            if not p or p.tenant_id != tenant_id:
+                return None
+            return p
+
+        # Caso contrário, trate como external_player_id.
+        return await self.get_by_external_id(tenant_id, player_id)
 
     async def list_active(
         self,

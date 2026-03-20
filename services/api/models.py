@@ -456,6 +456,7 @@ class ScoringConfig(Base):
     sla_medium_hours                = Column(Integer, nullable=False, default=72)
     sla_low_hours                   = Column(Integer, nullable=False, default=168)
     ingest_rate_limit_tpm           = Column(Integer, nullable=False, default=1000)
+    ml_challenger_pct               = Column(Integer, nullable=False, default=0)
     data_retention_raw_years        = Column(Integer, nullable=False, default=5)
     data_retention_silver_years     = Column(Integer, nullable=False, default=5)
     data_retention_gold_years       = Column(Integer, nullable=False, default=3)

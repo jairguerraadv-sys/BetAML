@@ -9,11 +9,12 @@ from __future__ import annotations
 import hashlib
 import json
 import statistics as _statistics
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import structlog
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, text, func
 
 from config import settings
 from database import AsyncSessionLocal
@@ -22,26 +23,50 @@ from models import Alert, AuditLog, Case, FeatureSnapshot, Notification, Player,
 logger = structlog.get_logger(__name__)
 
 
+async def _set_db_tenant_context(db, tenant_id: object) -> None:
+    """Set Postgres session variable used by RLS policies (best-effort)."""
+    try:
+        await db.execute(
+            text("SELECT set_config('app.current_tenant', :tid, false)"),
+            {"tid": str(tenant_id)},
+        )
+    except Exception:
+        return
+
+
 async def _notify_admins_job_failure(job_name: str, error: str) -> None:
     """Create an in-app Notification for every ADMIN user when a scheduled job fails."""
     try:
         async with AsyncSessionLocal() as db:
-            admins = (
-                await db.execute(
-                    select(User).where(User.role == "ADMIN", User.active.is_(True))
-                )
+            tenants = (
+                await db.execute(select(Tenant).where(Tenant.active.is_(True)))
             ).scalars().all()
-            for admin in admins:
-                db.add(Notification(
-                    tenant_id=admin.tenant_id,
-                    user_id=admin.id,
-                    type="JOB_FAILURE",
-                    title=f"Falha no job agendado: {job_name}",
-                    body=f"Erro: {error[:500]}",
-                    reference_type="Job",
-                    reference_id=job_name,
-                ))
-            await db.commit()
+
+            for tenant in tenants:
+                await _set_db_tenant_context(db, tenant.id)
+                admins = (
+                    await db.execute(
+                        select(User).where(
+                            User.tenant_id == tenant.id,
+                            User.role == "ADMIN",
+                            User.active.is_(True),
+                        )
+                    )
+                ).scalars().all()
+                for admin in admins:
+                    db.add(
+                        Notification(
+                            tenant_id=admin.tenant_id,
+                            user_id=admin.id,
+                            type="JOB_FAILURE",
+                            title=f"Falha no job agendado: {job_name}",
+                            body=f"Erro: {error[:500]}",
+                            reference_type="Job",
+                            reference_id=job_name,
+                        )
+                    )
+                if admins:
+                    await db.commit()
     except Exception as notify_exc:
         logger.error("job_failure_notification_error", job=job_name, error=str(notify_exc))
 
@@ -67,6 +92,7 @@ async def calculate_risk_score_decay() -> None:
             tenants = (await db.execute(select(Tenant).where(Tenant.active.is_(True)))).scalars().all()
 
             for tenant in tenants:
+                await _set_db_tenant_context(db, tenant.id)
                 # Buscar ScoringConfig para pesos
                 scoring_cfg = (
                     await db.execute(
@@ -171,6 +197,7 @@ async def cleanup_expired_player_data() -> None:
             tenants = (await db.execute(select(Tenant).where(Tenant.active.is_(True)))).scalars().all()
 
             for tenant in tenants:
+                await _set_db_tenant_context(db, tenant.id)
                 scoring_cfg = (
                     await db.execute(
                         select(ScoringConfig).where(ScoringConfig.tenant_id == tenant.id).limit(1)
@@ -252,137 +279,160 @@ async def check_sla_violations() -> None:
         async with AsyncSessionLocal() as db:
             now = datetime.now(UTC)
 
-            # Buscar cases vencidos não-terminais
-            stmt = select(Case).where(
-                Case.sla_due_at < now,
-                Case.status.in_(["OPEN", "INVESTIGATING", "PENDING_REVIEW"]),
-            )
-            overdue_cases = (await db.execute(stmt)).scalars().all()
+            tenants = (await db.execute(select(Tenant).where(Tenant.active.is_(True)))).scalars().all()
 
-            if not overdue_cases:
-                return
+            total_overdue = 0
+            total_warn = 0
 
-            logger.info("sla_violations_found", count=len(overdue_cases))
+            for tenant in tenants:
+                await _set_db_tenant_context(db, tenant.id)
 
-            for case in overdue_cases:
-                # Notificar assignee (se existir)
-                notif_user_ids = set()
-                if case.assigned_to:
-                    notif_user_ids.add(case.assigned_to)
-
-                # Notificar todos os ADMINs do tenant
-                admins = (await db.execute(
-                    select(User).where(
-                        User.tenant_id == case.tenant_id,
-                        User.role.in_(["ADMIN", "AML_ANALYST"]),
-                        User.active.is_(True),
-                    )
-                )).scalars().all()
-                for adm in admins:
-                    notif_user_ids.add(adm.id)
-
-                hours_overdue = int((now - case.sla_due_at).total_seconds() // 3600)
-
-                for uid in notif_user_ids:
-                    # Evita duplicatas: checa notificação recente (últimas 2h)
-                    recent_cutoff = now - timedelta(hours=2)
-                    existing = (await db.execute(
-                        select(Notification).where(
-                            Notification.tenant_id == case.tenant_id,
-                            Notification.user_id == uid,
-                            Notification.reference_type == "Case",
-                            Notification.reference_id == str(case.id),
-                            Notification.type == "SLA_VIOLATION",
-                            Notification.created_at >= recent_cutoff,
-                        )
-                    )).scalar_one_or_none()
-
-                    if existing:
-                        continue  # já notificado recentemente
-
-                    db.add(Notification(
-                        tenant_id=case.tenant_id,
-                        user_id=uid,
-                        type="SLA_VIOLATION",
-                        title=f"⚠️ SLA Vencido: {case.title or case.id}",
-                        body=(
-                            f"Case #{getattr(case, 'reference_number', case.id)} está "
-                            f"{hours_overdue}h em atraso. Status: {case.status}. "
-                            f"Ação imediata necessária."
-                        ),
-                        reference_type="Case",
-                        reference_id=str(case.id),
-                    ))
-
-                # Audit log
-                db.add(AuditLog(
-                    tenant_id=case.tenant_id,
-                    user_id=None,
-                    action="SLA_VIOLATED",
-                    entity_type="Case",
-                    entity_id=str(case.id),
-                    after={
-                        "sla_due_at": case.sla_due_at.isoformat(),
-                        "hours_overdue": hours_overdue,
-                        "status": case.status,
-                    },
-                ))
-
-            await db.commit()
-            logger.info("sla_violations_processed", cases=len(overdue_cases))
-
-            # ── SLA_WARNING: cases approaching deadline within 2 hours ──────────
-            warn_horizon = now + timedelta(hours=2)
-            approaching = (await db.execute(
-                select(Case).where(
-                    Case.sla_due_at > now,
-                    Case.sla_due_at <= warn_horizon,
+                # Buscar cases vencidos não-terminais (por tenant)
+                stmt = select(Case).where(
+                    Case.tenant_id == tenant.id,
+                    Case.sla_due_at < now,
                     Case.status.in_(["OPEN", "INVESTIGATING", "PENDING_REVIEW"]),
                 )
-            )).scalars().all()
+                overdue_cases = (await db.execute(stmt)).scalars().all()
+                if overdue_cases:
+                    total_overdue += len(overdue_cases)
 
-            for case in approaching:
-                minutes_left = int((case.sla_due_at - now).total_seconds() // 60)
-                notif_user_ids: set = set()
-                if case.assigned_to:
-                    notif_user_ids.add(case.assigned_to)
-                warn_admins = (await db.execute(
-                    select(User).where(
-                        User.tenant_id == case.tenant_id,
-                        User.role.in_(["ADMIN", "AML_ANALYST"]),
-                        User.active.is_(True),
-                    )
-                )).scalars().all()
-                for adm in warn_admins:
-                    notif_user_ids.add(adm.id)
+                for case in overdue_cases:
+                    notif_user_ids = set()
+                    if case.assigned_to:
+                        notif_user_ids.add(case.assigned_to)
 
-                for uid in notif_user_ids:
-                    warn_cutoff = now - timedelta(hours=1)
-                    existing_warn = (await db.execute(
-                        select(Notification).where(
-                            Notification.tenant_id == case.tenant_id,
-                            Notification.user_id == uid,
-                            Notification.reference_type == "Case",
-                            Notification.reference_id == str(case.id),
-                            Notification.type == "SLA_WARNING",
-                            Notification.created_at >= warn_cutoff,
+                    admins = (
+                        await db.execute(
+                            select(User).where(
+                                User.tenant_id == case.tenant_id,
+                                User.role.in_(["ADMIN", "AML_ANALYST"]),
+                                User.active.is_(True),
+                            )
                         )
-                    )).scalar_one_or_none()
-                    if existing_warn:
-                        continue
-                    db.add(Notification(
-                        tenant_id=case.tenant_id,
-                        user_id=uid,
-                        type="SLA_WARNING",
-                        title=f"SLA a vencer: {case.title or case.id}",
-                        body=f"Caso vence em {minutes_left} minutos. Status atual: {case.status}.",
-                        reference_type="Case",
-                        reference_id=str(case.id),
-                    ))
+                    ).scalars().all()
+                    for adm in admins:
+                        notif_user_ids.add(adm.id)
 
-            if approaching:
-                await db.commit()
-                logger.info("sla_warnings_sent", cases=len(approaching))
+                    hours_overdue = int((now - case.sla_due_at).total_seconds() // 3600)
+
+                    for uid in notif_user_ids:
+                        recent_cutoff = now - timedelta(hours=2)
+                        existing = (
+                            await db.execute(
+                                select(Notification).where(
+                                    Notification.tenant_id == case.tenant_id,
+                                    Notification.user_id == uid,
+                                    Notification.reference_type == "Case",
+                                    Notification.reference_id == str(case.id),
+                                    Notification.type == "SLA_VIOLATION",
+                                    Notification.created_at >= recent_cutoff,
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if existing:
+                            continue
+                        db.add(
+                            Notification(
+                                tenant_id=case.tenant_id,
+                                user_id=uid,
+                                type="SLA_VIOLATION",
+                                title=f"⚠️ SLA Vencido: {case.title or case.id}",
+                                body=(
+                                    f"Case #{getattr(case, 'reference_number', case.id)} está "
+                                    f"{hours_overdue}h em atraso. Status: {case.status}. "
+                                    f"Ação imediata necessária."
+                                ),
+                                reference_type="Case",
+                                reference_id=str(case.id),
+                            )
+                        )
+
+                    db.add(
+                        AuditLog(
+                            tenant_id=case.tenant_id,
+                            user_id=None,
+                            action="SLA_VIOLATED",
+                            entity_type="Case",
+                            entity_id=str(case.id),
+                            after={
+                                "sla_due_at": case.sla_due_at.isoformat(),
+                                "hours_overdue": hours_overdue,
+                                "status": case.status,
+                            },
+                        )
+                    )
+
+                if overdue_cases:
+                    await db.commit()
+
+                # ── SLA_WARNING: approaching within 2 hours (por tenant) ─────
+                warn_horizon = now + timedelta(hours=2)
+                approaching = (
+                    await db.execute(
+                        select(Case).where(
+                            Case.tenant_id == tenant.id,
+                            Case.sla_due_at > now,
+                            Case.sla_due_at <= warn_horizon,
+                            Case.status.in_(["OPEN", "INVESTIGATING", "PENDING_REVIEW"]),
+                        )
+                    )
+                ).scalars().all()
+                if approaching:
+                    total_warn += len(approaching)
+
+                for case in approaching:
+                    minutes_left = int((case.sla_due_at - now).total_seconds() // 60)
+                    notif_user_ids: set = set()
+                    if case.assigned_to:
+                        notif_user_ids.add(case.assigned_to)
+                    warn_admins = (
+                        await db.execute(
+                            select(User).where(
+                                User.tenant_id == case.tenant_id,
+                                User.role.in_(["ADMIN", "AML_ANALYST"]),
+                                User.active.is_(True),
+                            )
+                        )
+                    ).scalars().all()
+                    for adm in warn_admins:
+                        notif_user_ids.add(adm.id)
+
+                    for uid in notif_user_ids:
+                        warn_cutoff = now - timedelta(hours=1)
+                        existing_warn = (
+                            await db.execute(
+                                select(Notification).where(
+                                    Notification.tenant_id == case.tenant_id,
+                                    Notification.user_id == uid,
+                                    Notification.reference_type == "Case",
+                                    Notification.reference_id == str(case.id),
+                                    Notification.type == "SLA_WARNING",
+                                    Notification.created_at >= warn_cutoff,
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if existing_warn:
+                            continue
+                        db.add(
+                            Notification(
+                                tenant_id=case.tenant_id,
+                                user_id=uid,
+                                type="SLA_WARNING",
+                                title=f"SLA a vencer: {case.title or case.id}",
+                                body=f"Caso vence em {minutes_left} minutos. Status atual: {case.status}.",
+                                reference_type="Case",
+                                reference_id=str(case.id),
+                            )
+                        )
+
+                if approaching:
+                    await db.commit()
+
+            if total_overdue:
+                logger.info("sla_violations_processed", cases=total_overdue)
+            if total_warn:
+                logger.info("sla_warnings_sent", cases=total_warn)
 
     except Exception as exc:
         logger.error("check_sla_violations_failed", error=str(exc))
@@ -419,6 +469,7 @@ async def compute_feature_population_stats() -> None:
                 since = datetime.now(UTC) - timedelta(days=30)
 
                 for tenant in tenants:
+                    await _set_db_tenant_context(db, tenant.id)
                     snapshots = (
                         await db.execute(
                             select(FeatureSnapshot).where(
@@ -492,6 +543,308 @@ async def compute_feature_population_stats() -> None:
         await _notify_admins_job_failure("compute_feature_population_stats", str(exc))
 
 
+async def clickhouse_backfill_features_daily() -> None:
+    """Backfill diário do ClickHouse (Gold) a partir do Postgres.
+
+    Copia `feature_snapshots` do dia anterior (UTC) para `betaml.player_features_daily`.
+    A tabela em ClickHouse é ReplacingMergeTree(computed_at); inserir novamente o mesmo
+    dia é seguro, e `FINAL` no reader garante deduplicação imediata.
+    """
+    try:
+        from libs.clients import ClickHouseClient
+
+        target_date = (datetime.now(UTC).date() - timedelta(days=1))
+        ch = ClickHouseClient(
+            host=settings.clickhouse_host,
+            port=settings.clickhouse_port,
+            database=settings.clickhouse_db,
+        )
+
+        async with AsyncSessionLocal() as db:
+            tenants = (
+                await db.execute(select(Tenant).where(Tenant.active.is_(True)))
+            ).scalars().all()
+
+            total_rows = 0
+            for tenant in tenants:
+                await _set_db_tenant_context(db, tenant.id)
+
+                snaps = (
+                    await db.execute(
+                        select(FeatureSnapshot).where(
+                            FeatureSnapshot.tenant_id == tenant.id,
+                            FeatureSnapshot.feature_date == target_date,
+                        )
+                    )
+                ).scalars().all()
+
+                if not snaps:
+                    continue
+
+                q2 = Decimal("0.01")
+                q4 = Decimal("0.0001")
+
+                def _to_dec(v: object, q: Decimal) -> Decimal:
+                    try:
+                        if v is None or v == "":
+                            return Decimal("0").quantize(q)
+                        if isinstance(v, Decimal):
+                            return v.quantize(q)
+                        return Decimal(str(v)).quantize(q)
+                    except Exception:
+                        return Decimal("0").quantize(q)
+
+                def _to_int(v: object, default: int = 0) -> int:
+                    try:
+                        if v is None or v == "":
+                            return default
+                        return int(float(v))
+                    except Exception:
+                        return default
+
+                rows: list[dict[str, object]] = []
+                for snap in snaps:
+                    feats = snap.features or {}
+                    created_at = snap.created_at
+                    if hasattr(created_at, "tzinfo") and created_at.tzinfo is not None:
+                        created_at = created_at.astimezone(UTC).replace(tzinfo=None)
+
+                    rows.append(
+                        {
+                            "tenant_id": str(snap.tenant_id),
+                            "player_id": str(snap.player_id),
+                            "feature_date": snap.snapshot_date_value,
+                            "deposit_sum_24h": _to_dec(feats.get("deposit_sum_24h"), q2),
+                            "deposit_sum_7d": _to_dec(feats.get("deposit_sum_7d"), q2),
+                            "deposit_sum_30d": _to_dec(feats.get("deposit_sum_30d"), q2),
+                            "deposit_count_24h": _to_int(feats.get("deposit_count_24h")),
+                            "deposit_count_7d": _to_int(feats.get("deposit_count_7d")),
+                            "withdrawal_sum_24h": _to_dec(feats.get("withdrawal_sum_24h"), q2),
+                            "withdrawal_sum_7d": _to_dec(feats.get("withdrawal_sum_7d"), q2),
+                            "withdrawal_count_24h": _to_int(feats.get("withdrawal_count_24h")),
+                            "bet_stake_sum_24h": _to_dec(feats.get("bet_stake_sum_24h"), q2),
+                            "bet_stake_sum_7d": _to_dec(feats.get("bet_stake_sum_7d"), q2),
+                            "ratio_w2d_7d": _to_dec(feats.get("ratio_withdrawal_to_deposit_7d"), q4),
+                            "baseline_avg_deposit": _to_dec(feats.get("baseline_avg_daily_deposit"), q2),
+                            "baseline_stddev_deposit": _to_dec(feats.get("baseline_stddev_deposit"), q2),
+                            "zscore_deposit": _to_dec(feats.get("zscore_current_deposit_vs_baseline"), q4),
+                            "new_payment_flag": int(bool(feats.get("new_payment_instrument_flag", False))),
+                            "new_device_flag": int(bool(feats.get("new_device_flag", False))),
+                            "shared_device_count": _to_int(feats.get("shared_device_count")),
+                            "shared_bank_count": _to_int(feats.get("shared_bank_account_count")),
+                            "chargeback_count_30d": _to_int(feats.get("chargeback_count_30d")),
+                            "deposit_velocity": _to_dec(feats.get("deposit_velocity"), q4),
+                            "unique_instruments_7d": _to_int(feats.get("unique_instruments_7d")),
+                            "night_activity_ratio": _to_dec(feats.get("night_activity_ratio"), q4),
+                            "weekend_activity_ratio": _to_dec(feats.get("weekend_activity_ratio"), q4),
+                            "avg_odds_bet_7d": _to_dec(feats.get("avg_odds_bet_7d"), q4),
+                            "win_loss_ratio_30d": _to_dec(feats.get("win_loss_ratio_30d"), q4),
+                            "avg_dep_to_wdraw_hours": _to_dec(feats.get("avg_deposit_to_withdrawal_hours"), q4),
+                            "multi_currency_flag": int(bool(feats.get("multi_currency_flag", False))),
+                            "chargeback_rate_30d": _to_dec(feats.get("chargeback_rate_30d"), q4),
+                            "bonus_to_real_ratio_30d": _to_dec(feats.get("bonus_to_real_ratio_30d"), q4),
+                            "cashout_ratio_7d": _to_dec(feats.get("cashout_ratio_7d"), q4),
+                            "shared_instrument_score": _to_dec(feats.get("shared_instrument_score"), q4),
+                            "feature_version": int(getattr(snap, "feature_version", None) or feats.get("feature_version", 2) or 2),
+                            "computed_at": created_at,
+                        }
+                    )
+
+                # Inserção em batch no ClickHouse (sync → thread)
+                batch_size = 1000
+                for i in range(0, len(rows), batch_size):
+                    batch = rows[i : i + batch_size]
+                    await asyncio.to_thread(ch.insert_dict, "betaml.player_features_daily", batch)
+
+                total_rows += len(rows)
+                logger.info(
+                    "clickhouse_backfill_features_tenant_done",
+                    tenant_id=str(tenant.id),
+                    feature_date=str(target_date),
+                    rows=len(rows),
+                )
+
+        logger.info(
+            "clickhouse_backfill_features_daily_done",
+            feature_date=str(target_date),
+            rows=total_rows,
+        )
+    except Exception as exc:
+        logger.error("clickhouse_backfill_features_daily_failed", error=str(exc))
+        await _notify_admins_job_failure("clickhouse_backfill_features_daily", str(exc))
+
+
+async def data_quality_alerting() -> None:
+    """Executa checks de qualidade de dados e cria Notifications em caso de falha.
+
+    Implementação minimalista (sem Great Expectations):
+    - Executa checks por tenant (compatível com FORCE RLS).
+    - Se falhas: cria Notification para ADMINs.
+    - Se falhas críticas: marca pause de ingest em Tenant.settings.
+    """
+    job_name = "data_quality_alerting"
+    try:
+        async with AsyncSessionLocal() as db:
+            tenants = (
+                await db.execute(select(Tenant).where(Tenant.active.is_(True)))
+            ).scalars().all()
+
+            now_utc = datetime.now(UTC)
+            cutoff_24h = now_utc - timedelta(hours=24)
+            dedup_since = now_utc - timedelta(hours=24)
+
+            for tenant in tenants:
+                await _set_db_tenant_context(db, tenant.id)
+
+                failures: list[dict[str, object]] = []
+                critical = False
+
+                invalid_statuses = ("OPEN", "IN_REVIEW", "CLOSED", "FALSE_POSITIVE")
+                alerts_invalid_status = (
+                    await db.execute(
+                        select(func.count()).select_from(Alert).where(
+                            Alert.tenant_id == tenant.id,
+                            ~Alert.status.in_(invalid_statuses),
+                        )
+                    )
+                ).scalar_one()
+                if int(alerts_invalid_status or 0) > 0:
+                    failures.append(
+                        {
+                            "name": "alerts_invalid_status",
+                            "value": int(alerts_invalid_status),
+                            "threshold": 0,
+                            "details": "Alertas devem ter status válido.",
+                        }
+                    )
+
+                snapshots_missing_version = (
+                    await db.execute(
+                        select(func.count()).select_from(FeatureSnapshot).where(
+                            FeatureSnapshot.tenant_id == tenant.id,
+                            FeatureSnapshot.feature_version.is_(None),
+                        )
+                    )
+                ).scalar_one()
+                if int(snapshots_missing_version or 0) > 0:
+                    failures.append(
+                        {
+                            "name": "feature_snapshots_missing_version",
+                            "value": int(snapshots_missing_version),
+                            "threshold": 0,
+                            "details": "Snapshots de features devem ter feature_version.",
+                        }
+                    )
+                    critical = True
+
+                unresolved_ingest_errors_24h = (
+                    await db.execute(
+                        select(func.count()).select_from(IngestError).where(
+                            IngestError.tenant_id == tenant.id,
+                            IngestError.resolved.is_(False),
+                            IngestError.created_at < cutoff_24h,
+                        )
+                    )
+                ).scalar_one()
+                if int(unresolved_ingest_errors_24h or 0) > 100:
+                    failures.append(
+                        {
+                            "name": "unresolved_ingest_errors_24h",
+                            "value": int(unresolved_ingest_errors_24h),
+                            "threshold": 100,
+                            "details": "Ingest errors antigos não resolvidos devem ficar abaixo de 100.",
+                        }
+                    )
+                    critical = True
+
+                if not failures:
+                    continue
+
+                admins = (
+                    await db.execute(
+                        select(User).where(
+                            User.tenant_id == tenant.id,
+                            User.role == "ADMIN",
+                            User.active.is_(True),
+                        )
+                    )
+                ).scalars().all()
+
+                body = {
+                    "tenant_id": str(tenant.id),
+                    "run_at": now_utc.isoformat(),
+                    "failures": failures,
+                    "critical": critical,
+                }
+
+                # Dedup fingerprint: mesma combinação de falhas (por tenant)
+                # gera o mesmo reference_id, evitando spam em execuções repetidas.
+                fingerprint_src = json.dumps(body, ensure_ascii=False, sort_keys=True).encode("utf-8")
+                fingerprint = hashlib.sha256(fingerprint_src).hexdigest()
+                reference_id = f"dq:{fingerprint}"
+
+                wrote_anything = False
+
+                for admin in admins:
+                    existing = (
+                        await db.execute(
+                            select(Notification).where(
+                                Notification.tenant_id == tenant.id,
+                                Notification.user_id == admin.id,
+                                Notification.type == "DQ_ALERT",
+                                Notification.reference_type == "DataQuality",
+                                Notification.reference_id == reference_id,
+                                Notification.created_at >= dedup_since,
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if existing:
+                        continue
+
+                    db.add(
+                        Notification(
+                            tenant_id=tenant.id,
+                            user_id=admin.id,
+                            type="DQ_ALERT",
+                            title="Data Quality: falhas detectadas",
+                            body=json.dumps(body, ensure_ascii=False)[:2000],
+                            reference_type="DataQuality",
+                            reference_id=reference_id,
+                        )
+                    )
+                    wrote_anything = True
+
+                if critical:
+                    try:
+                        settings_json = tenant.settings or {}
+                        if not isinstance(settings_json, dict):
+                            settings_json = {}
+                        if settings_json.get("ingest_paused") is not True:
+                            tenant.settings = {
+                                **settings_json,
+                                "ingest_paused": True,
+                                "ingest_paused_reason": "data_quality_critical",
+                                "ingest_paused_at": now_utc.isoformat(),
+                            }
+                            wrote_anything = True
+                    except Exception:
+                        # best-effort: não bloqueia criação de Notification
+                        pass
+
+                if wrote_anything:
+                    await db.commit()
+
+                logger.warning(
+                    "data_quality_failures_detected",
+                    tenant_id=str(tenant.id),
+                    failures=len(failures),
+                    critical=critical,
+                )
+    except Exception as exc:
+        logger.error("data_quality_alerting_failed", error=str(exc))
+        await _notify_admins_job_failure(job_name, str(exc))
+
+
 async def data_retention_batch() -> None:
     """
     Data Retention Batch — runs weekly (Sunday 03:00 UTC).
@@ -511,6 +864,7 @@ async def data_retention_batch() -> None:
             tenants = (await db.execute(select(Tenant).where(Tenant.active.is_(True)))).scalars().all()
 
             for tenant in tenants:
+                await _set_db_tenant_context(db, tenant.id)
                 sc = (await db.execute(
                     select(ScoringConfig).where(ScoringConfig.tenant_id == tenant.id).limit(1)
                 )).scalar_one_or_none()
