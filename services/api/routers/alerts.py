@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator, Literal, Optional
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -16,7 +16,6 @@ from database import AsyncSessionLocal, get_db
 from models import Alert, Bet, Case, FinancialTransaction, Notification, User
 from repositories import AlertRepository
 from repositories.alerts import get_alert_repo
-from rate_limit import get_rate_limit_by_role, limiter
 from utils import write_audit
 
 logger = structlog.get_logger(__name__)
@@ -25,9 +24,7 @@ router = APIRouter(tags=["alerts"])
 
 
 @router.get("/alerts")
-@limiter.limit(get_rate_limit_by_role)
 async def list_alerts(
-    request: Request,
     severity: Optional[str] = None,
     status_filter: Optional[str] = Query(None, alias="status"),
     player_id: Optional[str] = None,
@@ -160,9 +157,7 @@ class TriageRequest(BaseModel):
 
 
 @router.post("/alerts/{alert_id}/triage")
-@limiter.limit(get_rate_limit_by_role)
 async def triage_alert(
-    request: Request,
     alert_id: str,
     body: TriageRequest,
     current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
@@ -180,9 +175,7 @@ async def triage_alert(
 
 
 @router.post("/alerts/{alert_id}/close")
-@limiter.limit(get_rate_limit_by_role)
 async def close_alert(
-    request: Request,
     alert_id: str,
     current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
     db: AsyncSession = Depends(get_db),
@@ -201,9 +194,7 @@ class LinkCaseRequest(BaseModel):
 
 
 @router.post("/alerts/{alert_id}/link-to-case")
-@limiter.limit(get_rate_limit_by_role)
 async def link_alert_to_case(
-    request: Request,
     alert_id: str,
     body: LinkCaseRequest,
     current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
