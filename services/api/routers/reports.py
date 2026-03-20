@@ -9,7 +9,7 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import and_, desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import require_roles
@@ -152,15 +152,18 @@ async def _build_monthly_report(
     )
 
     # 7. Total SAR communications submitted to COAF
-    sar_res = await db.execute(
-        select(func.count(ReportPackage.id)).where(
-            ReportPackage.tenant_id == tenant_id,
-            ReportPackage.decision == "FILE_SAR",
-            ReportPackage.created_at >= date_from,
-            ReportPackage.created_at <= date_to,
-        )
-    )
-    total_sar_reports: int = sar_res.scalar() or 0
+    sar_query = text(
+        """
+        SELECT count(id)
+        FROM report_packages
+        WHERE tenant_id = :tenant_id
+          AND created_at >= :date_from
+          AND created_at <= :date_to
+          AND COALESCE(decision, payload->>'decision', 'PENDING') = 'FILE_SAR'
+        """
+    ).bindparams(tenant_id=tenant_id, date_from=date_from, date_to=date_to)
+    sar_res = await db.execute(sar_query)
+    total_sar_reports: int = int(sar_res.scalar() or 0)
 
     # 8. True positive rate
     tp_count = sum(r.cnt for r in label_rows if r.label == "TRUE_POSITIVE")

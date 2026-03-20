@@ -55,6 +55,8 @@ TOPICS = [
     "ingest.jobs.reprocess",
 ]
 
+_oltp_engine = None
+
 
 def _coerce_float(value: object, default: float = 0.0) -> float:
     try:
@@ -93,6 +95,232 @@ def _is_uuid(value: object) -> bool:
         return True
     except (ValueError, TypeError):
         return False
+
+
+def _get_oltp_engine():
+    import sqlalchemy as sa
+
+    global _oltp_engine
+    if _oltp_engine is None:
+        db_url = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@postgres:5432/betaml_dev")
+        sync_url = db_url.replace("postgresql://", "postgresql+psycopg2://")
+        _oltp_engine = sa.create_engine(sync_url, pool_pre_ping=True)
+    return _oltp_engine
+
+
+def _resolve_player_id_sync(conn, tenant_id: str, raw_player_id: object) -> str | None:
+    import sqlalchemy as sa
+
+    if raw_player_id is None:
+        return None
+    pid = str(raw_player_id)
+    if _is_uuid(pid):
+        return pid
+    mapped = conn.execute(
+        sa.text(
+            """
+            SELECT id
+            FROM players
+            WHERE tenant_id = :tid
+              AND (external_player_id = :pid OR external_id = :pid)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ),
+        {"tid": tenant_id, "pid": pid},
+    ).scalar_one_or_none()
+    return str(mapped) if mapped else None
+
+
+def _persist_transaction_oltp(envelope: dict, payload: dict) -> None:
+    import sqlalchemy as sa
+
+    tenant_id = str(envelope.get("tenant_id") or "")
+    if not tenant_id:
+        return
+    source_event_id = str(envelope.get("source_event_id") or envelope.get("event_id") or "")
+    occurred_at = _to_naive_utc_datetime(payload.get("occurred_at", _iso_now()))
+    payment_instrument = payload.get("payment_instrument") if isinstance(payload.get("payment_instrument"), dict) else {}
+    holder_document = str(payment_instrument.get("holder_document") or "")
+    bank_account_hash = hashlib.sha256(holder_document.encode("utf-8")).hexdigest() if holder_document else None
+
+    engine = _get_oltp_engine()
+    with engine.begin() as conn:
+        conn.execute(sa.text("SELECT set_config('app.current_tenant', :tid, true)"), {"tid": tenant_id})
+        exists = conn.execute(
+            sa.text(
+                """
+                SELECT 1 FROM financial_transactions
+                WHERE tenant_id = :tid AND source_event_id = :seid
+                LIMIT 1
+                """
+            ),
+            {"tid": tenant_id, "seid": source_event_id},
+        ).scalar_one_or_none()
+        if exists:
+            return
+
+        player_id = _resolve_player_id_sync(conn, tenant_id, payload.get("player_id"))
+        conn.execute(
+            sa.text(
+                """
+                INSERT INTO financial_transactions (
+                    id, tenant_id, player_id, external_tx_id, source_system, type,
+                    amount, currency, status, payment_method, payment_instrument,
+                    bank_account_hash, source_event_id, raw_payload, occurred_at, created_at
+                ) VALUES (
+                    :id, :tenant_id, :player_id, :external_tx_id, :source_system, :type,
+                    :amount, :currency, :status, :payment_method, :payment_instrument,
+                    :bank_account_hash, :source_event_id, CAST(:raw_payload AS jsonb), :occurred_at, NOW()
+                )
+                """
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": tenant_id,
+                "player_id": player_id,
+                "external_tx_id": payload.get("external_transaction_id") or payload.get("external_tx_id"),
+                "source_system": envelope.get("source_system") or "unknown",
+                "type": str(payload.get("type") or "DEPOSIT").upper(),
+                "amount": float(payload.get("amount") or 0),
+                "currency": payload.get("currency") or "BRL",
+                "status": str(payload.get("status") or "SETTLED").upper(),
+                "payment_method": payload.get("method"),
+                "payment_instrument": json.dumps(payment_instrument, ensure_ascii=False),
+                "bank_account_hash": bank_account_hash,
+                "source_event_id": source_event_id,
+                "raw_payload": json.dumps(envelope.get("raw_payload") or payload, ensure_ascii=False),
+                "occurred_at": occurred_at,
+            },
+        )
+
+
+def _persist_bet_oltp(envelope: dict, payload: dict) -> None:
+    import sqlalchemy as sa
+
+    tenant_id = str(envelope.get("tenant_id") or "")
+    if not tenant_id:
+        return
+    source_event_id = str(envelope.get("source_event_id") or envelope.get("event_id") or "")
+    occurred_at = _to_naive_utc_datetime(payload.get("placed_at") or payload.get("occurred_at") or _iso_now())
+
+    engine = _get_oltp_engine()
+    with engine.begin() as conn:
+        conn.execute(sa.text("SELECT set_config('app.current_tenant', :tid, true)"), {"tid": tenant_id})
+        exists = conn.execute(
+            sa.text(
+                """
+                SELECT 1 FROM bets
+                WHERE tenant_id = :tid AND source_event_id = :seid
+                LIMIT 1
+                """
+            ),
+            {"tid": tenant_id, "seid": source_event_id},
+        ).scalar_one_or_none()
+        if exists:
+            return
+
+        player_id = _resolve_player_id_sync(conn, tenant_id, payload.get("player_id"))
+        conn.execute(
+            sa.text(
+                """
+                INSERT INTO bets (
+                    id, tenant_id, player_id, external_bet_id, source_system, bet_type,
+                    stake_amount, potential_payout, actual_payout, odds, currency,
+                    status, event_name, market_name, selection_name, source_event_id,
+                    raw_payload, occurred_at, created_at
+                ) VALUES (
+                    :id, :tenant_id, :player_id, :external_bet_id, :source_system, :bet_type,
+                    :stake_amount, :potential_payout, :actual_payout, :odds, :currency,
+                    :status, :event_name, :market_name, :selection_name, :source_event_id,
+                    CAST(:raw_payload AS jsonb), :occurred_at, NOW()
+                )
+                """
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": tenant_id,
+                "player_id": player_id,
+                "external_bet_id": payload.get("external_bet_id"),
+                "source_system": envelope.get("source_system") or "unknown",
+                "bet_type": payload.get("bet_type") or "SPORTS",
+                "stake_amount": float(payload.get("stake_amount") or 0),
+                "potential_payout": float(payload.get("potential_payout") or 0) if payload.get("potential_payout") is not None else None,
+                "actual_payout": float(payload.get("settled_payout") or 0) if payload.get("settled_payout") is not None else None,
+                "odds": float(payload.get("odds") or 0) if payload.get("odds") is not None else None,
+                "currency": payload.get("currency") or "BRL",
+                "status": str(payload.get("status") or "OPEN").upper(),
+                "event_name": payload.get("sport"),
+                "market_name": payload.get("market_type"),
+                "selection_name": payload.get("selection"),
+                "source_event_id": source_event_id,
+                "raw_payload": json.dumps(envelope.get("raw_payload") or payload, ensure_ascii=False),
+                "occurred_at": occurred_at,
+            },
+        )
+
+
+def _persist_device_event_oltp(envelope: dict, payload: dict) -> None:
+    import sqlalchemy as sa
+
+    tenant_id = str(envelope.get("tenant_id") or "")
+    if not tenant_id:
+        return
+    source_event_id = str(envelope.get("source_event_id") or envelope.get("event_id") or "")
+    occurred_at = _to_naive_utc_datetime(payload.get("occurred_at") or _iso_now())
+
+    engine = _get_oltp_engine()
+    with engine.begin() as conn:
+        conn.execute(sa.text("SELECT set_config('app.current_tenant', :tid, true)"), {"tid": tenant_id})
+        exists = conn.execute(
+            sa.text(
+                """
+                SELECT 1 FROM device_events
+                WHERE tenant_id = :tid AND source_event_id = :seid
+                LIMIT 1
+                """
+            ),
+            {"tid": tenant_id, "seid": source_event_id},
+        ).scalar_one_or_none()
+        if exists:
+            return
+
+        player_id = _resolve_player_id_sync(conn, tenant_id, payload.get("player_id"))
+        ip = str(payload.get("ip") or "")
+        ip_hash = hashlib.sha256(ip.encode("utf-8")).hexdigest() if ip else None
+        conn.execute(
+            sa.text(
+                """
+                INSERT INTO device_events (
+                    id, tenant_id, player_id, external_evt_id, source_system, action,
+                    device_id, device_type, device_hash, ip_address, ip_hash, country_code,
+                    user_agent, source_event_id, raw_payload, occurred_at, created_at
+                ) VALUES (
+                    :id, :tenant_id, :player_id, :external_evt_id, :source_system, :action,
+                    :device_id, :device_type, :device_hash, :ip_address, :ip_hash, :country_code,
+                    :user_agent, :source_event_id, CAST(:raw_payload AS jsonb), :occurred_at, NOW()
+                )
+                """
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": tenant_id,
+                "player_id": player_id,
+                "external_evt_id": payload.get("external_evt_id") or payload.get("event_id"),
+                "source_system": envelope.get("source_system") or "unknown",
+                "action": str(payload.get("action") or "LOGIN").upper(),
+                "device_id": payload.get("device_id"),
+                "device_type": payload.get("device_type"),
+                "device_hash": payload.get("device_id") or payload.get("device_hash"),
+                "ip_address": ip or None,
+                "ip_hash": ip_hash,
+                "country_code": payload.get("country_code"),
+                "user_agent": payload.get("user_agent"),
+                "source_event_id": source_event_id,
+                "raw_payload": json.dumps(envelope.get("raw_payload") or payload, ensure_ascii=False),
+                "occurred_at": occurred_at,
+            },
+        )
 
 
 def _normalize_transaction_payload(payload: dict) -> dict:
@@ -715,6 +943,11 @@ async def process_transaction(msg_value: dict, redis_client, ch_client, producer
     except Exception as e:
         logger.warning("ch_insert_transaction_failed", error=str(e))
 
+    try:
+        await asyncio.to_thread(_persist_transaction_oltp, msg_value, payload)
+    except Exception as e:
+        logger.warning("oltp_insert_transaction_failed", error=str(e))
+
 
 def _ch_insert_transaction(ch_client, envelope: dict, payload: dict) -> None:
     try:
@@ -767,6 +1000,11 @@ async def process_bet(msg_value: dict, redis_client, ch_client, producer):
     except Exception as e:
         logger.warning("ch_insert_bet_failed", error=str(e))
 
+    try:
+        await asyncio.to_thread(_persist_bet_oltp, msg_value, payload)
+    except Exception as e:
+        logger.warning("oltp_insert_bet_failed", error=str(e))
+
 
 def _ch_insert_bet(ch_client, envelope: dict, payload: dict) -> None:
     try:
@@ -814,6 +1052,11 @@ async def process_device_event(msg_value: dict, redis_client, ch_client, produce
             tenant_id, player_id, redis_client, ch_client,
             current_event={"is_new_device": is_new_device},
         )
+
+    try:
+        await asyncio.to_thread(_persist_device_event_oltp, msg_value, payload)
+    except Exception as e:
+        logger.warning("oltp_insert_device_event_failed", error=str(e))
 
 
 async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer) -> None:

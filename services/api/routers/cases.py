@@ -389,7 +389,8 @@ async def generate_report_package(
     c = await db.get(Case, case_id)
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
-    if body.decision == "FILE_SAR" and not body.analyst_narrative:
+    decision = body.decision or "PENDING"
+    if decision == "FILE_SAR" and not body.analyst_narrative:
         raise HTTPException(400, "analyst_narrative é obrigatório quando decision=FILE_SAR (COAF Res. 36/2021 Art. 9)")
 
     alerts  = (await db.execute(select(Alert).where(Alert.case_id == case_id))).scalars().all()
@@ -437,15 +438,15 @@ async def generate_report_package(
             for e in events
         ],
         "analyst_narrative": body.analyst_narrative,
-        "decision": body.decision or "PENDING",
+        "decision": decision,
         "decision_basis": "Análise conforme COAF Res. 36/2021 e regulamentação Bacen/MF",
     }
 
     rp = ReportPackage(
         tenant_id=current_user.tenant_id, case_id=case_id, player_id=c.player_id,
         payload=payload, analyst_narrative=body.analyst_narrative,
-        decision=None,  # business decision stored in JSONB payload, not in DB enum column
-        status="DRAFT" if body.decision in (None, "PENDING") else "FINAL",
+        decision=decision,
+        status="DRAFT" if decision == "PENDING" else "FINAL",
         created_by=current_user.id,
     )
     db.add(rp)
@@ -484,11 +485,11 @@ async def generate_report_package(
     db.add(CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,
         event_type="REPORT_GENERATED",
-        content={"report_id": report_id, "decision": body.decision},
+        content={"report_id": report_id, "decision": decision},
         created_by=current_user.id,
     ))
     await write_audit(db, current_user.tenant_id, current_user.id, "GENERATE_REPORT", "Case", case_id,
-                      after={"report_id": report_id, "decision": body.decision})
+                      after={"report_id": report_id, "decision": decision})
     await db.commit()
     await db.refresh(rp)
     return {

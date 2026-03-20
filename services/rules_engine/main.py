@@ -16,6 +16,8 @@ import os
 import sys
 import time
 import uuid
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
@@ -43,6 +45,7 @@ logger = structlog.get_logger()
 KAFKA_SERVERS    = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 REDIS_URL        = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DATABASE_URL     = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@localhost:5432/betaml_dev")
+ML_SERVICE_URL   = os.getenv("ML_SERVICE_URL", "http://ml-service:8001")
 RULE_CACHE_TTL   = 300  # 5 minutos
 
 TOPICS = [
@@ -255,6 +258,68 @@ def _try_float(v: Any) -> Any:
         return v
 
 
+def _severity_rank(severity: str) -> int:
+    order = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+    return order.get(str(severity or "LOW").upper(), 1)
+
+
+def _severity_from_composite(score: float) -> str:
+    if score >= 0.95:
+        return "CRITICAL"
+    if score >= 0.80:
+        return "HIGH"
+    if score >= 0.60:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _normalize_ml_features(features: dict[str, Any]) -> dict[str, float | bool | str]:
+    normalized: dict[str, float | bool | str] = {}
+    for k, v in (features or {}).items():
+        if isinstance(v, bool):
+            normalized[k] = v
+            continue
+        if isinstance(v, (int, float)):
+            normalized[k] = float(v)
+            continue
+        if isinstance(v, str):
+            low = v.lower()
+            if low in {"true", "false"}:
+                normalized[k] = low == "true"
+                continue
+            try:
+                normalized[k] = float(v)
+            except ValueError:
+                normalized[k] = v
+    return normalized
+
+
+def _score_ml_sync(tenant_id: str, player_id: str, features: dict[str, Any]) -> dict[str, Any]:
+    body = {
+        "tenant_id": tenant_id,
+        "player_id": player_id,
+        "features": _normalize_ml_features(features),
+    }
+    req = urllib.request.Request(
+        url=f"{ML_SERVICE_URL.rstrip('/')}/score",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            parsed = json.loads(resp.read().decode("utf-8"))
+            return {
+                "anomaly_score": float(parsed.get("anomaly_score") or 0.0),
+                "is_anomaly": bool(parsed.get("is_anomaly") or False),
+                "model_id": parsed.get("model_id"),
+                "top_drivers": parsed.get("top_drivers") or [],
+            }
+    except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        logger.warning("ml_score_unavailable", tenant_id=tenant_id, player_id=player_id, error=str(exc))
+        return {"anomaly_score": 0.0, "is_anomaly": False, "model_id": None, "top_drivers": []}
+
+
 async def evaluate_rules(
     envelope: dict[str, Any],
     features: dict[str, Any],
@@ -391,30 +456,71 @@ async def publish_alert(
     match: dict[str, Any],
     producer,
     db_write_queue: asyncio.Queue,
+    ml_signal: dict[str, Any] | None = None,
 ):
     rule = match["rule"]
     payload = envelope.get("payload", {})
     player_id = payload.get("player_id", "")
     tenant_id = envelope.get("tenant_id", "")
 
+    ml_signal = ml_signal or {}
+    rule_weight = float(match.get("rule_weight") or 1.0)
+    rule_score = min(max(rule_weight, 0.0), 1.0)
+    ml_weight = 0.4
+    rule_component_weight = 0.4
+    network_component_weight = 0.2
+    anomaly_score = float(ml_signal.get("anomaly_score") or 0.0)
+    network_score = float(
+        match.get("features_snapshot", {}).get("shared_instrument_score")
+        or match.get("features_snapshot", {}).get("shared_device_score")
+        or 0.0
+    )
+    composite_score = max(
+        0.0,
+        min(
+            1.0,
+            (rule_score * rule_component_weight)
+            + (anomaly_score * ml_weight)
+            + (network_score * network_component_weight),
+        ),
+    )
+    computed_severity = _severity_from_composite(composite_score)
+    base_severity = str(rule.get("severity") or "LOW").upper()
+    final_severity = computed_severity if _severity_rank(computed_severity) > _severity_rank(base_severity) else base_severity
+
     alert_id = str(uuid.uuid4())
     alert_msg = {
         "alert_id":       alert_id,
         "tenant_id":      tenant_id,
         "player_id":      player_id,
-        "alert_type":     "RULE",
-        "severity":       rule["severity"],
+        "alert_type":     "COMPOSITE" if (anomaly_score > 0 or rule.get("is_compound")) else "RULE",
+        "severity":       final_severity,
         "title":          f"{rule['name']} — {player_id[:8]}",
         "description":    f"Regra '{rule['name']}' disparada para player {player_id}",
         "rule_id":        str(rule["id"]),
         "rule_version":   rule.get("version", 1),
         "source_event_id": envelope.get("event_id", ""),
+        "anomaly_score":  round(anomaly_score, 4),
+        "composite_score": round(composite_score, 4),
+        "score_breakdown": {
+            "rule_score": round(rule_score, 4),
+            "ml_anomaly_score": round(anomaly_score, 4),
+            "network_score": round(network_score, 4),
+            "rule_weight": rule_component_weight,
+            "ml_weight": ml_weight,
+            "network_weight": network_component_weight,
+        },
+        "rule_weight":    rule_component_weight,
+        "ml_weight":      ml_weight,
+        "network_weight": network_component_weight,
         "evidence": {
             "rule_id":             str(rule["id"]),
             "rule_version":        rule.get("version", 1),
             "triggered_condition": rule["condition_dsl"],
             "feature_snapshot":    match.get("features_snapshot", {}),
             "threshold_values":    rule.get("params", {}),
+            "model_id":            ml_signal.get("model_id"),
+            "top_drivers":         ml_signal.get("top_drivers") or [],
         },
         "created_at": _utcnow().isoformat(),
         "schema_version": 1,
@@ -435,7 +541,9 @@ async def publish_alert(
     logger.info(
         "alert_published",
         alert_id=alert_id, rule=rule["name"], player_id=player_id,
-        severity=rule["severity"],
+        severity=final_severity,
+        anomaly_score=round(anomaly_score, 4),
+        composite_score=round(composite_score, 4),
     )
 
 
@@ -468,10 +576,14 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
             conn.execute(sa.text("""
                 INSERT INTO alerts
                     (id, tenant_id, player_id, rule_id, alert_type, severity, status,
-                     title, description, evidence, source_event_id, created_at)
+                     title, description, evidence, source_event_id, anomaly_score,
+                     composite_score, score_breakdown, rule_weight, ml_weight,
+                     network_weight, created_at)
                 VALUES
                     (:id, :tenant_id, :player_id, :rule_id, :alert_type, :severity, 'OPEN',
-                     :title, :description, :evidence, :source_event_id, :created_at)
+                     :title, :description, :evidence, :source_event_id, :anomaly_score,
+                     :composite_score, CAST(:score_breakdown AS jsonb), :rule_weight,
+                     :ml_weight, :network_weight, :created_at)
                 ON CONFLICT (id) DO NOTHING
             """), {
                 "id":             alert["alert_id"],
@@ -484,6 +596,12 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                 "description":    alert.get("description", ""),
                 "evidence":       json.dumps(alert.get("evidence", {})),
                 "source_event_id": alert.get("source_event_id"),
+                "anomaly_score":  alert.get("anomaly_score"),
+                "composite_score": alert.get("composite_score"),
+                "score_breakdown": json.dumps(alert.get("score_breakdown") or {}),
+                "rule_weight":    alert.get("rule_weight"),
+                "ml_weight":      alert.get("ml_weight"),
+                "network_weight": alert.get("network_weight"),
                 "created_at":     created_at,
             })
 
@@ -579,7 +697,7 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
             # Atualizar risk_score e risk_band do player com base na severidade do alerta
             # (apenas sobe o score, nunca diminui — persistência de risco)
             if alert.get("player_id"):
-                new_score = _SEVERITY_SCORE.get(alert.get("severity", "LOW"), 0.30)
+                new_score = float(alert.get("composite_score") or _SEVERITY_SCORE.get(alert.get("severity", "LOW"), 0.30))
                 conn.execute(sa.text("""
                     UPDATE players
                     SET risk_score = GREATEST(risk_score, :score),
@@ -646,6 +764,7 @@ async def main():
 
                 rules          = await load_rules(tenant_id)
                 features       = await load_features(tenant_id, player_id, redis_client)
+                ml_signal      = await asyncio.to_thread(_score_ml_sync, tenant_id, player_id, features)
                 macros         = await load_macros(tenant_id)
                 player_lists   = await load_player_lists(tenant_id)
                 compound_rules = await load_compound_rules(tenant_id)
@@ -657,7 +776,7 @@ async def main():
                 )
 
                 for match in matches:
-                    await publish_alert(value, match, producer, db_queue)
+                    await publish_alert(value, match, producer, db_queue, ml_signal=ml_signal)
 
             except Exception as e:
                 logger.error("message_processing_error", topic=msg.topic, error=str(e))
