@@ -1,5 +1,8 @@
 # BetAML - Go-Live Checklist
 
+Fonte canonica de auditoria e readiness:
+- docs/auditoria-consolidada-pld-2026-03-20.md
+
 ## 1. Mudancas e release
 
 - Versao atualizada no `CHANGELOG.md` com escopo e rollback plan.
