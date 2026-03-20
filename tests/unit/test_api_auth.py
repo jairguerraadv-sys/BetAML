@@ -41,8 +41,11 @@ import sys
 # Resultado final no sys.path: services/api (idx 0) → libs (idx 1)
 # Isso garante que `from models import User` resolva para services/api/models.py
 # e não para libs/models.py, evitando circular import.
-sys.path.insert(0, "/workspaces/BetAML/libs")
-sys.path.insert(0, "/workspaces/BetAML/services/api")
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "libs"))
+sys.path.insert(0, str(REPO_ROOT / "services" / "api"))
 
 # ── Helpers de token direto (bypass de DB para testes de token) ───────────────
 
@@ -119,7 +122,7 @@ class TestDSLIntegration:
         import ast
         import pathlib
 
-        seeds_path = pathlib.Path("/workspaces/BetAML/services/api/seeds.py")
+        seeds_path = pathlib.Path(REPO_ROOT / "services" / "api" / "seeds.py")
         src = seeds_path.read_text(encoding="utf-8")
         tree = ast.parse(src, filename=str(seeds_path))
 
