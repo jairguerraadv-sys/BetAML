@@ -392,7 +392,7 @@ async def seed(db: AsyncSession):
         wl_pep = PlayerList(
             tenant_id=tenant.id,
             name="pep_watchlist",
-            list_type="WATCHLIST",
+            list_type="WATCH_LIST",
             description="Jogadores identificados como PEP ou conexão com PEP",
             active=True,
             source="MANUAL",
@@ -401,7 +401,7 @@ async def seed(db: AsyncSession):
         wl_susp = PlayerList(
             tenant_id=tenant.id,
             name="internal_suspects",
-            list_type="SUSPECT",
+            list_type="BLACKLIST",
             description="Lista interna de suspeitos identificados em investigações anteriores",
             active=True,
             source="MANUAL",
