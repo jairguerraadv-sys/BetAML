@@ -15,7 +15,7 @@ GITHUB_OWNER=jairguerraadv-sys GITHUB_REPO=BetAML ./scripts/apply_branch_protect
 
 ## Regras aplicadas
 
-- Status checks obrigatorios (backend, lint, frontend, seguranca, docker, migracao, alembic).
+- Status checks obrigatorios (backend, lint, frontend, seguranca, docker, integracao de validacao externa, migracao, alembic).
 - `strict=true` (branch precisa estar atualizada com `main`).
 - 2 aprovacoes obrigatorias em PR.
 - Requer resolucao de conversas.

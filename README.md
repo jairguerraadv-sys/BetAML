@@ -327,6 +327,13 @@ Cada tenant possui: **3 usuários** (ADMIN + AML_ANALYST + AUDITOR) + **50 jogad
 > **Atenção:** Credenciais de **desenvolvimento** geradas pelo seed. Em staging/produção, troque
 > todas as senhas e configure `JWT_SECRET` e `PII_ENCRYPTION_KEY` únicos no arquivo `.env`.
 
+Para escalar o feature store em produção, também é possível habilitar Redis Cluster:
+
+- `REDIS_MODE=cluster`
+- `REDIS_CLUSTER_NODES=redis-0:6379,redis-1:6379,redis-2:6379`
+
+Se `REDIS_MODE` não for definido, o comportamento padrão permanece em modo standalone via `REDIS_URL`.
+
 ---
 
 ## Segurança & Compliance

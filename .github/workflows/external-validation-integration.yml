@@ -1,0 +1,83 @@
+name: External Validation Integration
+
+"on":
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "services/api/routers/external_validation.py"
+      - "services/api/models.py"
+      - "services/api/main.py"
+      - "tests/integration/test_new_endpoints.py"
+      - "services/frontend/app/(protected)/players/[playerId]/page.tsx"
+      - "services/frontend/lib/api.ts"
+      - ".github/workflows/external-validation-integration.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/api/routers/external_validation.py"
+      - "services/api/models.py"
+      - "services/api/main.py"
+      - "tests/integration/test_new_endpoints.py"
+      - "services/frontend/app/(protected)/players/[playerId]/page.tsx"
+      - "services/frontend/lib/api.ts"
+      - ".github/workflows/external-validation-integration.yml"
+
+jobs:
+  external-validation-integration:
+    name: External Validation Endpoints (Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            services/api/requirements.txt
+
+      - name: Install test dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r services/api/requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Prepare env for docker compose
+        run: cp .env.example .env
+
+      - name: Start stack
+        run: docker compose -f infra/docker-compose.yml up -d
+
+      - name: Wait for API health
+        run: |
+          for i in $(seq 1 100); do
+            if curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
+              echo "API is healthy"
+              exit 0
+            fi
+            echo "Waiting for API... ($i/100)"
+            sleep 4
+          done
+          echo "API did not become healthy in time" >&2
+          docker compose -f infra/docker-compose.yml logs api || true
+          exit 1
+
+      - name: Run external validation integration tests
+        env:
+          TEST_STACK_UP: "1"
+          API_URL: "http://localhost:8000"
+        run: |
+          pytest -q tests/integration/test_new_endpoints.py -k "TestExternalValidationEndpoints" --tb=short
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f infra/docker-compose.yml logs --no-color || true
+
+      - name: Stop stack
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v || true

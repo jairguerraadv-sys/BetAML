@@ -57,9 +57,9 @@ structlog.configure(
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.dev.ConsoleRenderer()
-        if True  # always human-readable in dev; swap for JSONRenderer in prod
-        else structlog.processors.JSONRenderer(),
+    structlog.dev.ConsoleRenderer()
+    if settings.environment in {"development", "test"}
+    else structlog.processors.JSONRenderer(),
     ],
     wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
     logger_factory=structlog.PrintLoggerFactory(),
@@ -566,7 +566,7 @@ async def health():
 # ROUTERS — cada domínio em seu próprio módulo
 # ═══════════════════════════════════════════════════
 
-from routers import auth, alerts, audit, cases, ingest, mappings, players, rules  # noqa: E402
+from routers import auth, alerts, audit, cases, ingest, mappings, players, rules, external_validation  # noqa: E402
 from routers.admin import router as admin_router                # noqa: E402
 from routers.compound_rules import router as compound_rules_router  # noqa: E402
 from routers.feature_store import router as feature_store_router  # noqa: E402
@@ -598,4 +598,5 @@ app.include_router(notifications_router)
 app.include_router(internal_router)
 app.include_router(search_router)
 app.include_router(stats_router)
+app.include_router(external_validation.router)
 
