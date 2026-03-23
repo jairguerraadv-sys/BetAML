@@ -24,7 +24,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from jose import JWTError, jwt
 from pydantic import BaseModel, model_validator
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import and_, desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import IngestPrincipal, get_ingest_principal, require_roles
@@ -269,15 +269,28 @@ async def _tenant_ingest_rate_limit(db: AsyncSession, tenant_id: str, default_li
             return max(1, int(cast(Any, row.flag_value)))
 
         if all(hasattr(SystemFlag, attr) for attr in ("key", "value")):
-            stmt = select(SystemFlag).where(SystemFlag.key == "ingest_rate_limit_per_min")
+            tenant_scoped_key = f"{tenant_id}:ingest_rate_limit_per_min"
+            stmt = select(SystemFlag).where(SystemFlag.key == tenant_scoped_key)
             row = (await db.execute(stmt)).scalar_one_or_none()
-            if not row:
-                return default_limit
-            return max(1, int(cast(Any, row.value)))
+            if row:
+                return max(1, int(cast(Any, row.value)))
+
+            # Backward compatibility with old global key (non-tenant scoped)
+            global_stmt = select(SystemFlag).where(SystemFlag.key == "ingest_rate_limit_per_min")
+            global_row = (await db.execute(global_stmt)).scalar_one_or_none()
+            if global_row:
+                return max(1, int(cast(Any, global_row.value)))
+            return default_limit
     except Exception:
         return default_limit
 
     return default_limit
+
+
+async def _ensure_db_tenant_context(db: AsyncSession, tenant_id: str) -> None:
+    """Guarantee Postgres RLS tenant context for ingest paths that may use API keys."""
+    stmt = text("SELECT set_config('app.current_tenant', :tid, false)").bindparams(tid=str(tenant_id))
+    await db.execute(stmt)
 
 
 def _build_envelope(
@@ -328,11 +341,12 @@ async def ingest_event(
             id=current_user.id,
             role=current_user.role,
         )
-    max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=300)
-    await redis_rate_limit(principal.tenant_id, "ingest.event", max_requests=max_requests)
-
     if body.source_system not in ALLOWED_SOURCE_SYSTEMS:
         raise HTTPException(400, f"source_system '{body.source_system}' não reconhecido. Permitidos: {sorted(ALLOWED_SOURCE_SYSTEMS)}")
+
+    await _ensure_db_tenant_context(db, principal.tenant_id)
+    max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=300)
+    await redis_rate_limit(principal.tenant_id, "ingest.event", max_requests=max_requests)
 
     source_event_id = body.source_event_id or str(uuid.uuid4())
     envelope = _build_envelope(
@@ -376,6 +390,7 @@ async def ingest_batch(
             id=current_user.id,
             role=current_user.role,
         )
+    await _ensure_db_tenant_context(db, principal.tenant_id)
     max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=50)
     await redis_rate_limit(principal.tenant_id, "ingest.batch", max_requests=max_requests)
 
@@ -427,6 +442,7 @@ async def ingest_file(
     db: AsyncSession = Depends(get_db),
 ):
     _ = background_tasks
+    await _ensure_db_tenant_context(db, principal.tenant_id)
     max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=20)
     await redis_rate_limit(principal.tenant_id, "ingest.file", max_requests=max_requests)
 
@@ -460,24 +476,32 @@ async def ingest_file(
         created_by=principal.id,
     )
     db.add(job)
+    await db.flush()
+    job_pk = str(job.id)
     await db.commit()
-    await db.refresh(job)
+    try:
+        await db.refresh(job)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ingest_file_refresh_failed", job_id=job_pk, error=str(exc))
+    else:
+        if job.id:
+            job_pk = str(job.id)
 
     bronze_path = _upload_bronze_file(
         tenant_id=principal.tenant_id,
-        job_id=str(job.id),
+        job_id=job_pk,
         file_name=file.filename or "ingest.csv",
         content=content,
     )
     if bronze_path:
+        await _ensure_db_tenant_context(db, principal.tenant_id)
         job.file_path = bronze_path
         await db.commit()
-        await db.refresh(job)
 
     producer = await get_producer()
     if producer:
         msg = {
-            "job_id": job.id,
+            "job_id": job_pk,
             "tenant_id": principal.tenant_id,
             "source_system": source_system,
             "mapping_config_id": mapping_config_id,
@@ -489,15 +513,15 @@ async def ingest_file(
             producer=producer,
             topic="ingest.jobs",
             payload=msg,
-            key=str(job.id),
+            key=job_pk,
             tenant_id=principal.tenant_id,
             source_system=source_system,
-            context={"endpoint": "/ingest/file", "job_id": str(job.id)},
+            context={"endpoint": "/ingest/file", "job_id": job_pk},
         )
         if not ok:
             raise HTTPException(503, "Falha ao enfileirar job de ingestão após retries; enviado para DLQ")
 
-    return {"job_id": job.id, "status": "QUEUED", "file_name": file.filename}
+    return {"job_id": job_pk, "status": "QUEUED", "file_name": file.filename}
 
 
 @router.post("/ingest/webhook/epsilon", status_code=202)
@@ -506,11 +530,47 @@ async def ingest_epsilon_webhook(
     principal: IngestPrincipal = Depends(get_ingest_principal),
     db: AsyncSession = Depends(get_db),
 ):
+    await _ensure_db_tenant_context(db, principal.tenant_id)
     max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=300)
     await redis_rate_limit(principal.tenant_id, "ingest.webhook.epsilon", max_requests=max_requests)
 
     body = await request.body()
-    connector = ConnectorEpsilon(signing_secret=settings.jwt_secret)
+    started_at = datetime.now(timezone.utc)
+    job_file_name = f"epsilon-webhook-{started_at.strftime('%Y%m%dT%H%M%S%fZ')}.json"
+    job = IngestJob(
+        tenant_id=principal.tenant_id,
+        source_system="ConnectorEpsilon",
+        connector_type="WEBHOOK",
+        file_name=job_file_name,
+        file_size_bytes=len(body),
+        bytes_processed=0,
+        status="PROCESSING",
+        created_by=principal.id,
+    )
+    db.add(job)
+    await db.flush()
+    job_pk = str(job.id)
+    await db.commit()
+    try:
+        await db.refresh(job)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ingest_epsilon_refresh_failed", job_id=job_pk, error=str(exc))
+    else:
+        if job.id:
+            job_pk = str(job.id)
+
+    bronze_path = _upload_bronze_file(
+        tenant_id=principal.tenant_id,
+        job_id=job_pk,
+        file_name=job_file_name,
+        content=body,
+    )
+    if bronze_path:
+        await _ensure_db_tenant_context(db, principal.tenant_id)
+        job.file_path = bronze_path
+        await db.commit()
+
+    connector = ConnectorEpsilon(signing_secret=settings.epsilon_webhook_secret)
     result = connector.parse(
         body,
         headers={
@@ -519,10 +579,41 @@ async def ingest_epsilon_webhook(
         },
     )
     if not result.success:
+        error_rows: list[dict[str, Any]] = []
+        for err in result.errors:
+            reason = err.get("reason", "webhook_validation_error") if isinstance(err, dict) else str(err)
+            raw_payload = err.get("raw", body.decode("utf-8", errors="replace")[:300]) if isinstance(err, dict) else body.decode("utf-8", errors="replace")[:300]
+            line_number = err.get("line") if isinstance(err, dict) else None
+            error_rows.append({"line": line_number, "reason": reason, "raw": raw_payload})
+            db.add(
+                    IngestError(
+                        tenant_id=principal.tenant_id,
+                        ingest_job_id=job_pk,
+                        source_system="ConnectorEpsilon",
+                        entity_type="TRANSACTION",
+                        raw_payload=str(raw_payload),
+                    error_reason=reason,
+                    error_detail={"channel": "webhook", "connector": "epsilon", "line": line_number},
+                    line_number=line_number,
+                    resolved=False,
+                )
+            )
+        job.total_records = result.total
+        job.processed_records = 0
+        job.failed_records = result.failed
+        job.bytes_processed = len(body)
+        job.error_sample = error_rows[:10]
+        job.status = "FAILED"
+        job.duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+        job.error_message = "webhook_validation_failed"
+        await _ensure_db_tenant_context(db, principal.tenant_id)
+        await db.commit()
         raise HTTPException(400, f"Webhook inválido: {result.errors}")
 
     producer = await get_producer()
     queued = 0
+    failed = 0
+    error_rows: list[dict[str, Any]] = []
     for rec in result.records:
         source_event_id = rec.get("event_id") or str(uuid.uuid4())
         envelope = _build_envelope(
@@ -531,7 +622,7 @@ async def ingest_epsilon_webhook(
             entity_type="TRANSACTION",
             payload=rec,
             source_event_id=source_event_id,
-            ingest_metadata={"channel": "webhook", "webhook": "epsilon"},
+            ingest_metadata={"channel": "webhook", "webhook": "epsilon", "job_id": job_pk},
         )
         if producer:
             ok = await _publish_with_retries(
@@ -544,10 +635,33 @@ async def ingest_epsilon_webhook(
                 context={"endpoint": "/ingest/webhook/epsilon"},
             )
             if not ok:
+                failed += 1
+                error_rows.append({"line": None, "reason": "publish_failed_after_retries", "raw": rec})
+                db.add(
+                    IngestError(
+                        tenant_id=principal.tenant_id,
+                        ingest_job_id=job_pk,
+                        source_system="ConnectorEpsilon",
+                        entity_type="TRANSACTION",
+                        raw_payload=json.dumps(rec, ensure_ascii=False),
+                        error_reason="publish_failed_after_retries",
+                        error_detail={"channel": "webhook", "connector": "epsilon"},
+                        resolved=False,
+                    )
+                )
                 continue
         queued += 1
+    job.total_records = result.total
+    job.processed_records = queued
+    job.failed_records = failed
+    job.bytes_processed = len(body)
+    job.error_sample = error_rows[:10]
+    job.duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+    job.status = "DONE" if failed == 0 else ("PARTIAL" if queued > 0 else "FAILED")
+    await _ensure_db_tenant_context(db, principal.tenant_id)
+    await db.commit()
 
-    return {"status": "accepted", "count": queued}
+    return {"status": "accepted", "count": queued, "job_id": job_pk}
 
 
 @router.get("/ingest/jobs")
@@ -590,12 +704,16 @@ async def list_ingest_jobs(
             "id": j.id,
             "source_system": j.source_system,
             "file_name": j.file_name,
+            "connector_type": j.connector_type,
             "status": j.status,
             "total_records": j.total_records,
             "processed_records": j.processed_records,
             "failed_records": j.failed_records,
             "bytes_processed": j.bytes_processed,
             "duration_ms": j.duration_ms,
+            "mapping_config_id": j.mapping_config_id,
+            "mapping_version_id": j.mapping_version_id,
+            "error_message": j.error_message,
             "created_at": j.created_at,
             "updated_at": j.updated_at,
         }
@@ -634,6 +752,7 @@ async def get_ingest_job(
         "id": j.id,
         "source_system": j.source_system,
         "file_name": j.file_name,
+        "connector_type": j.connector_type,
         "status": j.status,
         "total_records": j.total_records,
         "processed_records": j.processed_records,
@@ -649,12 +768,15 @@ async def get_ingest_job(
             }
             for e in err_sample
         ],
+        "mapping_config_id": j.mapping_config_id,
         "file_size_bytes": j.file_size_bytes,
         "bytes_processed": j.bytes_processed,
         "duration_ms": j.duration_ms,
         "reprocessed_from": j.reprocessed_from,
         "mapping_version_id": j.mapping_version_id,
         "file_path": j.file_path,
+        "error_message": j.error_message,
+        "error_sample_preview": j.error_sample or [],
         "created_at": j.created_at,
         "updated_at": j.updated_at,
     }
@@ -851,7 +973,6 @@ async def reprocess_job(
     )
     db.add(new_job)
     await db.commit()
-    await db.refresh(new_job)
 
     msg = {
         "job_id": new_job.id,
@@ -1020,6 +1141,7 @@ async def parse_connector_payload(
     if name not in {"gamma", "delta"}:
         raise HTTPException(400, "connector_name deve ser 'gamma' ou 'delta' para este endpoint")
 
+    await _ensure_db_tenant_context(db, str(current_user.tenant_id))
     max_requests = await _tenant_ingest_rate_limit(db, str(current_user.tenant_id), default_limit=120)
     await redis_rate_limit(str(current_user.tenant_id), f"ingest.connector.{name}", max_requests=max_requests)
 
@@ -1044,16 +1166,25 @@ async def parse_connector_payload(
         created_by=current_user.id,
     )
     db.add(job)
+    await db.flush()
+    job_pk = str(job.id)
     await db.commit()
-    await db.refresh(job)
+    try:
+        await db.refresh(job)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("parse_connector_refresh_failed", job_id=job_pk, error=str(exc))
+    else:
+        if job.id:
+            job_pk = str(job.id)
 
     bronze_path = _upload_bronze_file(
         tenant_id=str(current_user.tenant_id),
-        job_id=str(job.id),
+        job_id=job_pk,
         file_name=file.filename or f"{name}.payload",
         content=content,
     )
     if bronze_path:
+        await _ensure_db_tenant_context(db, str(current_user.tenant_id))
         job.file_path = bronze_path
         await db.commit()
 
@@ -1070,7 +1201,7 @@ async def parse_connector_payload(
             entity_type=entity_type,
             payload=rec,
             source_event_id=source_event_id,
-            ingest_metadata={"channel": "connector-parse", "job_id": job.id},
+            ingest_metadata={"channel": "connector-parse", "job_id": job_pk},
         )
         topic = f"raw.{entity_type.lower()}s"
         if producer:
@@ -1081,7 +1212,7 @@ async def parse_connector_payload(
                 key=source_event_id,
                 tenant_id=str(current_user.tenant_id),
                 source_system=source_system,
-                context={"endpoint": "/ingest/connectors/{connector_name}/parse", "job_id": str(job.id)},
+                context={"endpoint": "/ingest/connectors/{connector_name}/parse", "job_id": job_pk},
             )
             if not ok:
                 failed += 1
@@ -1098,7 +1229,7 @@ async def parse_connector_payload(
         db.add(
             IngestError(
                 tenant_id=current_user.tenant_id,
-                ingest_job_id=job.id,
+                ingest_job_id=job_pk,
                 source_system=source_system,
                 entity_type=entity_type,
                 raw_payload=str(raw_payload),
@@ -1114,10 +1245,11 @@ async def parse_connector_payload(
     job.bytes_processed = len(content)
     job.error_sample = error_rows[:10]
     job.status = "DONE" if failed == 0 else ("PARTIAL" if accepted > 0 else "FAILED")
+    await _ensure_db_tenant_context(db, str(current_user.tenant_id))
     await db.commit()
 
     return {
-        "job_id": job.id,
+        "job_id": job_pk,
         "source_system": source_system,
         "status": job.status,
         "summary": ConnectorParseSummary(

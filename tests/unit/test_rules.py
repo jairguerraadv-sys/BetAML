@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 import os
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -81,6 +82,7 @@ def test_rule_create_defaults():
     assert rc.severity == "MEDIUM"
     assert rc.scope == "TRANSACTION"
     assert rc.params == {}
+    assert rc.weight == 0.5
 
 
 def test_rule_update_all_optional():
@@ -113,8 +115,14 @@ async def test_validate_rule_dsl_valid():
     user = _make_user()
     body = ValidateDSLRequest(expression="amount > 500")
 
+    db = _make_db()
+    async def _execute(stmt):
+        res = MagicMock()
+        res.scalars.return_value.all.return_value = []
+        return res
+    db.execute = _execute
     with patch("libs.dsl_parser.validate_dsl", return_value=(True, None)):
-        result = await validate_rule_dsl(body=body, current_user=user)
+        result = await validate_rule_dsl(body=body, current_user=user, db=db)
 
     assert result["valid"] is True
     assert "válido" in result["message"]
@@ -126,8 +134,14 @@ async def test_validate_rule_dsl_invalid():
     user = _make_user()
     body = ValidateDSLRequest(expression="%%%bad dsl")
 
+    db = _make_db()
+    async def _execute(stmt):
+        res = MagicMock()
+        res.scalars.return_value.all.return_value = []
+        return res
+    db.execute = _execute
     with patch("libs.dsl_parser.validate_dsl", return_value=(False, "syntax error at token %%%")):
-        result = await validate_rule_dsl(body=body, current_user=user)
+        result = await validate_rule_dsl(body=body, current_user=user, db=db)
 
     assert result["valid"] is False
     assert "syntax error" in result["message"]
@@ -195,9 +209,14 @@ async def test_create_rule_invalid_dsl_raises_400():
 async def test_create_rule_valid_returns_id_and_status():
     from routers.rules import create_rule, RuleCreate
 
-    body = RuleCreate(name="Good Rule", condition_dsl="amount > 500")
+    body = RuleCreate(name="Good Rule", condition_dsl="amount > 500", weight=0.8)
     db = _make_db()
     user = _make_user()
+    async def _execute(stmt):
+        res = MagicMock()
+        res.scalars.return_value.all.return_value = []
+        return res
+    db.execute = _execute
 
     rule_mock = MagicMock()
     rule_mock.id = "new-rule-id"
@@ -305,6 +324,11 @@ async def test_update_rule_dsl_change_increments_version():
     rule = _make_rule(tenant_id="t1", version=2)
     db = _make_db(get_result=rule)
     user = _make_user(tenant_id="t1")
+    async def _execute(stmt):
+        res = MagicMock()
+        res.scalars.return_value.all.return_value = []
+        return res
+    db.execute = _execute
 
     with patch("libs.dsl_parser.validate_dsl", return_value=(True, None)), \
          patch("routers.rules.write_audit", new_callable=AsyncMock):
@@ -327,6 +351,11 @@ async def test_update_rule_invalid_dsl_raises_400():
     rule = _make_rule(tenant_id="t1")
     db = _make_db(get_result=rule)
     user = _make_user(tenant_id="t1")
+    async def _execute(stmt):
+        res = MagicMock()
+        res.scalars.return_value.all.return_value = []
+        return res
+    db.execute = _execute
 
     with patch("libs.dsl_parser.validate_dsl", return_value=(False, "parse error")):
         with pytest.raises(HTTPException) as exc:
@@ -414,6 +443,52 @@ async def test_simulate_rule_evaluates_events():
     assert result["rule_id"] == "r1"
     assert result["matches"] == 2
     assert len(result["results"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_simulate_rule_historical_summary():
+    from routers.rules import simulate_rule, SimulateRequest
+
+    rule = _make_rule(tenant_id="t1")
+    db = _make_db(get_result=rule)
+    user = _make_user(tenant_id="t1")
+
+    alert1 = MagicMock()
+    alert1.player_id = "p1"
+    alert1.label = "TRUE_POSITIVE"
+    alert1.created_at = datetime(2026, 3, 10, 10, 0, 0, tzinfo=UTC)
+    alert2 = MagicMock()
+    alert2.player_id = "p2"
+    alert2.label = "FALSE_POSITIVE"
+    alert2.created_at = datetime(2026, 3, 10, 13, 0, 0, tzinfo=UTC)
+
+    calls = []
+
+    async def _execute(stmt):
+        res = MagicMock()
+        calls.append(len(calls))
+        if len(calls) == 1:
+            res.scalars.return_value.all.return_value = []
+        elif len(calls) == 2:
+            res.scalars.return_value.all.return_value = [alert1, alert2]
+        else:
+            res.scalar.return_value = 2
+        return res
+
+    db.execute = _execute
+
+    result = await simulate_rule(
+        rule_id="r1",
+        body=SimulateRequest(**{"from": date(2026, 3, 10), "to": date(2026, 3, 10)}),
+        current_user=user,
+        db=db,
+    )
+
+    assert result["matches"] == 2
+    assert sorted(result["players"]) == ["p1", "p2"]
+    assert result["false_positive_estimated"] == pytest.approx(0.5)
+    assert result["precision_estimated"] == pytest.approx(0.5)
+    assert result["timeline"][0]["alerts"] == 2
 
 
 @pytest.mark.asyncio

@@ -9,11 +9,21 @@ Currently exposes:
 """
 from __future__ import annotations
 
-import structlog
-from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+import uuid
+from datetime import datetime, timezone
 
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from auth import require_roles
 from config import settings
+from database import get_db
+from models import Alert, Player, User
+from utils import write_audit
 
 logger = structlog.get_logger(__name__)
 
@@ -24,6 +34,88 @@ _ALERT_SEVERITY_MAP = {
     "warning": "WARNING",
     "info": "INFO",
 }
+
+
+def _ensure_internal_e2e_enabled() -> None:
+    if settings.environment not in ("development", "test"):
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+class E2EAlertCreateIn(BaseModel):
+    player_id: str | None = None
+    title: str = Field(default_factory=lambda: f"E2E Alert {uuid.uuid4().hex[:8]}")
+    description: str = "Alerta interno criado pela suíte E2E"
+    severity: str = "HIGH"
+    status: str = "OPEN"
+    alert_type: str = "RULE"
+    evidence: dict = Field(default_factory=dict)
+
+
+@router.post(
+    "/e2e/alerts",
+    status_code=status.HTTP_201_CREATED,
+    include_in_schema=False,
+    summary="Create deterministic alert fixture for E2E suites",
+)
+async def create_e2e_alert(
+    body: E2EAlertCreateIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "SUPER_ADMIN")),
+) -> JSONResponse:
+    _ensure_internal_e2e_enabled()
+
+    player_id = body.player_id
+    if not player_id:
+        player = (
+            await db.execute(
+                select(Player)
+                .where(Player.tenant_id == current_user.tenant_id)
+                .order_by(Player.created_at.asc())
+                .limit(1)
+            )
+        ).scalars().first()
+        if player is None:
+            raise HTTPException(status_code=404, detail="No player available for E2E alert fixture")
+        player_id = str(player.id)
+
+    alert = Alert(
+        tenant_id=current_user.tenant_id,
+        player_id=player_id,
+        alert_type=body.alert_type,
+        severity=body.severity,
+        status=body.status,
+        title=body.title,
+        description=body.description,
+        evidence={
+            "created_via": "internal_e2e_fixture",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            **(body.evidence or {}),
+        },
+        source_event_id=f"e2e-{uuid.uuid4()}",
+    )
+    db.add(alert)
+    await db.flush()
+    await write_audit(
+        db,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+        action="CREATE_E2E_ALERT",
+        entity_type="Alert",
+        entity_id=alert.id,
+        after={"title": alert.title, "severity": alert.severity, "status": alert.status},
+    )
+    await db.commit()
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "id": str(alert.id),
+            "player_id": str(alert.player_id) if alert.player_id else None,
+            "title": alert.title,
+            "severity": alert.severity,
+            "status": alert.status,
+            "case_id": alert.case_id,
+        },
+    )
 
 
 @router.post(

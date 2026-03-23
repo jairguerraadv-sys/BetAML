@@ -71,8 +71,75 @@ export interface AuditLog {
   created_at: string;
 }
 
-export const fetchAuditLogs = (params?: Record<string, string>) =>
+export interface AuditLogFilters {
+  page?: string;
+  per_page?: string;
+  entity_type?: string;
+  entity_id?: string;
+  action?: string;
+  user_id?: string;
+  actor_id?: string;
+  date_from?: string;
+  date_to?: string;
+  q?: string;
+  pii_only?: string;
+}
+
+export const fetchAuditLogs = (params?: AuditLogFilters) =>
   api.get<AuditLog[]>('/audit-logs', { params }).then((r) => r.data);
+
+export interface MonthlyReportAlertsBySeverity {
+  CRITICAL: number;
+  HIGH: number;
+  MEDIUM: number;
+  LOW: number;
+}
+
+export interface MonthlyReportTopRule {
+  rule_id: string;
+  rule_name: string;
+  fires: number;
+}
+
+export interface MonthlyReportTopPlayer {
+  player_id: string;
+  external_id: string;
+  avg_risk_score: number;
+}
+
+export interface MonthlyReportQualityMetrics {
+  labeled_alerts: number;
+  true_positive_count: number;
+  false_positive_count: number;
+  unknown_count: number;
+  true_positive_rate: number | null;
+  false_positive_rate: number | null;
+}
+
+export interface MonthlyReport {
+  period: { from: string; to: string };
+  alerts_by_severity: MonthlyReportAlertsBySeverity;
+  total_alerts: number;
+  cases_summary: Record<string, number>;
+  total_cases: number;
+  total_cases_opened: number;
+  total_cases_closed: number;
+  total_cases_reported: number;
+  top_rules_by_fires: MonthlyReportTopRule[];
+  top_players_by_risk: MonthlyReportTopPlayer[];
+  total_ingested_events: number;
+  total_communications_generated: number;
+  false_positive_rate: number | null;
+  total_sar_reports: number;
+  true_positive_rate: number | null;
+  quality_metrics: MonthlyReportQualityMetrics;
+  generated_at: string;
+}
+
+export const fetchMonthlySummary = (dateFrom: string, dateTo: string) =>
+  api.get<MonthlyReport>('/reports/monthly-summary', {
+    params: { date_from: dateFrom, date_to: dateTo },
+  }).then((r) => r.data);
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -95,7 +162,24 @@ export interface AlertDetail extends Alert {
   triaged_by?: string;
   triaged_at?: string;
   label?: string;
+  label_note?: string;
   labeled_at?: string;
+}
+
+export interface AlertExplainabilityFeature {
+  feature: string;
+  current_value: unknown;
+  baseline_value?: number | null;
+  delta?: number | null;
+  contribution: number;
+}
+
+export interface AlertExplainability {
+  alert_id: string;
+  model_id?: string | null;
+  explanation_method: string;
+  anomaly_score: number;
+  top_features: AlertExplainabilityFeature[];
 }
 
 export interface Case {
@@ -109,6 +193,15 @@ export interface CaseDetail extends Case {
   description?: string;
   alerts: Array<{ id: string; severity: string; title: string }>;
   timeline: Array<{ id: string; event_type: string; content: Record<string, unknown>; created_at: string }>;
+  report_packages?: Array<{
+    id: string;
+    status: string;
+    format: string;
+    decision: string | null;
+    created_at: string;
+    generated_by?: string | null;
+    pdf_available: boolean;
+  }>;
 }
 
 export interface Player {
@@ -131,6 +224,10 @@ export interface FeatureStoreCurrent {
   player_id: string;
   source: string;
   feature_version: number;
+  snapshot_version: number;
+  entity_type: string;
+  snapshot_date?: string;
+  gold_object_path?: string | null;
   computed_at?: string;
   features: Record<string, unknown>;
 }
@@ -142,6 +239,8 @@ export interface FeatureStoreHistoryItem {
   features: Record<string, unknown>;
   drift_score?: number | null;
   feature_version: number;
+  entity_type: string;
+  gold_object_path?: string | null;
 }
 
 export interface FeatureStoreHistory {
@@ -168,6 +267,24 @@ export interface FeaturePopulationStats {
   features: Record<string, FeatureStat>;
 }
 
+export interface FeatureQualityFinding {
+  feature_name: string;
+  finding_type: string;
+  current_value: number;
+  previous_value?: number | null;
+  delta?: number | null;
+  severity: string;
+}
+
+export interface FeatureQualityStatus {
+  feature_date: string | null;
+  previous_feature_date: string | null;
+  drift_detected: boolean;
+  max_drift_score: number;
+  admin_notification_sent: boolean;
+  findings: FeatureQualityFinding[];
+}
+
 export interface EconCompat {
   player_id: string;
   declared_income_monthly: number | null;
@@ -184,6 +301,11 @@ export interface ReportPackageResult {
   decision: string;
   pdf_path: string | null;
   payload: Record<string, unknown>;
+}
+
+export interface CaseLookupResult {
+  alerts: Array<{ id: string; title: string; severity: string; created_at: string }>;
+  transactions: Array<{ id: string; type: string; amount: number; status: string; occurred_at: string }>;
 }
 
 export interface RelatedTransactions {
@@ -204,6 +326,7 @@ export interface RelatedTransactions {
 export interface Rule {
   id: string; name: string; description?: string; scope: string;
   condition_dsl: string; severity: string; status: string; version: number;
+  weight?: number;
 }
 
 // ── Resources ─────────────────────────────────────────────────────────────────
@@ -213,6 +336,9 @@ export const fetchAlerts = (params?: Record<string, string>) =>
 
 export const fetchAlert = (id: string) =>
   api.get<AlertDetail>(`/alerts/${id}`).then((r) => r.data);
+
+export const fetchAlertExplainability = (id: string) =>
+  api.get<AlertExplainability>(`/alerts/${id}/explainability`).then((r) => r.data);
 
 export const fetchCases = (params?: Record<string, string | number>) =>
   api.get<Case[]>('/cases', { params }).then((r) => r.data);
@@ -245,6 +371,9 @@ export const fetchFeatureStoreHistory = (
 export const fetchFeaturePopulationStats = () =>
   api.get<FeaturePopulationStats>('/feature-store/population-stats').then((r) => r.data);
 
+export const fetchFeatureQualityLatest = () =>
+  api.get<FeatureQualityStatus>('/feature-store/quality/latest').then((r) => r.data);
+
 export const fetchPlayerEconCompat = (id: string) =>
   api.get<EconCompat>(`/players/${id}/econ-compat`).then((r) => r.data);
 
@@ -255,6 +384,29 @@ export const generateReportPackage = (
   caseId: string,
   body: { analyst_narrative?: string; decision?: string },
 ) => api.post<ReportPackageResult>(`/cases/${caseId}/report-package`, body).then((r) => r.data);
+
+export const fetchCaseReportPackages = (caseId: string) =>
+  api.get<Array<{
+    id: string;
+    status: string;
+    format: string;
+    decision: string | null;
+    created_at: string;
+    generated_by?: string | null;
+    pdf_available: boolean;
+  }>>(`/cases/${caseId}/report-packages`).then((r) => r.data);
+
+export const submitReportPackage = (caseId: string) =>
+  api.post(`/cases/${caseId}/report-package/submit`).then((r) => r.data);
+
+export const assignCase = (caseId: string, userId: string) =>
+  api.post(`/cases/${caseId}/assign`, { user_id: userId }).then((r) => r.data);
+
+export const lookupCaseEntities = (caseId: string, q: string, scope: 'all' | 'alerts' | 'transactions' = 'all') =>
+  api.get<CaseLookupResult>(`/cases/${caseId}/lookup`, { params: { q, scope } }).then((r) => r.data);
+
+export const linkTransactionToCase = (caseId: string, transactionId: string) =>
+  api.post(`/cases/${caseId}/link-transaction`, { transaction_id: transactionId }).then((r) => r.data);
 
 export interface ScoringConfig {
   id: string;  // UUID
@@ -273,6 +425,9 @@ export interface ScoringConfig {
   data_retention_raw_years: number;
   data_retention_silver_years: number;
   data_retention_gold_years: number;
+  auto_case_threshold: number;
+  ingest_rate_limit_tpm: number;
+  ml_challenger_pct?: number;
   updated_at: string | null;
 }
 
@@ -297,6 +452,7 @@ export interface RuleCreatePayload {
   severity: string;
   description?: string;
   scope?: string;
+  weight?: number;
 }
 
 export const fetchRules = () => api.get<Rule[]>('/rules').then((r) => r.data);
@@ -311,10 +467,61 @@ export interface SimulateRuleResult {
   rule_id: string;
   results: Array<{ matched: boolean; event: Record<string, unknown>; error?: string }>;
   matches: number;
+  total_alerts?: number;
+  players?: string[];
+  false_positive_estimated?: number | null;
+  precision_estimated?: number | null;
+  recall_estimated?: number | null;
+  performance_score?: number | null;
+  timeline?: Array<{ date: string; alerts: number }>;
 }
 
 export const simulateRule = (id: string, payload: object) =>
   api.post<SimulateRuleResult>(`/rules/${id}/simulate`, payload).then((r) => r.data);
+
+export interface RuleMacro {
+  id: string;
+  tenant_id: string;
+  name: string;
+  expression: string;
+  description?: string | null;
+  created_at: string;
+}
+
+export interface CompoundRule {
+  id: string;
+  tenant_id: string;
+  name: string;
+  logic?: string | null;
+  component_rule_ids: string[];
+  score_weights: Record<string, number>;
+  min_score_threshold?: number | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface PlayerList {
+  id: string;
+  tenant_id?: string | null;
+  name: string;
+  description?: string | null;
+  list_type: string;
+  source?: string | null;
+  active?: boolean;
+  entry_count: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface PlayerListEntry {
+  id: string;
+  value?: string | null;
+  value_type?: string | null;
+  external_player_id?: string | null;
+  cpf_hash?: string | null;
+  notes?: string | null;
+  added_at?: string | null;
+}
 
 export const ingestFile = (formData: FormData) =>
   api
@@ -362,6 +569,15 @@ export interface MappingListItem {
 
 export interface MappingDetail extends MappingListItem {
   config_json: Record<string, unknown>;
+  canonical_validation?: {
+    entity_type: string;
+    valid: boolean;
+    missing_required_groups?: string[][];
+    unknown_targets?: string[];
+    unknown_fields?: string[];
+    empty_required_fields?: string[];
+    allowed_fields?: string[];
+  };
 }
 
 export interface MappingVersion {
@@ -377,6 +593,7 @@ export interface MappingValidateResponse {
   valid: boolean;
   error?: string;
   normalized_config?: Record<string, unknown>;
+  canonical_validation?: MappingDetail['canonical_validation'];
 }
 
 export interface MappingPreviewResponse extends MappingValidateResponse {
@@ -465,10 +682,17 @@ export interface ModelRegistry {
   tenant_id: string;
   model_name: string;
   model_type: string;
+  algorithm?: string | null;
   version: string;
+  dataset_window_start?: string | null;
+  dataset_window_end?: string | null;
+  dataset_window_days?: number | null;
+  sample_count?: number | null;
   training_rows: number | null;
   feature_columns: string[];
   metrics: Record<string, unknown>;
+  artifact_path?: string | null;
+  artifact_uri?: string | null;
   status: string;
   is_challenger: boolean;
   promoted_by: string | null;
@@ -478,8 +702,102 @@ export interface ModelRegistry {
   created_at: string;
 }
 
+export interface ModelABTimelinePoint {
+  date: string;
+  champion_inferences: number;
+  challenger_inferences: number;
+  champion_avg_score?: number | null;
+  challenger_avg_score?: number | null;
+  champion_tp: number;
+  champion_fp: number;
+  challenger_tp: number;
+  challenger_fp: number;
+}
+
+export interface ModelABMetrics {
+  model_id: string;
+  model_name?: string | null;
+  role: string;
+  status: string;
+  days_window: number;
+  champion_model_id?: string | null;
+  challenger_model_id?: string | null;
+  champion_inferences: number;
+  challenger_inferences: number;
+  champion_avg_score?: number | null;
+  challenger_avg_score?: number | null;
+  champion_precision_estimated?: number | null;
+  challenger_precision_estimated?: number | null;
+  champion_recall_estimated?: number | null;
+  challenger_recall_estimated?: number | null;
+  champion_false_positive_rate?: number | null;
+  challenger_false_positive_rate?: number | null;
+  timeline: ModelABTimelinePoint[];
+}
+
+export interface ModelPerformanceTotals {
+  total_alerts: number;
+  labeled_alerts: number;
+  true_positive_count: number;
+  false_positive_count: number;
+  unknown_count: number;
+  precision_estimated: number;
+  false_positive_rate: number;
+  recall_estimated: number;
+}
+
+export interface ModelPerformancePoint {
+  date: string;
+  total_alerts: number;
+  true_positive_count: number;
+  false_positive_count: number;
+  unknown_count: number;
+}
+
+export interface RulePerformanceItem {
+  rule_id?: string | null;
+  rule_name: string;
+  total_alerts: number;
+  true_positive_count: number;
+  false_positive_count: number;
+  unknown_count: number;
+  precision_estimated: number;
+  false_positive_rate: number;
+}
+
+export interface ModelPerformanceItem {
+  model_id: string;
+  model_name?: string | null;
+  algorithm?: string | null;
+  status: string;
+  total_alerts: number;
+  true_positive_count: number;
+  false_positive_count: number;
+  unknown_count: number;
+  precision_estimated: number;
+  recall_estimated: number;
+  false_positive_rate: number;
+}
+
+export interface ModelPerformanceSummary {
+  days_window: number;
+  challenger_split_pct: number;
+  totals: ModelPerformanceTotals;
+  by_day: ModelPerformancePoint[];
+  by_rule: RulePerformanceItem[];
+  by_model: ModelPerformanceItem[];
+}
+
 export const fetchModelRegistry = (modelType?: string) =>
   api.get<ModelRegistry[]>('/model-registry', { params: modelType ? { model_type: modelType } : {} })
+    .then((r) => r.data);
+
+export const fetchModelABMetrics = (modelId: string, days = 30) =>
+  api.get<ModelABMetrics>(`/model-registry/${modelId}/ab-metrics`, { params: { days } })
+    .then((r) => r.data);
+
+export const fetchModelPerformanceSummary = (days = 30) =>
+  api.get<ModelPerformanceSummary>('/model-registry/performance/summary', { params: { days } })
     .then((r) => r.data);
 
 export const promoteModel = (modelId: string) =>
@@ -508,6 +826,47 @@ export interface TenantCreateResult {
 
 export const createTenant = (body: TenantCreatePayload) =>
   api.post<TenantCreateResult>('/admin/tenants', body).then((r) => r.data);
+
+export interface AdminOnboardingCreateMappingPayload {
+  name: string;
+  source_system: string;
+  entity_type: string;
+  config_text?: string;
+  config_json?: Record<string, unknown>;
+  format: 'json' | 'yaml';
+  change_notes?: string;
+  version?: string;
+}
+
+export interface AdminOnboardingCreateRulePayload {
+  name: string;
+  description?: string;
+  status?: string;
+  severity: string;
+  scope?: string;
+  condition_dsl: string;
+  params?: Record<string, unknown>;
+  weight?: number;
+}
+
+export const adminOnboardingCreateMapping = (tenantId: string, body: AdminOnboardingCreateMappingPayload) =>
+  api.post<{ id: string; name: string; version_number: number; is_current: boolean }>(
+    `/admin/onboarding/${tenantId}/mappings`,
+    body,
+  ).then((r) => r.data);
+
+export const adminOnboardingIngestFile = (tenantId: string, formData: FormData) =>
+  api.post<{ job_id: string; status: string; source_system: string; file_name?: string }>(
+    `/admin/onboarding/${tenantId}/ingest-sample`,
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  ).then((r) => r.data);
+
+export const adminOnboardingCreateRule = (tenantId: string, body: AdminOnboardingCreateRulePayload) =>
+  api.post<{ id: string; name: string; status: string }>(
+    `/admin/onboarding/${tenantId}/rules`,
+    body,
+  ).then((r) => r.data);
 
 export interface TenantOut {
   id: string;
@@ -557,15 +916,85 @@ export const deleteAdminUser = (id: string) =>
 export const resetUserPassword = (id: string, new_password: string) =>
   api.post(`/admin/users/${id}/reset-password`, { new_password });
 
+export interface AdminApiKey {
+  id: string;
+  tenant_id: string;
+  name: string;
+  key_prefix: string;
+  source_system?: string | null;
+  permissions: string[];
+  active: boolean;
+  last_used_at?: string | null;
+  expires_at?: string | null;
+  created_at: string;
+}
+
+export interface AdminApiKeyCreatePayload {
+  name: string;
+  source_system?: string;
+  permissions?: string[];
+  expires_in_days?: number;
+}
+
+export interface AdminApiKeyCreateResult extends AdminApiKey {
+  raw_key: string;
+}
+
+export interface AdminApiKeyUsage {
+  key_id: string;
+  key_prefix: string;
+  name: string;
+  source_system?: string | null;
+  permissions: string[];
+  active: boolean;
+  last_used_at?: string | null;
+  total_requests_30d: number;
+  days: Record<string, number>;
+}
+
+export const fetchApiKeys = () =>
+  api.get<AdminApiKey[]>('/admin/api-keys').then((r) => r.data);
+
+export const createApiKey = (body: AdminApiKeyCreatePayload) =>
+  api.post<AdminApiKeyCreateResult>('/admin/api-keys', body).then((r) => r.data);
+
+export const revokeApiKey = (id: string) =>
+  api.delete(`/admin/api-keys/${id}`);
+
+export const fetchApiKeyUsage = (id: string) =>
+  api.get<AdminApiKeyUsage>(`/admin/api-keys/${id}/usage`).then((r) => r.data);
+
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
 export interface DashboardStats {
+  generated_at?: string;
   alerts_today:  number;
   critical_open: number;
   cases_open:    number;
   sla_expired:   number;
   auto_detected: number;
   by_severity:   Record<string, number>;
+  alerts_open: number;
+  cases_investigating: number;
+  cases_near_sla: number;
+  high_risk_players: number;
+  events_ingested_today: number;
+  alerts_by_severity_30d: Array<{
+    date: string;
+    CRITICAL: number;
+    HIGH: number;
+    MEDIUM: number;
+    LOW: number;
+    total: number;
+  }>;
+  alerts_by_rule_type: Array<{ label: string; value: number }>;
+  top_players_by_risk: Array<{
+    player_id: string;
+    external_player_id: string;
+    risk_score: number;
+    risk_band: string;
+  }>;
+  alert_heatmap: Array<{ weekday: number; hour: number; count: number }>;
 }
 
 export const fetchDashboardStats = () =>
@@ -579,12 +1008,16 @@ export interface IngestJob {
   id: string;
   source_system: string;
   file_name: string | null;
+  connector_type?: string | null;
   status: IngestJobStatus;
   total_records: number | null;
   processed_records: number | null;
   failed_records: number | null;
   bytes_processed: number;
   duration_ms: number | null;
+  mapping_config_id?: string | null;
+  mapping_version_id?: string | null;
+  error_message?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -604,6 +1037,7 @@ export interface IngestJobDetail extends IngestJob {
   reprocessed_from: string | null;
   mapping_version_id: string | null;
   file_path: string | null;
+  error_sample_preview?: Array<Record<string, unknown>>;
 }
 
 export interface IngestError {
@@ -803,6 +1237,8 @@ export interface ServiceHealth {
   minio: string;
   clickhouse: string;
   ml_service: string;
+  rules_engine?: string;
+  stream_processor?: string;
 }
 
 export interface HealthStatus {
@@ -825,11 +1261,33 @@ export const fetchSystemFlags = () =>
 
 export const toggleMaintenanceMode = (enabled: boolean) =>
   api
-    .post<{ maintenance_mode: boolean }>(`/admin/maintenance-mode?enabled=${enabled}`)
+    .put<{ maintenance_mode: boolean }>(`/admin/maintenance-mode?enabled=${enabled}`)
     .then((r) => r.data);
 
 export const fetchAmlKpis = () =>
   api.get<Record<string, unknown>>('/admin/kpis/aml').then((r) => r.data);
+
+export interface OperationalAlert {
+  code: string;
+  severity: string;
+  message: string;
+  value?: number | null;
+  threshold?: number | null;
+}
+
+export interface OpsSummary {
+  generated_at: string;
+  maintenance_mode: boolean;
+  kafka_consumer_lag: number;
+  ingest_error_rate_24h_percent: number;
+  unresolved_dlq_events: number;
+  stale_models: number;
+  oldest_model_age_days?: number | null;
+  alerts: OperationalAlert[];
+}
+
+export const fetchOpsSummary = () =>
+  api.get<OpsSummary>('/admin/ops/summary').then((r) => r.data);
 
 export const designateChallenger = (modelId: string) =>
   api
@@ -860,4 +1318,3 @@ export interface InviteResponse {
 
 export const generateInviteLink = (body: { email: string; role: string }) =>
   api.post<InviteResponse>('/admin/invite', body).then((r) => r.data);
-

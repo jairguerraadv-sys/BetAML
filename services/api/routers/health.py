@@ -23,14 +23,7 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["infra"])
 
 
-@router.get("/health/live", include_in_schema=False)
-async def health_live():
-    return {"status": "live"}
-
-
-@router.get("/health/ready", tags=["infra"])
-async def health_ready():
-    """Aggregate readiness probe that checks all critical dependencies."""
+async def _run_health_checks() -> dict[str, str]:
     checks: dict[str, str] = {}
 
     # ── Postgres ──────────────────────────────────────────────────────────
@@ -84,12 +77,21 @@ async def health_ready():
 
     # ── ClickHouse ────────────────────────────────────────────────────────
     try:
-        import httpx
+        from clickhouse_driver import Client
 
-        ch_url = f"http://{settings.clickhouse_host}:{settings.clickhouse_port}/ping"
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            resp = await client.get(ch_url)
-        checks["clickhouse"] = "ok" if resp.status_code == 200 else "error"
+        def _probe_clickhouse() -> bool:
+            client = Client(
+                host=settings.clickhouse_host,
+                port=settings.clickhouse_port,
+                database=settings.clickhouse_db,
+                user=getattr(settings, "clickhouse_user", "default"),
+                password=getattr(settings, "clickhouse_password", ""),
+            )
+            rows = client.execute("SELECT 1")
+            return bool(rows and rows[0][0] == 1)
+
+        is_ok = await asyncio.wait_for(asyncio.to_thread(_probe_clickhouse), timeout=2.0)
+        checks["clickhouse"] = "ok" if is_ok else "error"
     except Exception as exc:  # noqa: BLE001
         logger.warning("health_check_clickhouse_failed", error=str(exc))
         checks["clickhouse"] = "error"
@@ -99,12 +101,46 @@ async def health_ready():
         import httpx
 
         async with httpx.AsyncClient(timeout=2.0) as client:
-            resp = await client.get("http://ml_service:8001/health")
+            resp = await client.get(f"{settings.ml_service_url.rstrip('/')}/health")
         checks["ml_service"] = "ok" if resp.status_code < 500 else "error"
     except Exception as exc:  # noqa: BLE001
         logger.warning("health_check_ml_service_failed", error=str(exc))
         checks["ml_service"] = "error"
 
+    # ── Rules Engine metrics endpoint ─────────────────────────────────────
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(settings.rules_engine_metrics_url)
+        checks["rules_engine"] = "ok" if resp.status_code < 500 else "error"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("health_check_rules_engine_failed", error=str(exc))
+        checks["rules_engine"] = "error"
+
+    # ── Stream Processor metrics endpoint ─────────────────────────────────
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(settings.stream_processor_metrics_url)
+        checks["stream_processor"] = "ok" if resp.status_code < 500 else "error"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("health_check_stream_processor_failed", error=str(exc))
+        checks["stream_processor"] = "error"
+
+    return checks
+
+
+@router.get("/health/live", include_in_schema=False)
+async def health_live():
+    return {"status": "live"}
+
+
+@router.get("/health/ready", tags=["infra"])
+async def health_ready():
+    """Aggregate readiness probe that checks all critical dependencies."""
+    checks = await _run_health_checks()
     overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
     return JSONResponse(
         {

@@ -152,6 +152,15 @@ groups:
           summary: "ML scoring p99 > 2s"
           description: "ML scoring p99 latency is {{ $value | humanizeDuration }}"
 
+      - alert: MLScoringFailuresDetected
+        expr: increase(betaml_ml_scoring_failures_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Falhas de scoring ML detectadas"
+          description: "Foram observadas {{ $value }} falhas de scoring ML nos últimos 15 minutos."
+
   - name: betaml.business
     interval: 120s
     rules:
@@ -174,3 +183,30 @@ groups:
         annotations:
           summary: "No events ingested in last 15 minutes"
           description: "Ingest pipeline may be stalled. Check connectors and Kafka."
+
+      - alert: RulesEngineDown
+        expr: up{job="betaml-rules-engine"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Rules engine indisponível"
+          description: "O exporter do rules engine não responde há mais de 2 minutos."
+
+      - alert: StreamProcessorDown
+        expr: up{job="betaml-stream-processor"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Stream processor indisponível"
+          description: "O exporter do stream processor não responde há mais de 2 minutos."
+
+      - alert: DLQPending
+        expr: sum(betaml_ingest_errors_unresolved) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DLQ com eventos pendentes"
+          description: "Há {{ $value }} eventos pendentes na DLQ / quarentena."

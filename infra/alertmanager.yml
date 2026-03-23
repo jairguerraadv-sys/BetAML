@@ -1,10 +1,9 @@
 global:
   resolve_timeout: 5m
-  # Configurar SMTP em produção via variáveis de ambiente
-  smtp_from: '${ALERTMANAGER_FROM_EMAIL:-betaml-alerts@betaml.io}'
-  smtp_smarthost: '${SMTP_HOST:-localhost}:${SMTP_PORT:-587}'
-  smtp_auth_username: '${SMTP_USER:-}'
-  smtp_auth_password: '${SMTP_PASS:-}'
+  smtp_from: 'betaml-alerts@betaml.io'
+  smtp_smarthost: 'localhost:587'
+  smtp_auth_username: ''
+  smtp_auth_password: ''
   smtp_require_tls: true
 
 route:
@@ -26,12 +25,12 @@ route:
 receivers:
   - name: 'default-receiver'
     webhook_configs:
-      - url: '${ALERTMANAGER_WEBHOOK_URL:-http://api:8000/internal/alerts/webhook}'
+      - url: 'http://api:8000/internal/alerts/webhook'
         send_resolved: true
 
   - name: 'critical-receiver'
     webhook_configs:
-      - url: '${ALERTMANAGER_WEBHOOK_URL:-http://api:8000/internal/alerts/webhook}'
+      - url: 'http://api:8000/internal/alerts/webhook'
         send_resolved: true
     # Em produção: adicionar email e Slack
     # email_configs:
@@ -43,7 +42,7 @@ receivers:
 
   - name: 'warning-receiver'
     webhook_configs:
-      - url: '${ALERTMANAGER_WEBHOOK_URL:-http://api:8000/internal/alerts/webhook}'
+      - url: 'http://api:8000/internal/alerts/webhook'
         send_resolved: true
 
 inhibit_rules:

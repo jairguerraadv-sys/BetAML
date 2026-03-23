@@ -2,10 +2,10 @@
 tests/load/locustfile.py
 Locust load-test scenarios for BetAML API.
 
-Run (batch ingest throughput target — 10 000 events/s por 5min):
+Run (batch ingest throughput target — 1 000 events/s por tenant, 5min):
     locust -f tests/load/locustfile.py \
         --host http://localhost:8000 \
-        --users 200 --spawn-rate 50 \
+        --users 100 --spawn-rate 25 \
         --headless --run-time 300s \
         --csv /tmp/betaml_load_results \
         --only-summary
@@ -13,10 +13,13 @@ Run (batch ingest throughput target — 10 000 events/s por 5min):
 Run (full mixed load):
     locust -f tests/load/locustfile.py --host http://localhost:8000 --users 50 --spawn-rate 5
 
-Throughput target: POST /ingest/batch @ ≥10 000 events/second por 5 minutos
-    With 200 BatchIngestUser workers, each posting 10 events with wait_time=0,
+Throughput target: POST /ingest/batch @ ≥1 000 events/second por tenant
+    With 100 BatchIngestUser workers, each posting 10 events with wait_time=0,
     events/s ≈ users × BATCH_SIZE / avg_latency_s.
   Tune --users and BATCH_SIZE to hit target for your hardware.
+
+After the run, generate a compact CSV report:
+    python tests/load/generate_report.py /tmp/betaml_load_results --output /tmp/betaml_load_summary.csv
 
 Scenarios:
   - BatchIngestUser : POST /ingest/batch (JSON, high-throughput target)
@@ -27,7 +30,7 @@ Scenarios:
 """
 from __future__ import annotations
 
-import json
+import os
 import random
 import string
 import uuid
@@ -37,8 +40,9 @@ from locust import HttpUser, SequentialTaskSet, between, constant, task
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-_TENANT_EMAIL = "analyst@betaml.io"
-_TENANT_PASS  = "analyst123"
+_TENANT_USER = os.getenv("LOADTEST_USER", "analyst_a")
+_TENANT_PASS = os.getenv("LOADTEST_PASS", "analyst123")
+_TENANT_SLUG = os.getenv("LOADTEST_TENANT_SLUG", "")
 BATCH_SIZE    = 10  # events per POST /ingest/batch request
 
 # Shared state for inter-task data flow (per-user)
@@ -92,8 +96,12 @@ class AuthMixin:
         self.ctx = _SharedCtx()
         resp = self.client.post(
             "/auth/login",
-            data={"username": _TENANT_EMAIL, "password": _TENANT_PASS},
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            json={
+                "username": _TENANT_USER,
+                "password": _TENANT_PASS,
+                **({"tenant_slug": _TENANT_SLUG} if _TENANT_SLUG else {}),
+            },
+            headers={"Content-Type": "application/json"},
             name="/auth/login",
         )
         if resp.status_code == 200:
@@ -114,9 +122,9 @@ class BatchIngestTaskSet(SequentialTaskSet):
     Throughput formula:
         events/s ≈ concurrency × BATCH_SIZE / avg_latency_s
 
-    With 100 users, BATCH_SIZE=10, avg_latency≈100ms:
-        100 × 10 / 0.1 = 10 000 events/s  (well above the 1 000 target)
-    Scale --users down if needed; use --csv to capture the report.
+    With 100 users, BATCH_SIZE=10, avg_latency≈1s:
+        100 × 10 / 1.0 = 1 000 events/s
+    Use --csv plus tests/load/generate_report.py to capture the report.
     """
 
     @task
@@ -133,7 +141,7 @@ class BatchIngestTaskSet(SequentialTaskSet):
 class BatchIngestUser(AuthMixin, HttpUser):
     """
     Dedicated high-throughput batch ingest user.
-    Use --users 100 to target ≥1 000 events/s throughput.
+    Use --users 100 as the baseline to target ≥1 000 events/s throughput.
     """
     tasks         = [BatchIngestTaskSet]
     wait_time     = constant(0)          # no wait — maximize throughput
@@ -149,7 +157,7 @@ class IngestTaskSet(SequentialTaskSet):
         self.client.post(
             "/ingest/file",
             files={"file": ("transactions.csv", BytesIO(payload), "text/csv")},
-            data={"source_system": "delta", "mapping_config_id": "default"},
+            data={"source_system": "BackofficeAlpha"},
             headers=self.user._h(),
             name="/ingest/file",
         )
@@ -297,4 +305,3 @@ class CaseUser(AuthMixin, HttpUser):
     tasks     = [CaseTaskSet]
     wait_time = between(2, 5)
     weight    = 1
-

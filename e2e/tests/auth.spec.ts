@@ -1,21 +1,10 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 
-const USERNAME = process.env.E2E_USERNAME ?? '';
-const PASSWORD = process.env.E2E_PASSWORD ?? '';
+import { assertE2ECredentials, login } from './helpers';
 
 test.beforeAll(() => {
-  if (!USERNAME || !PASSWORD) {
-    throw new Error('E2E_USERNAME e E2E_PASSWORD devem estar definidos no ambiente.');
-  }
+  assertE2ECredentials();
 });
-
-async function login(page: Page) {
-  await page.goto('/login');
-  await page.getByLabel(/usuário|username/i).fill(USERNAME);
-  await page.getByLabel(/senha|password/i).fill(PASSWORD);
-  await page.getByRole('button', { name: /entrar|login/i }).click();
-  await page.waitForURL('**/dashboard', { timeout: 10_000 });
-}
 
 test.describe('Authentication', () => {
   test('login page renders', async ({ page }) => {

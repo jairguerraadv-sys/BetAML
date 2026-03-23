@@ -30,10 +30,21 @@ from typing import Any, Optional
 import joblib
 import numpy as np
 import structlog
-from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi import FastAPI, HTTPException, Header, Query, Request
+from fastapi.responses import Response
+from prometheus_client import Counter
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 
+from libs.telemetry import init_opentelemetry_stub
+
 logger = structlog.get_logger()
+
+ML_SCORING_FAILURES = Counter(
+    "betaml_ml_service_scoring_failures_total",
+    "Falhas de scoring no ml_service por tenant e motivo",
+    ["tenant_id", "reason"],
+)
 
 FEATURE_ALIASES = {
     "unique_instruments_used_7d": "unique_instruments_7d",
@@ -353,6 +364,7 @@ def _features_to_vector(features: dict, columns: list[str]) -> np.ndarray:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_opentelemetry_stub("ml-service")
     logger.info("ml_service_starting")
 
     # ── APScheduler: re-training automático diário ────────────────────────────
@@ -414,6 +426,31 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="BetAML ML Service", version="1.0.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def bind_trace_context(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
+    event_id = request.headers.get("X-Event-ID") or request.headers.get("X-Event-Id")
+    structlog.contextvars.clear_contextvars()
+    if request_id:
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+    if event_id:
+        structlog.contextvars.bind_contextvars(event_id=event_id)
+    response: Response = await call_next(request)
+    if request_id:
+        response.headers["X-Request-ID"] = request_id
+    if event_id:
+        response.headers["X-Event-ID"] = event_id
+    return response
+
+
+Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    should_group_untemplated=True,
+    excluded_handlers=["/metrics", "/docs", "/openapi.json"],
+).instrument(app).expose(app, include_in_schema=False, tags=["observability"])
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
@@ -507,11 +544,16 @@ def score(req: ScoreRequest, x_request_id: str | None = Header(None, alias="X-Re
     fc  = entry.get("feature_columns", FEATURE_COLS)
     X   = _features_to_vector(normalized_features, fc)
 
-    # IsolationForest: score < 0 → anomalia; decision_function → [-1, 1]
-    raw_score = clf.decision_function(X)[0]  # mais negativo = mais anômalo
-    # Normaliza para [0,1]: 0 = normal, 1 = máxima anomalia
-    anomaly_score = float(np.clip((raw_score * -1 + 1) / 2, 0.0, 1.0))
-    is_anomaly = anomaly_score >= 0.65
+    try:
+        # IsolationForest: score < 0 → anomalia; decision_function → [-1, 1]
+        raw_score = clf.decision_function(X)[0]  # mais negativo = mais anômalo
+        # Normaliza para [0,1]: 0 = normal, 1 = máxima anomalia
+        anomaly_score = float(np.clip((raw_score * -1 + 1) / 2, 0.0, 1.0))
+        is_anomaly = anomaly_score >= 0.65
+    except Exception as exc:  # noqa: BLE001
+        ML_SCORING_FAILURES.labels(tenant_id=req.tenant_id, reason=exc.__class__.__name__).inc()
+        logger.warning("ml_score_failed", tenant_id=req.tenant_id, player_id=req.player_id, error=str(exc))
+        raise HTTPException(503, "Falha temporária no scoring ML") from exc
 
     # Top drivers: features com maior desvio em relação a zero (proxy simples)
     drivers = sorted(

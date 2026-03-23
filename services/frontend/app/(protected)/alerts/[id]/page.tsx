@@ -2,7 +2,16 @@
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchAlert, triageAlert, linkAlertToCase, fetchCases, AlertDetail, Case } from '@/lib/api';
+import {
+  AlertDetail,
+  AlertExplainability,
+  Case,
+  fetchAlert,
+  fetchAlertExplainability,
+  fetchCases,
+  linkAlertToCase,
+  triageAlert,
+} from '@/lib/api';
 
 const SEV_BADGE: Record<string, string> = {
   CRITICAL: 'bg-red-100 text-red-700 border border-red-200',
@@ -57,6 +66,12 @@ export default function AlertDetailPage() {
     queryFn:  () => fetchCases(),
     enabled:  showLink,
   });
+  const { data: explainability } = useQuery<AlertExplainability>({
+    queryKey: ['alert-explainability', id],
+    queryFn: () => fetchAlertExplainability(id),
+    enabled: !!id && !!alert && (alert.alert_type === 'COMPOSITE' || alert.alert_type === 'ANOMALY' || !!alert.anomaly_score),
+    retry: false,
+  });
   const cases: Case[] = (casesData as Case[] | undefined) ?? [];
 
   const triage = useMutation({
@@ -69,7 +84,7 @@ export default function AlertDetailPage() {
   });
 
   const link = useMutation({
-    mutationFn: () => linkAlertToCase(id, selectedCase),
+    mutationFn: () => linkAlertToCase(selectedCase, id),
     onSuccess:  () => {
       qc.invalidateQueries({ queryKey: ['alert', id] });
       setShowLink(false);
@@ -168,6 +183,55 @@ export default function AlertDetailPage() {
         </Section>
       )}
 
+      {explainability && explainability.top_features.length > 0 && (
+        <Section title="Explicabilidade ML">
+          <div className="mb-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-lg bg-gray-50 p-3">
+              <div className="text-xs text-gray-400">Modelo</div>
+              <div className="text-sm font-semibold text-gray-800">{explainability.model_id?.slice(0, 8) ?? '—'}</div>
+            </div>
+            <div className="rounded-lg bg-gray-50 p-3">
+              <div className="text-xs text-gray-400">Método</div>
+              <div className="text-sm font-semibold text-gray-800">{explainability.explanation_method}</div>
+            </div>
+            <div className="rounded-lg bg-gray-50 p-3">
+              <div className="text-xs text-gray-400">Anomaly score</div>
+              <div className="text-sm font-semibold text-gray-800">{explainability.anomaly_score.toFixed(4)}</div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {explainability.top_features.map((item) => {
+              const magnitude = Math.min(100, Math.abs(item.contribution) * 100);
+              const positive = item.contribution >= 0;
+              return (
+                <div key={item.feature} className="rounded-lg border border-gray-100 p-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-gray-900">{item.feature}</div>
+                      <div className="text-xs text-gray-500">
+                        valor atual: {String(item.current_value ?? '—')}
+                        {item.baseline_value !== null && item.baseline_value !== undefined && ` · baseline: ${item.baseline_value}`}
+                        {item.delta !== null && item.delta !== undefined && ` · delta: ${item.delta}`}
+                      </div>
+                    </div>
+                    <div className={`text-sm font-semibold ${positive ? 'text-red-600' : 'text-green-600'}`}>
+                      contribuição {item.contribution.toFixed(4)}
+                    </div>
+                  </div>
+                  <div className="mt-2 h-2 rounded-full bg-gray-100">
+                    <div
+                      className={`h-2 rounded-full ${positive ? 'bg-red-500' : 'bg-green-500'}`}
+                      style={{ width: `${magnitude}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Section>
+      )}
+
       {/* Ações */}
       <div className="flex flex-wrap gap-3">
         {alert.status !== 'CLOSED' && (
@@ -204,6 +268,7 @@ export default function AlertDetailPage() {
 
             <label className="mb-1 block text-sm font-medium">Disposição</label>
             <select
+              aria-label="Disposição da triagem"
               value={disposition}
               onChange={(e) => setDisp(e.target.value)}
               className="mb-3 w-full rounded-lg border px-3 py-2 text-sm"
@@ -216,6 +281,7 @@ export default function AlertDetailPage() {
 
             <label className="mb-1 block text-sm font-medium">Observação</label>
             <textarea
+              aria-label="Observação da triagem"
               rows={3}
               value={note}
               onChange={(e) => setNote(e.target.value)}
@@ -226,6 +292,7 @@ export default function AlertDetailPage() {
               <button
                 onClick={() => triage.mutate()}
                 disabled={!disposition || triage.isPending}
+                aria-label="Confirmar triagem"
                 className="flex-1 rounded-lg bg-brand py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
                 {triage.isPending ? 'Salvando...' : 'Confirmar Triagem'}
@@ -246,6 +313,7 @@ export default function AlertDetailPage() {
 
             <label className="mb-1 block text-sm font-medium">Caso</label>
             <select
+              aria-label="Selecionar caso para vincular"
               value={selectedCase}
               onChange={(e) => setSelectedCase(e.target.value)}
               className="mb-4 w-full rounded-lg border px-3 py-2 text-sm"
@@ -262,6 +330,7 @@ export default function AlertDetailPage() {
               <button
                 onClick={() => link.mutate()}
                 disabled={!selectedCase || link.isPending}
+                aria-label="Vincular alerta a caso"
                 className="flex-1 rounded-lg bg-brand py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
                 {link.isPending ? 'Vinculando...' : 'Vincular'}

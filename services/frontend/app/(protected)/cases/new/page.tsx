@@ -34,8 +34,10 @@ export default function NewCasePage() {
 
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm space-y-4">
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Título</label>
+          <label htmlFor="case-title" className="mb-1 block text-sm font-medium text-gray-700">Título</label>
           <input
+            id="case-title"
+            aria-label="Título do caso"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
@@ -44,8 +46,10 @@ export default function NewCasePage() {
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Descrição</label>
+          <label htmlFor="case-description" className="mb-1 block text-sm font-medium text-gray-700">Descrição</label>
           <textarea
+            id="case-description"
+            aria-label="Descrição do caso"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={4}
@@ -56,8 +60,10 @@ export default function NewCasePage() {
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Player ID (opcional)</label>
+            <label htmlFor="case-player-id" className="mb-1 block text-sm font-medium text-gray-700">Player ID (opcional)</label>
             <input
+              id="case-player-id"
+              aria-label="Player ID do caso"
               value={playerId}
               onChange={(e) => setPlayerId(e.target.value)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
@@ -65,8 +71,10 @@ export default function NewCasePage() {
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Severidade</label>
+            <label htmlFor="case-severity" className="mb-1 block text-sm font-medium text-gray-700">Severidade</label>
             <select
+              id="case-severity"
+              aria-label="Severidade do caso"
               value={severity}
               onChange={(e) => setSeverity(e.target.value)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
@@ -93,6 +101,7 @@ export default function NewCasePage() {
           <button
             onClick={() => createMut.mutate()}
             disabled={!title.trim() || createMut.isPending}
+            aria-label="Criar caso"
             className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
           >
             {createMut.isPending ? 'Criando...' : 'Criar Caso'}

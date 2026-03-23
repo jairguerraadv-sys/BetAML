@@ -47,6 +47,21 @@ jobs:
           pip install -r services/api/requirements.txt
           pip install -r requirements-dev.txt
 
+      - name: Run batched backend gate
+        env:
+          JWT_SECRET: ci-test-secret-at-least-32-characters-long
+          PII_ENCRYPTION_KEY: ci-pii-test-key-32-characters-long!!
+          ENVIRONMENT: test
+          DATABASE_URL: postgresql+asyncpg://betaml:betaml@localhost/betaml
+          REDIS_URL: redis://localhost:6379/0
+          KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+        run: |
+          bash scripts/run_critical_unit_batches.sh --include-remainder -q --tb=short \
+            --cov=services/api \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --cov-fail-under=40
+
       - name: Prepare env for docker compose
         run: cp .env.example .env
 
@@ -74,9 +89,26 @@ jobs:
         run: |
           pytest -q tests/integration/test_new_endpoints.py -k "TestExternalValidationEndpoints" --tb=short
 
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-backend-coverage-external-validation
+          path: coverage.xml
+          retention-days: 7
+
       - name: Dump logs on failure
         if: failure()
-        run: docker compose -f infra/docker-compose.yml logs --no-color || true
+        run: docker compose -f infra/docker-compose.yml logs --no-color > /tmp/external-validation-docker-logs.txt || true
+
+      - name: Upload docker logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-external-validation-docker-logs
+          path: /tmp/external-validation-docker-logs.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Stop stack
         if: always()

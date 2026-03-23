@@ -69,7 +69,23 @@ async def test_dashboard_returns_required_kpi_keys():
 
     result = await dashboard_stats(db=db, current_user=user)
 
-    for key in ("alerts_today", "critical_open", "cases_open", "sla_expired", "auto_detected", "by_severity"):
+    for key in (
+        "alerts_today",
+        "critical_open",
+        "cases_open",
+        "sla_expired",
+        "auto_detected",
+        "by_severity",
+        "alerts_open",
+        "cases_investigating",
+        "cases_near_sla",
+        "high_risk_players",
+        "events_ingested_today",
+        "alerts_by_severity_30d",
+        "alerts_by_rule_type",
+        "top_players_by_risk",
+        "alert_heatmap",
+    ):
         assert key in result, f"Missing KPI key: {key}"
 
 
@@ -114,3 +130,20 @@ def test_stats_router_uses_tenant_id():
     assert "tenant_id" in src, (
         "stats.py does not reference tenant_id — tenant isolation may be missing"
     )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_extended_kpis_return_exact_scalars():
+    """Extended KPI counters should preserve scalar values from the DB query sequence."""
+    from routers.stats import dashboard_stats
+
+    db = _make_db_scalar([7, 3, 12, 2, 5, 9, 4, 6, 8, 1200])
+    user = _make_user()
+
+    result = await dashboard_stats(db=db, current_user=user)
+
+    assert result["alerts_open"] == 9
+    assert result["cases_investigating"] == 4
+    assert result["cases_near_sla"] == 6
+    assert result["high_risk_players"] == 8
+    assert result["events_ingested_today"] == 1200

@@ -14,6 +14,8 @@ Covers:
   - erase_player_data zeros extra PII fields (birth_date, profession, etc.)
   - monthly report includes total_sar_reports key
   - monthly report includes true_positive_rate key
+  - monthly report includes total_communications_generated key
+  - report PDF export writes audit
 """
 from __future__ import annotations
 
@@ -294,6 +296,7 @@ async def test_mappings_create_writes_audit():
 
     with patch("routers.mappings.write_audit", AsyncMock()) as mock_audit, \
          patch("routers.mappings._parse_config_payload", return_value={"fields": []}), \
+         patch("routers.mappings.validate_mapping_targets_against_canonical_schema", return_value={"valid": True}), \
          patch("routers.mappings._next_version_number", AsyncMock(return_value=1)), \
          patch("routers.mappings.update", update_mock), \
          patch("routers.mappings.MappingConfig", return_value=mc_obj):
@@ -342,12 +345,14 @@ async def test_mappings_update_writes_audit_with_before_after():
 
     with patch("routers.mappings.write_audit", AsyncMock()) as mock_audit, \
          patch("routers.mappings._parse_config_payload", return_value={}), \
+         patch("routers.mappings.validate_mapping_targets_against_canonical_schema", return_value={"valid": True}), \
          patch("routers.mappings._next_version_number", AsyncMock(return_value=2)), \
          patch("routers.mappings.update", update_mock), \
          patch("routers.mappings.MappingConfig", return_value=new_row):
         await create_new_mapping_version(mapping_id="m1", body=body, current_user=user, db=db)
 
     mock_audit.assert_awaited_once()
+    assert db.refresh.await_count == 0
     args = mock_audit.call_args[0]
     assert args[3] == "UPDATE_MAPPING"
     kwargs = mock_audit.call_args[1]
@@ -402,6 +407,7 @@ async def test_monthly_report_includes_sar_count():
     from datetime import timezone
 
     db = AsyncMock()
+    executed_statements = []
     # Return row-like mocks for all queries
     empty_result = MagicMock()
     empty_result.all.return_value = []
@@ -417,10 +423,12 @@ async def test_monthly_report_includes_sar_count():
     async def _execute(stmt, *a, **kw):
         nonlocal call_count
         call_count += 1
+        executed_statements.append(stmt)
+        stmt_text = str(stmt)
         r = MagicMock()
         r.all.return_value = []
         r.scalar_one.return_value = 0
-        r.scalar.return_value = 3 if call_count == 7 else 0  # 7th query is SAR count
+        r.scalar.return_value = 3 if "CAST(:tenant_id AS uuid)" in stmt_text else 0
         r.scalars.return_value = r
         return r
 
@@ -431,6 +439,10 @@ async def test_monthly_report_includes_sar_count():
     result = await _build_monthly_report("t1", from_dt, to_dt, db)
 
     assert "total_sar_reports" in result
+    sar_stmt = next(str(stmt) for stmt in executed_statements if "CAST(:tenant_id AS uuid)" in str(stmt))
+    assert "CAST(:tenant_id AS uuid)" in sar_stmt
+    assert "IN ('REPORT', 'FILE_SAR')" in sar_stmt
+    assert result["total_sar_reports"] == 3
 
 
 @pytest.mark.asyncio
@@ -456,3 +468,57 @@ async def test_monthly_report_includes_true_positive_rate():
     result = await _build_monthly_report("t1", from_dt, to_dt, db)
 
     assert "true_positive_rate" in result
+
+
+@pytest.mark.asyncio
+async def test_monthly_report_includes_generated_communications():
+    """Monthly report must include total_communications_generated key."""
+    from routers.reports import _build_monthly_report
+    from datetime import timezone
+
+    db = AsyncMock()
+
+    async def _execute(stmt, *a, **kw):
+        r = MagicMock()
+        r.all.return_value = []
+        r.scalar_one.return_value = 0
+        r.scalar.return_value = 4 if "report_packages" not in str(stmt).lower() else 2
+        r.scalars.return_value = r
+        return r
+
+    db.execute = AsyncMock(side_effect=_execute)
+
+    from_dt = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    to_dt = datetime(2025, 1, 31, tzinfo=timezone.utc)
+    result = await _build_monthly_report("t1", from_dt, to_dt, db)
+
+    assert "total_communications_generated" in result
+
+
+@pytest.mark.asyncio
+async def test_download_report_pdf_writes_audit():
+    """PDF export must generate EXPORT_REPORT_PDF audit entry."""
+    from routers.cases import download_report_pdf
+    import tempfile
+
+    db = _make_db()
+    rp = MagicMock()
+    rp.tenant_id = "t1"
+    rp.case_id = "case-1"
+    with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
+        handle.write(b"%PDF-1.4 fake")
+        handle.flush()
+        rp.pdf_path = handle.name
+        db.get = AsyncMock(return_value=rp)
+
+        with patch("routers.cases.write_audit", AsyncMock()) as mock_audit:
+            response = await download_report_pdf(
+                case_id="case-1",
+                rp_id="rp-1",
+                current_user=_make_user(),
+                db=db,
+            )
+
+            assert response.media_type == "application/pdf"
+            mock_audit.assert_awaited_once()
+            assert mock_audit.call_args[0][3] == "EXPORT_REPORT_PDF"

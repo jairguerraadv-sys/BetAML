@@ -1,56 +1,9 @@
-import { test, expect, Page, APIRequestContext } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 
-const USERNAME = process.env.E2E_USERNAME ?? '';
-const PASSWORD = process.env.E2E_PASSWORD ?? '';
-const API_URL = process.env.E2E_API_URL ?? 'http://localhost:8000';
-
-test.beforeAll(() => {
-  if (!USERNAME || !PASSWORD) {
-    throw new Error('E2E_USERNAME e E2E_PASSWORD devem estar definidos no ambiente.');
-  }
-});
-
-async function login(page: Page) {
-  await page.goto('/login');
-  await page.getByLabel(/usuário|username/i).fill(USERNAME);
-  await page.getByLabel(/senha|password/i).fill(PASSWORD);
-  await page.getByRole('button', { name: /entrar|login/i }).click();
-  await page.waitForURL('**/dashboard', { timeout: 10_000 });
-}
-
-async function ensureAtLeastOneActiveCase(request: APIRequestContext) {
-  const loginRes = await request.post(`${API_URL}/auth/login`, {
-    data: { username: USERNAME, password: PASSWORD },
-  });
-  expect(loginRes.ok()).toBeTruthy();
-
-  const loginData = await loginRes.json();
-  const token = loginData?.access_token as string | undefined;
-  expect(token).toBeTruthy();
-
-  const headers = { Authorization: `Bearer ${token}` };
-  const listRes = await request.get(`${API_URL}/cases?limit=20`, { headers });
-  expect(listRes.ok()).toBeTruthy();
-
-  const cases = (await listRes.json()) as Array<{ status?: string }>;
-  const hasActive = cases.some((c) => ['OPEN', 'IN_REVIEW', 'UNDER_REVIEW'].includes(c.status ?? ''));
-
-  if (!hasActive) {
-    const createRes = await request.post(`${API_URL}/cases`, {
-      headers,
-      data: {
-        title: `E2E Case ${Date.now()}`,
-        description: 'Seed automatizado para testes E2E de casos',
-        severity: 'HIGH',
-      },
-    });
-    expect(createRes.ok()).toBeTruthy();
-  }
-}
+import { apiLogin, createCaseViaApi, fetchFirstPlayerId, login } from './helpers';
 
 test.describe('Cases', () => {
-  test.beforeEach(async ({ page, request }) => {
-    await ensureAtLeastOneActiveCase(request);
+  test.beforeEach(async ({ page }) => {
     await login(page);
     await page.goto('/cases');
   });
@@ -69,22 +22,45 @@ test.describe('Cases', () => {
     await expect(page.getByRole('button', { name: /novo caso/i })).toBeVisible();
   });
 
-  test('clicking a case row opens detail', async ({ page }) => {
-    const firstCase = page.getByTestId('case-row').first();
-    await expect(firstCase).toBeVisible();
-    await firstCase.click();
+  test('creating a case via UI opens its detail page', async ({ page }) => {
+    const title = `E2E Manual Case ${Date.now()}`;
+    await page.getByRole('button', { name: /novo caso/i }).click();
+    await expect(page).toHaveURL(/\/cases\/new/, { timeout: 10_000 });
+
+    await page.getByLabel(/título do caso/i).fill(title);
+    await page.getByLabel(/descrição do caso/i).fill('Caso criado pela suíte E2E para validar o fluxo manual.');
+    await page.getByLabel(/severidade do caso/i).selectOption('HIGH');
+    await page.getByRole('button', { name: /criar caso/i }).click();
+
     await expect(page).toHaveURL(/\/cases\/.+/, { timeout: 10_000 });
     await expect(page.getByRole('button', { name: /visão geral/i })).toBeVisible();
+    await expect(page.locator('h1').first()).toContainText(/E2E Manual Case/i);
   });
 
-  test('cases detail has expected tabs', async ({ page }) => {
-    const firstCase = page.getByTestId('case-row').first();
-    await expect(firstCase).toBeVisible();
-    await firstCase.click();
-    await expect(page).toHaveURL(/\/cases\/.+/, { timeout: 10_000 });
+  test('case detail supports workflow notes and report package generation', async ({ page, request }) => {
+    const session = await apiLogin(request);
+    const playerId = await fetchFirstPlayerId(request, session.access_token);
+    const createdCase = await createCaseViaApi(request, session.access_token, {
+      title: `E2E Workflow Case ${Date.now()}`,
+      severity: 'HIGH',
+      player_id: playerId,
+    });
+
+    await page.goto(`/cases/${createdCase.id}`);
+    await expect(page).toHaveURL(new RegExp(`/cases/${createdCase.id}$`), { timeout: 10_000 });
+
     await expect(page.getByRole('button', { name: /visão geral/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: /perfil do cliente/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: /movimentações/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: /decisão e relatório/i })).toBeVisible();
+
+    await page.getByRole('button', { name: /clique para adicionar uma anotação ao caso/i }).click();
+    await page.getByLabel(/anotação do caso/i).fill('Comentário E2E para validar a timeline do caso.');
+    await page.getByRole('button', { name: /anotar/i }).click();
+    await expect(page.getByText(/comentário e2e para validar a timeline do caso/i)).toBeVisible({ timeout: 10_000 });
+
+    await page.getByRole('button', { name: /decisão e relatório/i }).click();
+    await page.getByLabel(/decisão no report package: no_action/i).check();
+    await page.getByRole('button', { name: /gerar dossiê/i }).click();
+
+    await expect(page.getByText(/relatório gerado com sucesso/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('heading', { name: /histórico de reportpackages/i })).toBeVisible();
   });
 });

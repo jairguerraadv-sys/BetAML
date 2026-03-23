@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
+from starlette.requests import Request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../services/api"))
 
@@ -142,7 +144,6 @@ def test_ingest_event_request_with_source_event_id():
 async def test_ingest_event_unknown_source_system_raises_400():
     """POST /ingest/event with unknown source_system must raise 400."""
     from routers.ingest import ingest_event, IngestEventRequest
-    from fastapi import HTTPException
 
     body = IngestEventRequest(
         source_system="UnknownSystem",
@@ -152,8 +153,10 @@ async def test_ingest_event_unknown_source_system_raises_400():
     db = _make_db()
     user = _make_user()
 
-    with pytest.raises(HTTPException) as exc_info:
-        await ingest_event(body=body, current_user=user, db=db)
+    with patch("routers.ingest._tenant_ingest_rate_limit", AsyncMock(return_value=300)), \
+         patch("routers.ingest.redis_rate_limit", AsyncMock()):
+        with pytest.raises(HTTPException) as exc_info:
+            await ingest_event(body=body, current_user=user, db=db)
 
     assert exc_info.value.status_code == 400
 
@@ -176,7 +179,9 @@ async def test_ingest_event_valid_request_returns_event_id():
     db = _make_db()
     user = _make_user()
 
-    with patch("routers.ingest.get_producer") as mock_get_prod:
+    with patch("routers.ingest._tenant_ingest_rate_limit", AsyncMock(return_value=300)), \
+         patch("routers.ingest.redis_rate_limit", AsyncMock()), \
+         patch("routers.ingest.get_producer") as mock_get_prod:
         mock_producer = AsyncMock()
         mock_producer.send = AsyncMock(return_value=None)
         mock_get_prod.return_value = mock_producer
@@ -223,7 +228,6 @@ def test_reprocess_request_defaults():
 async def test_resolve_ingest_error_404_when_not_found():
     """POST /ingest/errors/{id}/resolve raises 404 when error not found."""
     from routers.ingest import resolve_ingest_error, ResolveIngestErrorRequest
-    from fastapi import HTTPException
 
     db = _make_db(get_result=None)
     user = _make_user()
@@ -257,6 +261,121 @@ async def test_replay_ingest_error_404_when_not_found():
             )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_ingest_epsilon_webhook_registers_job_and_returns_job_id():
+    from routers.ingest import ingest_epsilon_webhook
+
+    principal = MagicMock()
+    principal.tenant_id = "t1"
+    principal.id = "u1"
+
+    body = b'{"events":[{"event_id":"evt-1","player_id":"p1","event_type":"DEPOSIT","gross_amount":10.0,"event_time":"2026-03-20T10:00:00Z","currency_code":"BRL"}]}'
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/ingest/webhook/epsilon",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"x-epsilon-signature", b"sha256=dummy"),
+            ],
+        },
+        receive=receive,
+    )
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock(side_effect=lambda obj: setattr(obj, "id", "job-1"))
+
+    producer = AsyncMock()
+    producer.send = AsyncMock(return_value=None)
+
+    with patch("routers.ingest._tenant_ingest_rate_limit", AsyncMock(return_value=300)), \
+         patch("routers.ingest.redis_rate_limit", AsyncMock()), \
+         patch("routers.ingest._upload_bronze_file", return_value="bronze/t1/job-1/epsilon.json"), \
+         patch("routers.ingest.get_producer", AsyncMock(return_value=producer)), \
+         patch("routers.ingest.ConnectorEpsilon") as connector_cls:
+        connector = MagicMock()
+        connector.parse.return_value = MagicMock(
+            success=True,
+            records=[
+                {
+                    "event_id": "evt-1",
+                    "external_player_id": "p1",
+                    "transaction_type": "DEPOSIT",
+                    "amount": 10.0,
+                    "occurred_at": "2026-03-20T10:00:00Z",
+                    "currency": "BRL",
+                }
+            ],
+            total=1,
+            failed=0,
+            errors=[],
+        )
+        connector_cls.return_value = connector
+
+        result = await ingest_epsilon_webhook(request=request, principal=principal, db=db)
+
+    assert result["status"] == "accepted"
+    assert result["count"] == 1
+    assert result["job_id"] == "job-1"
+    assert db.add.call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_ingest_epsilon_webhook_invalid_signature_creates_failed_job():
+    from routers.ingest import ingest_epsilon_webhook
+
+    principal = MagicMock()
+    principal.tenant_id = "t1"
+    principal.id = "u1"
+
+    body = b'{"events":[]}'
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/ingest/webhook/epsilon",
+            "headers": [(b"x-epsilon-signature", b"sha256=bad")],
+        },
+        receive=receive,
+    )
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock(side_effect=lambda obj: setattr(obj, "id", "job-2"))
+
+    with patch("routers.ingest._tenant_ingest_rate_limit", AsyncMock(return_value=300)), \
+         patch("routers.ingest.redis_rate_limit", AsyncMock()), \
+         patch("routers.ingest._upload_bronze_file", return_value=None), \
+         patch("routers.ingest.ConnectorEpsilon") as connector_cls:
+        connector = MagicMock()
+        connector.parse.return_value = MagicMock(
+            success=False,
+            records=[],
+            total=0,
+            failed=1,
+            errors=["Invalid signature"],
+        )
+        connector_cls.return_value = connector
+
+        with pytest.raises(HTTPException) as exc_info:
+            await ingest_epsilon_webhook(request=request, principal=principal, db=db)
+
+    assert exc_info.value.status_code == 400
+    assert db.add.call_count >= 2
 
 
 # ---------------------------------------------------------------------------

@@ -696,16 +696,19 @@ class TestComputeFeaturePopulationStats:
         assert call_args.kwargs["ex"] == 25 * 3600
 
         stored = _json.loads(call_args.args[1])
-        assert "deposit_sum_30d" in stored
-        assert "tx_count_30d" in stored
+        assert "computed_at" in stored
+        assert "features" in stored
+        assert "deposit_sum_30d" in stored["features"]
+        assert "tx_count_30d" in stored["features"]
 
-        dep = stored["deposit_sum_30d"]
+        dep = stored["features"]["deposit_sum_30d"]
         # mean([100, 200]) == 150
         assert dep["mean"] == pytest.approx(150.0, abs=0.01)
         # pstdev([100, 200]) == 50
         assert dep["std"] == pytest.approx(50.0, abs=0.01)
         # p50 (median via linear interpolation) == 150
         assert dep["p50"] == pytest.approx(150.0, abs=0.01)
+        assert dep["count"] == 2
 
     @pytest.mark.asyncio
     async def test_no_snapshots_does_not_write_to_redis(self):
@@ -818,8 +821,7 @@ class TestComputeFeaturePopulationStats:
         stored = _json.loads(redis_mock.set.call_args.args[1])
 
         # feature_version is NOT a key in the features JSONB; it must not appear in stats
-        assert "feature_version" not in stored
-        assert "deposit_sum_30d" in stored
+        assert "feature_version" not in stored["features"]
+        assert "deposit_sum_30d" in stored["features"]
         # mean([500, 1000]) == 750
-        assert stored["deposit_sum_30d"]["mean"] == pytest.approx(750.0, abs=0.01)
-
+        assert stored["features"]["deposit_sum_30d"]["mean"] == pytest.approx(750.0, abs=0.01)

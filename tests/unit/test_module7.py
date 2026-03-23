@@ -7,6 +7,7 @@ Covers:
   - health_ready returns degraded when postgres fails
   - maintenance middleware exempts /health path
   - maintenance middleware exempts /auth path
+  - maintenance middleware allows safe disable endpoint for admins
   - maintenance middleware returns 503 when enabled
   - maintenance middleware passes through when disabled
   - request_id middleware generates id if missing
@@ -14,14 +15,18 @@ Covers:
   - request_id header returned in response
   - open_alerts gauge metric is registered
   - update_business_metrics executes queries
+  - ops summary exposes operational alerts
 """
 from __future__ import annotations
 
 import sys
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
+import json
 
 import pytest
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../services/api"))
 
@@ -134,69 +139,101 @@ async def test_health_ready_degraded_when_postgres_fails():
 async def test_maintenance_middleware_exempts_health_path():
     """MaintenanceModeMiddleware must pass /health/* without any DB check."""
     from middleware import MaintenanceModeMiddleware
-    from starlette.testclient import TestClient
-    from starlette.applications import Starlette
-    from starlette.routing import Route
-    from starlette.responses import PlainTextResponse
-
-    async def endpoint(request):
-        return PlainTextResponse("ok")
-
-    app = Starlette(routes=[Route("/health/live", endpoint)])
-    app.add_middleware(MaintenanceModeMiddleware)
-
-    client = TestClient(app, raise_server_exceptions=True)
-    resp = client.get("/health/live")
+    request = Request(_make_asgi_scope("/health/live"))
+    call_next = AsyncMock(return_value=PlainTextResponse("ok"))
+    mw = MaintenanceModeMiddleware(app=MagicMock())
+    resp = await mw.dispatch(request, call_next)
     assert resp.status_code == 200
+    call_next.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_maintenance_middleware_exempts_auth_path():
     """MaintenanceModeMiddleware must pass /auth/* without any DB check."""
     from middleware import MaintenanceModeMiddleware
-    from starlette.testclient import TestClient
-    from starlette.applications import Starlette
-    from starlette.routing import Route
-    from starlette.responses import PlainTextResponse
-
-    async def endpoint(request):
-        return PlainTextResponse("ok")
-
-    app = Starlette(routes=[Route("/auth/login", endpoint)])
-    app.add_middleware(MaintenanceModeMiddleware)
-
-    client = TestClient(app, raise_server_exceptions=True)
-    resp = client.get("/auth/login")
+    request = Request(_make_asgi_scope("/auth/login"))
+    call_next = AsyncMock(return_value=PlainTextResponse("ok"))
+    mw = MaintenanceModeMiddleware(app=MagicMock())
+    resp = await mw.dispatch(request, call_next)
     assert resp.status_code == 200
+    call_next.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_maintenance_middleware_allows_admin_disable_request_when_enabled():
+    """Admins must be able to turn maintenance off even while it is active."""
+    import middleware as mw
+    from middleware import MaintenanceModeMiddleware
+
+    from jose import jwt as _jwt
+    token = _jwt.encode(
+        {"tenant_id": "t1", "sub": "u1", "role": "ADMIN"},
+        "dev-secret-change-me",
+        algorithm="HS256",
+    )
+    request = Request(_make_asgi_scope(
+        "/admin/maintenance-mode",
+        headers=[(b"authorization", f"Bearer {token}".encode())],
+    ) | {"query_string": b"enabled=false", "method": "PUT"})
+    call_next = AsyncMock(return_value=PlainTextResponse("disabled"))
+    mw_instance = MaintenanceModeMiddleware(app=MagicMock())
+
+    with patch.object(mw, "_is_maintenance_enabled", AsyncMock(return_value=True)):
+        resp = await mw_instance.dispatch(request, call_next)
+
+    assert resp.status_code == 200
+    assert resp.body.decode() == "disabled"
+    call_next.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_maintenance_middleware_returns_503_when_enabled():
     """MaintenanceModeMiddleware returns 503 for authenticated requests when flag is set."""
     import middleware as mw
-    from middleware import MaintenanceModeMiddleware, _maintenance_cache
-    from unittest.mock import patch
-    from starlette.testclient import TestClient
-    from starlette.applications import Starlette
-    from starlette.routing import Route
-    from starlette.responses import PlainTextResponse
-
-    async def endpoint(request):
-        return PlainTextResponse("ok")
-
-    app = Starlette(routes=[Route("/rules", endpoint)])
-    app.add_middleware(MaintenanceModeMiddleware)
+    from middleware import MaintenanceModeMiddleware
 
     # Build a valid-ish JWT so middleware extracts tenant_id
     from jose import jwt as _jwt
     token = _jwt.encode({"tenant_id": "t1", "sub": "u1"}, "dev-secret-change-me", algorithm="HS256")
+    request = Request(_make_asgi_scope(
+        "/rules",
+        headers=[(b"authorization", f"Bearer {token}".encode())],
+    ))
+    call_next = AsyncMock(return_value=PlainTextResponse("ok"))
+    mw_instance = MaintenanceModeMiddleware(app=MagicMock())
 
     with patch.object(mw, "_is_maintenance_enabled", AsyncMock(return_value=True)):
-        client = TestClient(app, raise_server_exceptions=False)
-        resp = client.get("/rules", headers={"Authorization": f"Bearer {token}"})
+        resp = await mw_instance.dispatch(request, call_next)
 
     assert resp.status_code == 503
-    assert "manutenção" in resp.json()["detail"].lower()
+    assert "manutenção" in json.loads(resp.body)["detail"].lower()
+    call_next.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_maintenance_middleware_still_blocks_non_disable_admin_request_when_enabled():
+    """Only the explicit disable flow should bypass maintenance mode."""
+    import middleware as mw
+    from middleware import MaintenanceModeMiddleware
+
+    from jose import jwt as _jwt
+    token = _jwt.encode(
+        {"tenant_id": "t1", "sub": "u1", "role": "ADMIN"},
+        "dev-secret-change-me",
+        algorithm="HS256",
+    )
+    request = Request(_make_asgi_scope(
+        "/admin/maintenance-mode",
+        headers=[(b"authorization", f"Bearer {token}".encode())],
+    ) | {"query_string": b"enabled=true", "method": "PUT"})
+    call_next = AsyncMock(return_value=PlainTextResponse("ok"))
+    mw_instance = MaintenanceModeMiddleware(app=MagicMock())
+
+    with patch.object(mw, "_is_maintenance_enabled", AsyncMock(return_value=True)):
+        resp = await mw_instance.dispatch(request, call_next)
+
+    assert resp.status_code == 503
+    call_next.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -204,26 +241,21 @@ async def test_maintenance_middleware_passthrough_when_disabled():
     """MaintenanceModeMiddleware passes request when maintenance is off."""
     import middleware as mw
     from middleware import MaintenanceModeMiddleware
-    from unittest.mock import patch
-    from starlette.testclient import TestClient
-    from starlette.applications import Starlette
-    from starlette.routing import Route
-    from starlette.responses import PlainTextResponse
-
-    async def endpoint(request):
-        return PlainTextResponse("ok")
-
-    app = Starlette(routes=[Route("/rules", endpoint)])
-    app.add_middleware(MaintenanceModeMiddleware)
 
     from jose import jwt as _jwt
     token = _jwt.encode({"tenant_id": "t1", "sub": "u1"}, "dev-secret-change-me", algorithm="HS256")
+    request = Request(_make_asgi_scope(
+        "/rules",
+        headers=[(b"authorization", f"Bearer {token}".encode())],
+    ))
+    call_next = AsyncMock(return_value=PlainTextResponse("ok"))
+    mw_instance = MaintenanceModeMiddleware(app=MagicMock())
 
     with patch.object(mw, "_is_maintenance_enabled", AsyncMock(return_value=False)):
-        client = TestClient(app, raise_server_exceptions=True)
-        resp = client.get("/rules", headers={"Authorization": f"Bearer {token}"})
+        resp = await mw_instance.dispatch(request, call_next)
 
     assert resp.status_code == 200
+    call_next.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -244,31 +276,40 @@ def _build_request_id_app():
     return app
 
 
-def test_request_id_middleware_generates_id_if_missing():
+@pytest.mark.asyncio
+async def test_request_id_middleware_generates_id_if_missing():
     """RequestIDMiddleware generates an X-Request-ID if not present in the request."""
-    from starlette.testclient import TestClient
+    from middleware import RequestIDMiddleware
 
-    client = TestClient(_build_request_id_app())
-    resp = client.get("/ping")
+    request = Request(_make_asgi_scope("/ping"))
+    call_next = AsyncMock(return_value=PlainTextResponse("ok"))
+    mw = RequestIDMiddleware(app=MagicMock())
+    resp = await mw.dispatch(request, call_next)
     assert "x-request-id" in resp.headers
     assert len(resp.headers["x-request-id"]) == 36  # UUID4 length
 
 
-def test_request_id_middleware_preserves_existing_id():
+@pytest.mark.asyncio
+async def test_request_id_middleware_preserves_existing_id():
     """RequestIDMiddleware preserves caller-supplied X-Request-ID header."""
-    from starlette.testclient import TestClient
+    from middleware import RequestIDMiddleware
 
-    client = TestClient(_build_request_id_app())
-    resp = client.get("/ping", headers={"X-Request-ID": "my-trace-id-123"})
+    request = Request(_make_asgi_scope("/ping", headers=[(b"x-request-id", b"my-trace-id-123")]))
+    call_next = AsyncMock(return_value=PlainTextResponse("ok"))
+    mw = RequestIDMiddleware(app=MagicMock())
+    resp = await mw.dispatch(request, call_next)
     assert resp.headers["x-request-id"] == "my-trace-id-123"
 
 
-def test_request_id_header_returned_in_response():
+@pytest.mark.asyncio
+async def test_request_id_header_returned_in_response():
     """RequestIDMiddleware always echoes X-Request-ID back in the response."""
-    from starlette.testclient import TestClient
+    from middleware import RequestIDMiddleware
 
-    client = TestClient(_build_request_id_app())
-    resp = client.get("/ping")
+    request = Request(_make_asgi_scope("/ping"))
+    call_next = AsyncMock(return_value=PlainTextResponse("ok"))
+    mw = RequestIDMiddleware(app=MagicMock())
+    resp = await mw.dispatch(request, call_next)
     assert "x-request-id" in resp.headers
 
 
@@ -279,12 +320,13 @@ def test_request_id_header_returned_in_response():
 def test_open_alerts_gauge_metric_registered():
     """OPEN_ALERTS_GAUGE Prometheus metric must be registered."""
     from prometheus_client import REGISTRY
-    from metrics import OPEN_ALERTS_GAUGE, INGEST_ERR_GAUGE, ML_LAST_TRAINED
+    from metrics import OPEN_ALERTS_GAUGE, INGEST_ERR_GAUGE, ML_LAST_TRAINED, KAFKA_LAG_BY_GROUP_TOPIC
 
     names = [m.name for m in REGISTRY.collect()]
     assert "betaml_open_alerts_total" in names
     assert "betaml_ingest_errors_unresolved" in names
     assert "betaml_ml_last_trained_seconds" in names
+    assert "betaml_kafka_consumer_lag_messages" in names
 
 
 @pytest.mark.asyncio
@@ -316,3 +358,48 @@ async def test_business_metrics_update_executes_queries():
         await update_business_metrics()
 
     assert len(executed) >= 3
+
+
+@pytest.mark.asyncio
+async def test_admin_ops_summary_returns_operational_alerts():
+    """Admin ops summary should surface lag / DLQ / stale-model alerts when thresholds are crossed."""
+    from routers.admin import get_ops_summary
+
+    db = AsyncMock()
+    current_user = MagicMock()
+    current_user.tenant_id = "t1"
+    current_user.id = "u1"
+
+    maintenance_flag = MagicMock()
+    maintenance_flag.value = {"enabled": False}
+    db.get = AsyncMock(return_value=maintenance_flag)
+
+    responses = [
+        5,          # unresolved_dlq
+        (95, 10),   # processed_24h, failed_24h
+        2,          # stale_models
+        None,       # oldest_model_dt
+    ]
+
+    async def _execute(stmt, *a, **kw):
+        value = responses.pop(0)
+        result = MagicMock()
+        result.scalar.return_value = value
+        result.one.return_value = value
+        return result
+
+    db.execute = AsyncMock(side_effect=_execute)
+
+    with patch("httpx.AsyncClient") as mock_httpx:
+        httpx_instance = AsyncMock()
+        httpx_instance.__aenter__ = AsyncMock(return_value=httpx_instance)
+        httpx_instance.__aexit__ = AsyncMock(return_value=False)
+        httpx_instance.get = AsyncMock(return_value=MagicMock(status_code=200, json=lambda: [{"group_id": "rules-engine", "lag": 2500}]))
+        mock_httpx.return_value = httpx_instance
+
+        result = await get_ops_summary(db=db, current_user=current_user)
+
+    assert result.kafka_consumer_lag == 2500
+    assert result.unresolved_dlq_events == 5
+    assert result.stale_models == 2
+    assert len(result.alerts) >= 3

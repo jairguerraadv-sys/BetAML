@@ -42,6 +42,12 @@ KAFKA_LAG_GAUGE = Gauge(
     ["tenant_id"],
 )
 
+KAFKA_LAG_BY_GROUP_TOPIC = Gauge(
+    "betaml_kafka_consumer_lag_messages",
+    "Kafka consumer lag per consumer group and topic",
+    ["group_id", "topic"],
+)
+
 EXTERNAL_VALIDATION_REQUESTS = Counter(
     "betaml_external_validation_requests_total",
     "Total de solicitações de validação externa por provider e tipo",
@@ -124,5 +130,7 @@ async def update_business_metrics() -> None:
                     name: str = group.get("group_id", "")
                     tenant_id = name.split(":")[0] if ":" in name else "default"
                     KAFKA_LAG_GAUGE.labels(tenant_id=tenant_id).set(lag)
+                    topic = str(group.get("topic") or "all")
+                    KAFKA_LAG_BY_GROUP_TOPIC.labels(group_id=name or "unknown", topic=topic).set(lag)
     except Exception:  # noqa: BLE001
         pass  # Kafka lag is best-effort — skip silently on connection error

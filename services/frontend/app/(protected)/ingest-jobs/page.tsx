@@ -1,14 +1,19 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import DataTable from '@/components/DataTable';
 import {
   fetchIngestJobs,
   fetchIngestJob,
+  fetchMappings,
+  fetchMappingVersions,
   reprocessIngestJob,
   type IngestJob,
   type IngestJobStatus,
+  type MappingListItem,
+  type MappingVersion,
 } from '@/lib/api';
+import { useIngestStream } from '@/hooks/useIngestStream';
 import { Activity, RefreshCw, X } from 'lucide-react';
 
 const PAGE_SIZE = 50;
@@ -40,6 +45,9 @@ export default function IngestJobsPage() {
   const [drawerJob, setDrawerJob] = useState<IngestJob | null>(null);
   const [showReprocessForm, setShowReprocessForm] = useState(false);
   const [reprocessReason, setReprocessReason] = useState('');
+  const [selectedMappingId, setSelectedMappingId] = useState('');
+  const [selectedMappingVersionId, setSelectedMappingVersionId] = useState('');
+  const ingestStream = useIngestStream(true);
 
   const { data: jobs = [], isLoading, refetch } = useQuery({
     queryKey: ['ingest-jobs', statusFilter, sourceSystem, dateFrom, dateTo, offset],
@@ -59,16 +67,52 @@ export default function IngestJobsPage() {
     enabled: !!drawerJob,
   });
 
+  const { data: mappings = [] } = useQuery({
+    queryKey: ['mappings', 'ingest-jobs'],
+    queryFn: fetchMappings,
+  });
+
+  const availableMappings = useMemo(
+    () => mappings.filter((mapping) => mapping.source_system === drawerJob?.source_system),
+    [mappings, drawerJob?.source_system],
+  );
+
+  const effectiveMappingId =
+    selectedMappingId || jobDetail?.mapping_config_id || availableMappings[0]?.id || '';
+
+  const { data: mappingVersions = [] } = useQuery({
+    queryKey: ['mapping-versions', effectiveMappingId, 'ingest-jobs'],
+    queryFn: () => fetchMappingVersions(effectiveMappingId),
+    enabled: !!effectiveMappingId,
+  });
+
   const reprocessMutation = useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
-      reprocessIngestJob(id, { reason }),
+    mutationFn: ({ id, reason, mappingVersionId }: { id: string; reason: string; mappingVersionId?: string }) =>
+      reprocessIngestJob(id, { reason, mapping_version_id: mappingVersionId || undefined }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['ingest-jobs'] });
       setDrawerJob(null);
       setShowReprocessForm(false);
       setReprocessReason('');
+      setSelectedMappingId('');
+      setSelectedMappingVersionId('');
     },
   });
+
+  const summary = useMemo(() => {
+    const total = jobs.length;
+    const processed = jobs.reduce((acc, job) => acc + (job.processed_records ?? 0), 0);
+    const failed = jobs.reduce((acc, job) => acc + (job.failed_records ?? 0), 0);
+    const bytes = jobs.reduce((acc, job) => acc + (job.bytes_processed ?? 0), 0);
+    return { total, processed, failed, bytes };
+  }, [jobs]);
+
+  useEffect(() => {
+    if (!ingestStream.lastEvent) {
+      return;
+    }
+    void refetch();
+  }, [ingestStream.lastEvent?.count, refetch]);
 
   const columns = useMemo(() => [
     {
@@ -129,6 +173,7 @@ export default function IngestJobsPage() {
         </div>
         <button
           onClick={() => refetch()}
+          aria-label="Atualizar jobs de ingestão"
           className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-sm hover:bg-gray-50 dark:border-gray-700"
         >
           <RefreshCw size={14} />
@@ -139,6 +184,7 @@ export default function IngestJobsPage() {
       {/* Filters */}
       <div className="flex flex-wrap gap-3 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
         <select
+          aria-label="Status do filtro de ingest jobs"
           value={statusFilter}
           onChange={(e) => { setStatusFilter(e.target.value); setOffset(0); }}
           className="rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
@@ -151,6 +197,7 @@ export default function IngestJobsPage() {
 
         <input
           type="text"
+          aria-label="Source system do filtro de ingest jobs"
           placeholder="Source system…"
           value={sourceSystem}
           onChange={(e) => { setSourceSystem(e.target.value); setOffset(0); }}
@@ -159,6 +206,7 @@ export default function IngestJobsPage() {
 
         <input
           type="date"
+          aria-label="Data inicial do filtro de ingest jobs"
           value={dateFrom}
           onChange={(e) => { setDateFrom(e.target.value); setOffset(0); }}
           className="rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
@@ -166,11 +214,51 @@ export default function IngestJobsPage() {
         <span className="flex items-center text-sm text-gray-400">até</span>
         <input
           type="date"
+          aria-label="Data final do filtro de ingest jobs"
           value={dateTo}
           onChange={(e) => { setDateTo(e.target.value); setOffset(0); }}
           className="rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
         />
       </div>
+
+      <section className="grid gap-3 md:grid-cols-4">
+        <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+          <p className="text-xs uppercase tracking-wide text-gray-400">Jobs na página</p>
+          <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">{summary.total}</p>
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+          <p className="text-xs uppercase tracking-wide text-gray-400">Eventos processados</p>
+          <p className="mt-1 text-2xl font-semibold text-emerald-600">{summary.processed}</p>
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+          <p className="text-xs uppercase tracking-wide text-gray-400">Falhas</p>
+          <p className="mt-1 text-2xl font-semibold text-red-600">{summary.failed}</p>
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+          <p className="text-xs uppercase tracking-wide text-gray-400">Bytes processados</p>
+          <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">
+            {(summary.bytes / 1024).toFixed(1)} KB
+          </p>
+        </div>
+      </section>
+
+      <section className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-white p-4 text-sm dark:border-gray-700 dark:bg-gray-900">
+        <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${ingestStream.connected ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+          {ingestStream.connected ? 'Streaming ativo' : 'Reconectando stream'}
+        </span>
+        <span className="text-gray-500 dark:text-gray-400">
+          Heartbeats: {ingestStream.lastEvent?.count ?? 0}
+        </span>
+        <span className="text-gray-500 dark:text-gray-400">
+          Ultimo evento: {ingestStream.lastEvent?.ts ? new Date(ingestStream.lastEvent.ts).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' }) : '—'}
+        </span>
+        <span className="text-gray-500 dark:text-gray-400">
+          Reconexoes: {ingestStream.reconnectCount}
+        </span>
+        {ingestStream.error && (
+          <span className="text-amber-600">{ingestStream.error}</span>
+        )}
+      </section>
 
       {/* Table */}
       <DataTable<IngestJob>
@@ -241,6 +329,10 @@ export default function IngestJobsPage() {
                       <dd className="truncate text-xs">{jobDetail.file_name ?? '—'}</dd>
                     </div>
                     <div>
+                      <dt className="text-xs text-gray-400">Conector</dt>
+                      <dd>{jobDetail.connector_type ?? '—'}</dd>
+                    </div>
+                    <div>
                       <dt className="text-xs text-gray-400">Tamanho</dt>
                       <dd>{jobDetail.file_size_bytes != null ? `${(jobDetail.file_size_bytes / 1024).toFixed(1)} KB` : '—'}</dd>
                     </div>
@@ -260,7 +352,26 @@ export default function IngestJobsPage() {
                       <dt className="text-xs text-gray-400">Erros na fila</dt>
                       <dd>{jobDetail.error_count}</dd>
                     </div>
+                    <div className="col-span-2">
+                      <dt className="text-xs text-gray-400">Bronze path</dt>
+                      <dd className="truncate font-mono text-[11px] text-gray-500">{jobDetail.file_path ?? '—'}</dd>
+                    </div>
+                    <div className="col-span-2">
+                      <dt className="text-xs text-gray-400">Mensagem operacional</dt>
+                      <dd className="text-xs text-gray-600 dark:text-gray-300">{jobDetail.error_message ?? '—'}</dd>
+                    </div>
                   </dl>
+
+                  {jobDetail.error_sample_preview && jobDetail.error_sample_preview.length > 0 && (
+                    <div>
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+                        Resumo bruto do job
+                      </p>
+                      <pre className="max-h-32 overflow-auto rounded-lg bg-gray-950 p-3 text-[11px] text-sky-200">
+                        {JSON.stringify(jobDetail.error_sample_preview, null, 2)}
+                      </pre>
+                    </div>
+                  )}
 
                   {/* Error samples */}
                   {jobDetail.error_sample.length > 0 && (
@@ -298,6 +409,7 @@ export default function IngestJobsPage() {
                 {!showReprocessForm ? (
                   <button
                     onClick={() => setShowReprocessForm(true)}
+                    aria-label="Reprocessar job de ingestão"
                     className="w-full rounded-lg bg-amber-500 py-2 text-sm font-medium text-white hover:bg-amber-600"
                   >
                     Reprocessar Job
@@ -308,14 +420,61 @@ export default function IngestJobsPage() {
                       Motivo do reprocessamento
                     </label>
                     <input
+                      aria-label="Motivo do reprocessamento do job"
                       value={reprocessReason}
                       onChange={(e) => setReprocessReason(e.target.value)}
                       placeholder="Ex.: mapping atualizado, payload corrigido"
                       className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                     />
+                    <div className="grid gap-2">
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+                          MappingConfig
+                        </label>
+                        <select
+                          aria-label="MappingConfig do reprocessamento do job"
+                          value={effectiveMappingId}
+                          onChange={(e) => {
+                            setSelectedMappingId(e.target.value);
+                            setSelectedMappingVersionId('');
+                          }}
+                          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                        >
+                          <option value="">Usar mapping atual do job</option>
+                          {availableMappings.map((mapping: MappingListItem) => (
+                            <option key={mapping.id} value={mapping.id}>
+                              {mapping.name} · v{mapping.version_number}{mapping.is_current ? ' atual' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+                          Versão específica
+                        </label>
+                        <select
+                          aria-label="Versão do mapping no reprocessamento do job"
+                          value={selectedMappingVersionId || jobDetail.mapping_version_id || ''}
+                          onChange={(e) => setSelectedMappingVersionId(e.target.value)}
+                          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                        >
+                          <option value="">Usar atual / padrão</option>
+                          {mappingVersions.map((version: MappingVersion) => (
+                            <option key={version.id} value={version.id}>
+                              v{version.version_number}{version.is_current ? ' atual' : ''} · {version.change_notes || 'sem notas'}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
                     <div className="flex gap-2">
                       <button
-                        onClick={() => reprocessMutation.mutate({ id: jobDetail.id, reason: reprocessReason })}
+                        aria-label="Confirmar reprocessamento do job"
+                        onClick={() => reprocessMutation.mutate({
+                          id: jobDetail.id,
+                          reason: reprocessReason,
+                          mappingVersionId: selectedMappingVersionId || undefined,
+                        })}
                         disabled={!reprocessReason || reprocessMutation.isPending}
                         className="flex-1 rounded-lg bg-amber-500 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
                       >

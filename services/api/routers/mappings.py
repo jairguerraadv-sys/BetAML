@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_user, require_roles
 from database import get_db
 from libs.connectors import CONNECTOR_TEMPLATE_REGISTRY
-from libs.mapping import MappingConfigSchema, MappingEngine
+from libs.mapping import (
+    MappingConfigSchema,
+    MappingEngine,
+    validate_mapped_payload_against_canonical_schema,
+    validate_mapping_targets_against_canonical_schema,
+)
 from models import MappingConfig, User
 from utils import write_audit
 
@@ -170,7 +175,13 @@ async def validate_mapping_config(
             config_text=body.config_text,
             fmt=body.format,
         )
-        return {"valid": True, "normalized_config": cfg}
+        canonical_validation = validate_mapping_targets_against_canonical_schema(cfg)
+        return {
+            "valid": canonical_validation["valid"],
+            "normalized_config": cfg,
+            "canonical_validation": canonical_validation,
+            "error": None if canonical_validation["valid"] else "Config incompatível com schema canônico de ingestão",
+        }
     except Exception as exc:  # noqa: BLE001
         return {"valid": False, "error": str(exc)}
 
@@ -189,7 +200,14 @@ async def preview_mapping_config(
         )
         engine = MappingEngine(cfg)
         preview = engine.apply(body.sample)
-        return {"valid": True, "preview": preview, "normalized_config": cfg}
+        canonical_validation = validate_mapped_payload_against_canonical_schema(cfg["entity_type"], preview)
+        return {
+            "valid": canonical_validation["valid"],
+            "preview": preview,
+            "normalized_config": cfg,
+            "canonical_validation": canonical_validation,
+            "error": None if canonical_validation["valid"] else "Preview incompatível com schema canônico de ingestão",
+        }
     except Exception as exc:  # noqa: BLE001
         return {"valid": False, "error": str(exc), "preview": {}}
 
@@ -233,6 +251,15 @@ async def create_mapping(
         config_text=body.config_text,
         fmt=body.format,
     )
+    canonical_validation = validate_mapping_targets_against_canonical_schema(cfg)
+    if not canonical_validation["valid"]:
+        raise HTTPException(
+            422,
+            {
+                "message": "Config incompatível com schema canônico de ingestão",
+                "canonical_validation": canonical_validation,
+            },
+        )
 
     version_number = await _next_version_number(
         db,
@@ -293,6 +320,7 @@ async def get_mapping(
         "is_current": mc.is_current,
         "change_notes": mc.change_notes,
         "config_json": mc.config_json,
+        "canonical_validation": validate_mapping_targets_against_canonical_schema(mc.config_json or {}),
         "active": mc.active,
     }
 
@@ -388,6 +416,15 @@ async def create_new_mapping_version(
         config_text=body.config_text,
         fmt=body.format,
     )
+    canonical_validation = validate_mapping_targets_against_canonical_schema(cfg)
+    if not canonical_validation["valid"]:
+        raise HTTPException(
+            422,
+            {
+                "message": "Config incompatível com schema canônico de ingestão",
+                "canonical_validation": canonical_validation,
+            },
+        )
     version_number = await _next_version_number(
         db,
         current_user.tenant_id,
@@ -421,7 +458,6 @@ async def create_new_mapping_version(
     )
     db.add(new_row)
     await db.commit()
-    await db.refresh(new_row)
     await write_audit(
         db, current_user.tenant_id, current_user.id,
         "UPDATE_MAPPING", "MappingConfig", str(mapping_id),

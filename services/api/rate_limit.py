@@ -11,6 +11,9 @@ Usage in routers:
 """
 from __future__ import annotations
 
+import os
+import sys
+
 from fastapi import Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -77,8 +80,16 @@ def _get_rate_limit_key(request: Request) -> str:
     return f"ip:{get_remote_address(request)}"
 
 
+def _limiter_storage_uri() -> str:
+    if settings.environment == "test":
+        return "memory://"
+    if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
+        return "memory://"
+    return settings.redis_url
+
+
 limiter = Limiter(
     key_func=_get_rate_limit_key,
-    storage_uri=settings.redis_url,
+    storage_uri=_limiter_storage_uri(),
     default_limits=["1000/minute", "10000/hour"],
 )

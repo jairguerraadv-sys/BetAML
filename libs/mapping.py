@@ -273,6 +273,192 @@ def get_default_mapping(source_system: str, entity_type: str) -> dict[str, Any] 
     return BACKOFFICE_CONFIGS.get(f"{source_system}:{normalized_entity_type}")
 
 
+CANONICAL_INGEST_SCHEMA: dict[str, dict[str, Any]] = {
+    "TRANSACTION": {
+        "required_any": [
+            {"external_transaction_id", "transaction_id", "event_id"},
+            {"player_id", "player_cpf", "external_player_id"},
+            {"type", "transaction_type"},
+            {"amount"},
+            {"occurred_at"},
+        ],
+        "allowed_fields": {
+            "entity_type",
+            "event_id",
+            "external_transaction_id",
+            "transaction_id",
+            "player_id",
+            "player_cpf",
+            "external_player_id",
+            "type",
+            "transaction_type",
+            "amount",
+            "currency",
+            "method",
+            "status",
+            "occurred_at",
+            "description",
+            "device_id",
+            "instrument_type",
+            "instrument_token",
+            "payment_instrument",
+            "ip_address",
+            "session_id",
+            "metadata",
+            "source_system",
+        },
+    },
+    "BET": {
+        "required_any": [
+            {"external_bet_id", "bet_id", "event_id"},
+            {"player_id", "player_cpf", "external_player_id"},
+            {"stake_amount", "amount"},
+            {"placed_at", "occurred_at"},
+        ],
+        "allowed_fields": {
+            "entity_type",
+            "event_id",
+            "external_bet_id",
+            "bet_id",
+            "player_id",
+            "player_cpf",
+            "external_player_id",
+            "stake_amount",
+            "amount",
+            "odds",
+            "potential_payout",
+            "settled_payout",
+            "market_type",
+            "sport",
+            "event_id_ref",
+            "event_id",
+            "selection",
+            "channel",
+            "placed_at",
+            "occurred_at",
+            "settled_at",
+            "status",
+            "cashout_amount",
+            "outcome",
+            "device_id",
+            "metadata",
+            "source_system",
+        },
+    },
+    "PLAYER": {
+        "required_any": [
+            {"external_player_id", "player_id"},
+            {"cpf"},
+            {"name", "full_name"},
+        ],
+        "allowed_fields": {
+            "entity_type",
+            "player_id",
+            "external_player_id",
+            "cpf",
+            "name",
+            "full_name",
+            "birth_date",
+            "pep_flag",
+            "declared_income_monthly",
+            "profession",
+            "email",
+            "phone",
+            "nationality",
+            "registration_date",
+            "registered_since",
+            "source_system",
+            "metadata",
+        },
+    },
+    "DEVICE_EVENT": {
+        "required_any": [
+            {"device_id"},
+            {"occurred_at"},
+        ],
+        "allowed_fields": {
+            "entity_type",
+            "player_id",
+            "player_cpf",
+            "device_id",
+            "ip",
+            "ip_address",
+            "geo_country",
+            "country_code",
+            "user_agent",
+            "event_type",
+            "action",
+            "occurred_at",
+            "source_system",
+            "metadata",
+        },
+    },
+}
+
+
+def validate_mapping_targets_against_canonical_schema(config: dict[str, Any]) -> dict[str, Any]:
+    normalized = MappingConfigSchema(**config)
+    entity_type = normalized.entity_type.strip().upper()
+    schema = CANONICAL_INGEST_SCHEMA.get(entity_type)
+    if schema is None:
+        return {
+            "entity_type": entity_type,
+            "valid": False,
+            "missing_required_groups": [f"entity_type '{entity_type}' não suportado"],
+            "unknown_targets": [],
+            "allowed_fields": [],
+        }
+
+    targets = [field.target for field in normalized.fields]
+    target_set = set(targets)
+    allowed_fields = sorted(schema["allowed_fields"])
+    unknown_targets = sorted(target_set - set(allowed_fields))
+    missing_required_groups = [
+        sorted(group)
+        for group in schema["required_any"]
+        if not (target_set & set(group))
+    ]
+    return {
+        "entity_type": entity_type,
+        "valid": not unknown_targets and not missing_required_groups,
+        "missing_required_groups": missing_required_groups,
+        "unknown_targets": unknown_targets,
+        "allowed_fields": allowed_fields,
+    }
+
+
+def validate_mapped_payload_against_canonical_schema(entity_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    normalized_entity = entity_type.strip().upper()
+    schema = CANONICAL_INGEST_SCHEMA.get(normalized_entity)
+    if schema is None:
+        return {
+            "entity_type": normalized_entity,
+            "valid": False,
+            "missing_required_groups": [f"entity_type '{normalized_entity}' não suportado"],
+            "unknown_fields": sorted(payload.keys()),
+        }
+
+    payload_keys = set(payload.keys())
+    unknown_fields = sorted(payload_keys - set(schema["allowed_fields"]))
+    missing_required_groups = [
+        sorted(group)
+        for group in schema["required_any"]
+        if not (payload_keys & set(group))
+    ]
+    empty_required_fields = sorted(
+        key
+        for key, value in payload.items()
+        if key in set().union(*schema["required_any"]) and value in (None, "", [])
+    )
+    return {
+        "entity_type": normalized_entity,
+        "valid": not unknown_fields and not missing_required_groups and not empty_required_fields,
+        "missing_required_groups": missing_required_groups,
+        "empty_required_fields": empty_required_fields,
+        "unknown_fields": unknown_fields,
+    }
+
+
 # ──────────────────────────────────────────────────
 # New connector configs (Gamma / Delta / Epsilon)
 # ──────────────────────────────────────────────────
@@ -399,4 +585,3 @@ def clone_mapping_version(existing_config: dict[str, Any], change_notes: str = "
     new_cfg["change_notes"] = change_notes
     new_cfg["version"] = str(float(existing_config.get("version", "1.0")) + 0.1)
     return new_cfg
-

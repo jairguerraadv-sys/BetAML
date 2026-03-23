@@ -2,11 +2,26 @@
 import { useState } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  fetchCase, fetchPlayer, fetchPlayerEconCompat,
-  generateReportPackage, CaseDetail, fetchAlertRelatedTransactions,
-  updateCaseStatus, addCaseComment,
-  fetchPlayerTransactionsChart, fetchPlayerBetsChart,
-  fetchPlayerPaymentInstruments, fetchPlayerNetwork, fetchPlayerCaseAlertHistory,
+  addCaseComment,
+  assignCase,
+  CaseDetail,
+  fetchAdminUsers,
+  fetchAlertRelatedTransactions,
+  fetchCase,
+  fetchCaseReportPackages,
+  fetchPlayer,
+  fetchPlayerBetsChart,
+  fetchPlayerCaseAlertHistory,
+  fetchPlayerEconCompat,
+  fetchPlayerPaymentInstruments,
+  fetchPlayerNetwork,
+  fetchPlayerTransactionsChart,
+  generateReportPackage,
+  linkAlertToCase,
+  linkTransactionToCase,
+  lookupCaseEntities,
+  submitReportPackage,
+  updateCaseStatus,
 } from '@/lib/api';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -17,6 +32,7 @@ import {
   ArrowLeft, AlertTriangle, Clock, User, TrendingDown,
   FileText, CheckCircle2, MessageSquare, Send, ChevronRight,
   Activity, HelpCircle, X, Network, CreditCard, History, ArrowRightLeft,
+  Search,
 } from 'lucide-react';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -97,6 +113,7 @@ function StatusTransitionSelect({
   if (!allowed.length) return null;
   return (
     <select
+      aria-label="Mover status do caso"
       defaultValue=""
       onChange={(e) => { if (e.target.value) transition.mutate(e.target.value); }}
       disabled={transition.isPending}
@@ -105,6 +122,43 @@ function StatusTransitionSelect({
       <option value="" disabled>Mover para…</option>
       {allowed.map((s) => (
         <option key={s} value={s}>{STATUS_PT[s] ?? s}</option>
+      ))}
+    </select>
+  );
+}
+
+function AssignCaseSelect({
+  caseId,
+  assignedTo,
+}: {
+  caseId: string;
+  assignedTo?: string;
+}) {
+  const qc = useQueryClient();
+  const { data: users = [] } = useQuery({
+    queryKey: ['admin-users'],
+    queryFn: fetchAdminUsers,
+  });
+  const assignMut = useMutation({
+    mutationFn: (userId: string) => assignCase(caseId, userId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', caseId] }),
+  });
+
+  const assignees = users.filter((u) => u.active && ['ADMIN', 'AML_ANALYST'].includes(u.role));
+
+  return (
+    <select
+      aria-label="Atribuir caso a analista"
+      value={assignedTo ?? ''}
+      onChange={(e) => { if (e.target.value) assignMut.mutate(e.target.value); }}
+      disabled={assignMut.isPending}
+      className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-brand disabled:opacity-50"
+    >
+      <option value="">Atribuir…</option>
+      {assignees.map((user) => (
+        <option key={user.id} value={user.id}>
+          {user.username} ({user.role})
+        </option>
       ))}
     </select>
   );
@@ -132,6 +186,22 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
 
 // ── Tab: Visão Geral ──────────────────────────────────────────────────────────
 function TabOverview({ c }: { c: CaseDetail }) {
+  const [query, setQuery] = useState('');
+  const qc = useQueryClient();
+  const { data: lookup } = useQuery({
+    queryKey: ['case-lookup', c.id, query],
+    queryFn: () => lookupCaseEntities(c.id, query, 'all'),
+    enabled: query.trim().length >= 2,
+  });
+  const linkAlertMut = useMutation({
+    mutationFn: (alertId: string) => linkAlertToCase(c.id, alertId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', c.id] }),
+  });
+  const linkTxnMut = useMutation({
+    mutationFn: (transactionId: string) => linkTransactionToCase(c.id, transactionId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', c.id] }),
+  });
+
   return (
     <div className="space-y-5">
       {/* Resumo da suspeita */}
@@ -213,6 +283,64 @@ function TabOverview({ c }: { c: CaseDetail }) {
           </ol>
         </div>
       )}
+
+      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">
+          <Search size={14} className="text-gray-400" /> Busca rápida para vincular
+        </h3>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Busque por título de alerta, id ou dados de transação..."
+          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+        />
+        {query.trim().length >= 2 && (
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Alertas disponíveis</p>
+              <div className="space-y-2">
+                {(lookup?.alerts ?? []).map((alert) => (
+                  <div key={alert.id} className="flex items-center justify-between rounded-lg border border-gray-100 px-3 py-2 text-xs">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-gray-700">{alert.title}</p>
+                      <p className="text-gray-400">{alert.id.slice(0, 8)}…</p>
+                    </div>
+                    <button
+                      onClick={() => linkAlertMut.mutate(alert.id)}
+                      className="rounded bg-brand px-2 py-1 font-semibold text-white disabled:opacity-50"
+                      disabled={linkAlertMut.isPending}
+                    >
+                      Vincular
+                    </button>
+                  </div>
+                ))}
+                {!lookup?.alerts?.length && <p className="text-xs text-gray-400">Nenhum alerta encontrado.</p>}
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Transações do cliente</p>
+              <div className="space-y-2">
+                {(lookup?.transactions ?? []).map((tx) => (
+                  <div key={tx.id} className="flex items-center justify-between rounded-lg border border-gray-100 px-3 py-2 text-xs">
+                    <div className="min-w-0">
+                      <p className="font-medium text-gray-700">{tx.type} · {tx.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                      <p className="text-gray-400">{tx.id.slice(0, 8)}… · {new Date(tx.occurred_at).toLocaleString('pt-BR')}</p>
+                    </div>
+                    <button
+                      onClick={() => linkTxnMut.mutate(tx.id)}
+                      className="rounded border border-gray-300 px-2 py-1 font-semibold text-gray-700 disabled:opacity-50"
+                      disabled={linkTxnMut.isPending}
+                    >
+                      Referenciar
+                    </button>
+                  </div>
+                ))}
+                {!lookup?.transactions?.length && <p className="text-xs text-gray-400">Nenhuma transação encontrada.</p>}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -637,12 +765,24 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
   const [narrative, setNarrative] = useState('');
   const [decision, setDecision]   = useState<'FILE_SAR' | 'NO_ACTION' | 'PENDING'>('PENDING');
   const [rpResult, setRpResult]   = useState<{ report_package_id: string; pdf_path: string | null } | null>(null);
+  const { data: reportPackages = [] } = useQuery({
+    queryKey: ['case-report-packages', caseId],
+    queryFn: () => fetchCaseReportPackages(caseId),
+  });
 
   const reportMut = useMutation({
     mutationFn: () => generateReportPackage(caseId, { analyst_narrative: narrative, decision }),
     onSuccess: (res) => {
       setRpResult({ report_package_id: res.report_package_id, pdf_path: res.pdf_path });
       qc.invalidateQueries({ queryKey: ['case', caseId] });
+      qc.invalidateQueries({ queryKey: ['case-report-packages', caseId] });
+    },
+  });
+  const submitMut = useMutation({
+    mutationFn: () => submitReportPackage(caseId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['case', caseId] });
+      qc.invalidateQueries({ queryKey: ['case-report-packages', caseId] });
     },
   });
 
@@ -716,6 +856,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                       type="radio"
                       name="decision"
                       value={val}
+                      aria-label={`Decisão no Report Package: ${val}`}
                       checked={decision === val}
                       onChange={() => setDecision(val)}
                       className="accent-brand"
@@ -732,6 +873,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                 {decision === 'FILE_SAR' && <span className="text-red-500">— obrigatório para comunicação COAF</span>}
               </label>
               <textarea
+                aria-label="Narrativa analítica do report package"
                 rows={5}
                 value={narrative}
                 onChange={(e) => setNarrative(e.target.value)}
@@ -743,6 +885,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
             <button
               onClick={() => reportMut.mutate()}
               disabled={reportMut.isPending || (decision === 'FILE_SAR' && !narrative.trim())}
+              aria-label="Gerar dossiê"
               className="rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 shadow-sm"
             >
               {reportMut.isPending ? 'Gerando dossiê...' : 'Gerar Dossiê'}
@@ -752,6 +895,65 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
             )}
           </div>
         )}
+      </div>
+
+      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-gray-700">Histórico de ReportPackages</h3>
+          {reportPackages.length > 0 && (
+            <button
+              onClick={() => submitMut.mutate()}
+              disabled={submitMut.isPending}
+              aria-label="Submeter último reporte"
+              className="rounded-lg border border-green-300 px-3 py-1.5 text-xs font-semibold text-green-700 hover:bg-green-50 disabled:opacity-50"
+            >
+              {submitMut.isPending ? 'Submetendo…' : 'Submeter último reporte'}
+            </button>
+          )}
+        </div>
+        <div className="space-y-2">
+          {reportPackages.map((rp) => (
+            <div key={rp.id} className="flex flex-col gap-2 rounded-lg border border-gray-100 px-3 py-3 text-xs md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="font-mono text-gray-700">{rp.id.slice(0, 8)}…</p>
+                <p className="mt-0.5 text-gray-400">
+                  {new Date(rp.created_at).toLocaleString('pt-BR')} · {rp.status} · decisão {rp.decision ?? '—'}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <a
+                  href={`/api-proxy/cases/${caseId}/report-package/json?rp_id=${rp.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded border border-gray-300 px-2 py-1 font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  JSON
+                </a>
+                {rp.pdf_available && (
+                  <a
+                    href={`/api-proxy/cases/${caseId}/report-package/pdf?rp_id=${rp.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded border border-gray-300 px-2 py-1 font-semibold text-gray-700 hover:bg-gray-50"
+                  >
+                    PDF
+                  </a>
+                )}
+                <a
+                  href={`/api-proxy/cases/${caseId}/report-package/coaf-xml?rp_id=${rp.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded border border-gray-300 px-2 py-1 font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  XML
+                </a>
+              </div>
+            </div>
+          ))}
+          {!reportPackages.length && (
+            <p className="text-xs text-gray-400">Nenhum report package gerado ainda.</p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -782,12 +984,22 @@ function StickyAnnotations({ caseId }: { caseId: string }) {
   const [text, setText]     = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved]   = useState(false);
+  const { data: users = [] } = useQuery({
+    queryKey: ['admin-users'],
+    queryFn: fetchAdminUsers,
+  });
 
   async function submit() {
     if (!text.trim()) return;
     setSaving(true);
     try {
-      await addCaseComment(caseId, { content: text, mentions: [] });
+      const mentions = Array.from(new Set(
+        [...text.matchAll(/@([a-zA-Z0-9_.-]+)/g)]
+          .map((match) => match[1].toLowerCase())
+          .map((username) => users.find((u) => u.username.toLowerCase() === username)?.id)
+          .filter(Boolean),
+      )) as string[];
+      await addCaseComment(caseId, { content: text, mentions });
       setText('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -804,6 +1016,7 @@ function StickyAnnotations({ caseId }: { caseId: string }) {
           <div className="flex items-end gap-3 px-6 py-3">
             <MessageSquare size={16} className="mb-2.5 shrink-0 text-gray-400" />
             <textarea
+              aria-label="Anotação do caso"
               rows={2}
               value={text}
               onChange={(e) => setText(e.target.value)}
@@ -816,6 +1029,7 @@ function StickyAnnotations({ caseId }: { caseId: string }) {
               <button
                 onClick={submit}
                 disabled={!text.trim() || saving}
+                aria-label="Anotar"
                 className="flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-xs font-semibold text-white disabled:opacity-50 hover:opacity-90"
               >
                 <Send size={12} /> {saving ? '...' : 'Anotar'}
@@ -828,6 +1042,7 @@ function StickyAnnotations({ caseId }: { caseId: string }) {
         ) : (
           <button
             onClick={() => setOpen(true)}
+            aria-label="Clique para adicionar uma anotação ao caso"
             className="flex w-full items-center gap-2 px-6 py-2.5 text-xs text-gray-400 hover:bg-gray-50 transition-colors"
           >
             <MessageSquare size={14} />
@@ -901,6 +1116,10 @@ export default function CaseDetailPage() {
               caseId={id}
               currentStatus={c.status}
               onSuccess={() => {}}
+            />
+            <AssignCaseSelect
+              caseId={id}
+              assignedTo={c.assigned_to}
             />
           </div>
         </div>

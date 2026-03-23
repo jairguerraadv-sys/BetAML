@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user, require_roles
 from database import AsyncSessionLocal, get_db
+from libs.schemas import AlertExplainabilityOut
 from models import Alert, Bet, Case, FinancialTransaction, Notification, User
 from repositories import AlertRepository
 from repositories.alerts import get_alert_repo
@@ -21,6 +22,110 @@ from utils import write_audit
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["alerts"])
+
+
+def _numeric_or_none(value):
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _infer_feature_baseline(feature_name: str, snapshot: dict[str, object]) -> float | None:
+    direct_candidates = [
+        f"baseline_{feature_name}",
+        f"{feature_name}_baseline",
+    ]
+    if feature_name.startswith("deposit_"):
+        direct_candidates.extend([
+            "baseline_avg_daily_deposit",
+            "baseline_avg_deposit",
+            "baseline_deposit_avg_30d",
+        ])
+    if feature_name.endswith("_ratio") or "ratio" in feature_name:
+        direct_candidates.append("baseline_ratio")
+    for key in direct_candidates:
+        baseline = _numeric_or_none(snapshot.get(key))
+        if baseline is not None:
+            return baseline
+    if feature_name.startswith("shared_") or feature_name.endswith("_count") or feature_name.endswith("_flag"):
+        return 0.0
+    if feature_name.endswith("_ratio") or "ratio" in feature_name or feature_name.startswith("zscore_"):
+        return 0.0
+    return None
+
+
+def _build_ml_explainability(alert: Alert) -> dict[str, object] | None:
+    evidence = alert.evidence or {}
+    if not isinstance(evidence, dict):
+        return None
+
+    feature_snapshot = evidence.get("feature_snapshot") or {}
+    if not isinstance(feature_snapshot, dict):
+        feature_snapshot = {}
+
+    top_drivers = evidence.get("top_drivers") or []
+    if not isinstance(top_drivers, list):
+        top_drivers = []
+
+    shap_values = evidence.get("shap_values") or {}
+    if not isinstance(shap_values, dict):
+        shap_values = {}
+
+    if alert.anomaly_score is None and not top_drivers and not feature_snapshot:
+        return None
+
+    ranked_features: list[str] = []
+    for feature_name in top_drivers:
+        feature = str(feature_name)
+        if feature and feature not in ranked_features:
+            ranked_features.append(feature)
+
+    if not ranked_features:
+        numeric_candidates = [
+            (name, abs(_numeric_or_none(value) or 0.0))
+            for name, value in feature_snapshot.items()
+            if _numeric_or_none(value) is not None
+        ]
+        ranked_features = [name for name, _ in sorted(numeric_candidates, key=lambda item: item[1], reverse=True)[:5]]
+
+    features_payload = []
+    for index, feature_name in enumerate(ranked_features[:5]):
+        current_value = feature_snapshot.get(feature_name)
+        current_numeric = _numeric_or_none(current_value)
+        baseline_value = _infer_feature_baseline(feature_name, feature_snapshot)
+        delta = None
+        if current_numeric is not None and baseline_value is not None:
+            delta = round(current_numeric - baseline_value, 4)
+
+        shap_contribution = _numeric_or_none(shap_values.get(feature_name))
+        if shap_contribution is not None:
+            contribution = shap_contribution
+        elif delta is not None:
+            contribution = delta
+        elif current_numeric is not None:
+            contribution = current_numeric
+        else:
+            contribution = max(0.1, 1.0 - (index * 0.15))
+
+        features_payload.append({
+            "feature": feature_name,
+            "current_value": current_value,
+            "baseline_value": baseline_value,
+            "delta": delta,
+            "contribution": round(float(contribution), 4),
+        })
+
+    features_payload.sort(key=lambda item: abs(float(item["contribution"])), reverse=True)
+    return {
+        "alert_id": str(alert.id),
+        "model_id": str(evidence.get("model_id")) if evidence.get("model_id") else None,
+        "explanation_method": "shap" if shap_values else "heuristic_proxy",
+        "anomaly_score": float(alert.anomaly_score or 0.0),
+        "top_features": features_payload[:5],
+    }
 
 
 @router.get("/alerts")
@@ -145,9 +250,28 @@ async def get_alert(
         "alert_type": a.alert_type, "evidence": a.evidence,
         "player_id": a.player_id, "rule_id": a.rule_id,
         "anomaly_score": float(a.anomaly_score) if a.anomaly_score else None,
+        "composite_score": float(a.composite_score) if a.composite_score else None,
+        "score_breakdown": a.score_breakdown or {},
         "source_event_id": a.source_event_id,
         "case_id": a.case_id, "created_at": a.created_at,
+        "triaged_by": a.triaged_by, "triaged_at": a.triaged_at,
+        "label": a.label, "label_note": a.label_note, "labeled_at": a.labeled_at,
     }
+
+
+@router.get("/alerts/{alert_id}/explainability", response_model=AlertExplainabilityOut)
+async def get_alert_explainability(
+    alert_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    alert = await db.get(Alert, alert_id)
+    if not alert or alert.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Alerta não encontrado")
+    explainability = _build_ml_explainability(alert)
+    if explainability is None:
+        raise HTTPException(404, "Explicabilidade indisponível para este alerta")
+    return explainability
 
 
 class TriageRequest(BaseModel):
@@ -296,9 +420,11 @@ async def label_alert(
     body: AlertLabelIn,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "SUPER_ADMIN")),
 ):
     """Label an alert as TRUE_POSITIVE, FALSE_POSITIVE, or NEED_REVIEW."""
+    if current_user.role not in {"ADMIN", "AML_ANALYST", "SUPER_ADMIN"}:
+        raise HTTPException(403, "Forbidden")
     alert = (await db.execute(
         select(Alert).where(
             Alert.id == alert_id,

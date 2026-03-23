@@ -12,6 +12,8 @@ Covers:
   - get_ingest_principal API key without ingest permission raises 403
   - ScoringConfigOut has auto_case_threshold field
   - ScoringConfigUpdate accepts ingest_rate_limit_tpm
+  - ApiKeyCreate exposes source_system and defaults to ingest permission
+  - admin onboarding rule creation targets the newly created tenant
 """
 from __future__ import annotations
 
@@ -47,6 +49,15 @@ def _make_db_mock(scalar_sequence: list):
     db.execute = AsyncMock(side_effect=_execute)
     db.__aenter__ = AsyncMock(return_value=db)
     db.__aexit__ = AsyncMock(return_value=False)
+    return db
+
+
+def _make_db():
+    db = AsyncMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+    db.add = MagicMock()
     return db
 
 
@@ -299,3 +310,84 @@ def test_scoring_config_update_accepts_ingest_rate_limit_tpm():
 
     update = ScoringConfigUpdate(ingest_rate_limit_tpm=500)
     assert update.ingest_rate_limit_tpm == 500
+
+
+def test_api_key_create_supports_source_system_and_default_permission():
+    """ApiKeyCreate must carry source_system and default to ingest-only permissions."""
+    from libs.schemas import ApiKeyCreate
+
+    payload = ApiKeyCreate(name="connector-epsilon", source_system="connector_epsilon")
+
+    assert payload.source_system == "connector_epsilon"
+    assert payload.permissions == ["ingest"]
+
+
+def test_normalize_source_system_alias_accepts_connector_aliases():
+    from routers.admin import _normalize_source_system_alias
+
+    allowed = frozenset({"BackofficeAlpha", "ConnectorGamma", "ConnectorDelta", "ConnectorEpsilon"})
+
+    assert _normalize_source_system_alias("connector_delta", allowed) == "ConnectorDelta"
+    assert _normalize_source_system_alias("connector-gamma", allowed) == "ConnectorGamma"
+    assert _normalize_source_system_alias("epsilon", allowed) == "ConnectorEpsilon"
+
+
+@pytest.mark.asyncio
+async def test_create_api_key_persists_source_system_and_default_permissions():
+    from routers.admin import create_api_key
+    from libs.schemas import ApiKeyCreate
+
+    db = _make_db()
+    current_user = _make_user()
+
+    result = await create_api_key(
+        body=ApiKeyCreate(name="Backoffice Delta", source_system="connector_delta", permissions=[]),
+        db=db,
+        current_user=current_user,
+    )
+
+    assert result["source_system"] == "connector_delta"
+    assert result["permissions"] == ["ingest"]
+    db.add.assert_called()
+    created_obj = db.add.call_args_list[0][0][0]
+    assert created_obj.source_system == "connector_delta"
+    assert created_obj.permissions == ["ingest"]
+
+
+@pytest.mark.asyncio
+async def test_admin_onboarding_rule_uses_target_tenant():
+    from routers.admin import create_onboarding_rule, AdminOnboardingRuleIn
+
+    db = _make_db()
+    tenant = MagicMock()
+    tenant.id = "tenant-new"
+    tenant.active = True
+    db.get = AsyncMock(return_value=tenant)
+
+    result_mock = MagicMock()
+    result_mock.scalars.return_value.all.return_value = []
+    db.execute = AsyncMock(return_value=result_mock)
+
+    current_user = MagicMock()
+    current_user.id = "super-admin-1"
+    current_user.tenant_id = "platform-tenant"
+    current_user.role = "SUPER_ADMIN"
+
+    with patch("libs.dsl_parser.validate_dsl", return_value=(True, None)):
+        result = await create_onboarding_rule(
+            tenant_id="tenant-new",
+            body=AdminOnboardingRuleIn(
+                name="Primeira Regra",
+                severity="HIGH",
+                scope="TRANSACTION",
+                condition_dsl='event.type == "DEPOSIT"',
+            ),
+            db=db,
+            current_user=current_user,
+        )
+
+    assert result["status"] == "ACTIVE"
+    db.add.assert_called()
+    created_rule = db.add.call_args_list[0][0][0]
+    assert created_rule.tenant_id == "tenant-new"
+    assert created_rule.created_by == "super-admin-1"

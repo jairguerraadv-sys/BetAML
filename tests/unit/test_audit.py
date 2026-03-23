@@ -146,7 +146,7 @@ async def test_list_audit_logs_returns_serialized_entries():
     user = _make_user()
 
     result = await list_audit_logs(
-        entity_type=None, action=None, user_id=None, actor_id=None,
+        entity_type=None, action=None, user_id=None, actor_id=None, entity_id=None, search=None, pii_only=False,
         date_from=None, date_to=None, limit=50, offset=0, page=None, per_page=None,
         current_user=user, db=db,
     )
@@ -165,7 +165,7 @@ async def test_list_audit_logs_actor_id_sets_user_id():
 
     # Passing actor_id without user_id — should not raise
     result = await list_audit_logs(
-        entity_type=None, action=None, user_id=None, actor_id="analyst-1",
+        entity_type=None, action=None, user_id=None, actor_id="analyst-1", entity_id=None, search=None, pii_only=False,
         date_from=None, date_to=None, limit=50, offset=0, page=None, per_page=None,
         current_user=user, db=db,
     )
@@ -184,7 +184,7 @@ async def test_list_audit_logs_per_page_overrides_limit():
 
     # Use per_page=10 — should return up to 10 items
     result = await list_audit_logs(
-        entity_type=None, action=None, user_id=None, actor_id=None,
+        entity_type=None, action=None, user_id=None, actor_id=None, entity_id=None, search=None, pii_only=False,
         date_from=None, date_to=None, limit=5, offset=0, page=None, per_page=10,
         current_user=user, db=db,
     )
@@ -211,7 +211,7 @@ async def test_list_audit_logs_page_sets_offset():
 
     # page=2, per_page=25 → offset=25
     await list_audit_logs(
-        entity_type=None, action=None, user_id=None, actor_id=None,
+        entity_type=None, action=None, user_id=None, actor_id=None, entity_id=None, search=None, pii_only=False,
         date_from=None, date_to=None, limit=50, offset=0, page=2, per_page=25,
         current_user=user, db=db,
     )
@@ -229,11 +229,40 @@ async def test_list_audit_logs_date_range_accepted():
     user = _make_user()
 
     result = await list_audit_logs(
-        entity_type=None, action=None, user_id=None, actor_id=None,
+        entity_type=None, action=None, user_id=None, actor_id=None, entity_id=None, search=None, pii_only=False,
         date_from=datetime(2026, 1, 1, tzinfo=UTC),
         date_to=datetime(2026, 12, 31, tzinfo=UTC),
         limit=50, offset=0, page=None, per_page=None,
         current_user=user, db=db,
+    )
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_list_audit_logs_search_and_pii_filters_accepted():
+    """Free-text search and pii_only filter must be accepted together."""
+    from routers.audit import list_audit_logs
+
+    db = _make_db_with_logs([])
+    user = _make_user()
+
+    result = await list_audit_logs(
+        entity_type=None,
+        action=None,
+        user_id=None,
+        actor_id=None,
+        entity_id=None,
+        search="EXPORT_REPORT",
+        pii_only=True,
+        date_from=None,
+        date_to=None,
+        limit=50,
+        offset=0,
+        page=None,
+        per_page=None,
+        current_user=user,
+        db=db,
     )
 
     assert result == []

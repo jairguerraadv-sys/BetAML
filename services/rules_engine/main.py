@@ -22,10 +22,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 import structlog
+from prometheus_client import Counter, Gauge, Histogram, REGISTRY, start_http_server
 
 # Garante que 'from libs.xxx import' funcione tanto no Docker (/app/libs montado)
 # quanto em desenvolvimento local (raiz do projeto no PYTHONPATH)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+from libs.telemetry import init_opentelemetry_stub
 
 structlog.configure(
     processors=[
@@ -47,6 +50,7 @@ REDIS_URL        = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DATABASE_URL     = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@localhost:5432/betaml_dev")
 ML_SERVICE_URL   = os.getenv("ML_SERVICE_URL", "http://ml-service:8001")
 RULE_CACHE_TTL   = 300  # 5 minutos
+METRICS_PORT     = int(os.getenv("METRICS_PORT", "8002"))
 
 TOPICS = [
     "canonical.transactions",
@@ -76,6 +80,67 @@ FEATURE_EVIDENCE_KEYS = [
     "cluster_id",
     "cluster_size",
 ]
+
+DEFAULT_SCORING_CONFIG = {
+    "rule_weight": 0.4,
+    "ml_weight": 0.4,
+    "network_weight": 0.2,
+    "low_threshold": 30.0,
+    "medium_threshold": 60.0,
+    "high_threshold": 80.0,
+    "critical_threshold": 95.0,
+}
+
+def _metric_aliases(name: str) -> list[str]:
+    aliases = [name]
+    if name.endswith("_total"):
+        aliases.append(name[: -len("_total")])
+    return aliases
+
+
+def _get_or_create_metric(metric_cls, name: str, documentation: str, labelnames: list[str]):
+    registry_collectors = getattr(REGISTRY, "_names_to_collectors", {})
+    for alias in _metric_aliases(name):
+        existing = registry_collectors.get(alias)
+        if existing is not None:
+            return existing
+    return metric_cls(name, documentation, labelnames)
+
+
+EVENTS_PROCESSED = _get_or_create_metric(
+    Counter,
+    "betaml_rules_events_processed_total",
+    "Total de eventos processados pelo rules engine",
+    ["topic", "status"],
+)
+
+RULES_PROCESSING_LATENCY = _get_or_create_metric(
+    Histogram,
+    "betaml_rules_processing_seconds",
+    "Latência de processamento do rules engine por tópico",
+    ["topic"],
+)
+
+ALERTS_GENERATED = _get_or_create_metric(
+    Counter,
+    "betaml_rules_alerts_generated_total",
+    "Alertas gerados pelo rules engine por severidade e tenant",
+    ["severity", "tenant_id"],
+)
+
+ML_SCORING_FAILURES = _get_or_create_metric(
+    Counter,
+    "betaml_ml_scoring_failures_total",
+    "Falhas de scoring ML observadas pelo rules engine",
+    ["tenant_id", "reason"],
+)
+
+CONSUMER_LAG = _get_or_create_metric(
+    Gauge,
+    "betaml_rules_consumer_lag_messages",
+    "Lag estimado do consumer do rules engine por tópico",
+    ["group_id", "topic"],
+)
 
 
 # ──────────────────────────────────────────────────
@@ -208,7 +273,8 @@ async def load_compound_rules(tenant_id: str) -> list[dict]:
         with engine.connect() as conn:
             rows = conn.execute(
                 sa.text(
-                    "SELECT id, name, logic, component_rule_ids, score_weights, min_score_threshold "
+                    "SELECT id, name, logic, operator, n_threshold, component_rule_ids, child_rule_ids, "
+                    "severity_mode, fixed_severity, score_weights, min_score_threshold "
                     "FROM compound_rules WHERE tenant_id = :tid AND is_active = true"
                 ),
                 {"tid": tenant_id},
@@ -220,6 +286,37 @@ async def load_compound_rules(tenant_id: str) -> list[dict]:
     except Exception as e:
         logger.warning("compound_rules_load_failed", error=str(e))
         return []
+
+
+async def load_scoring_config(tenant_id: str) -> dict[str, Any]:
+    cache_key = f"scoring_config:{tenant_id}"
+    now = time.time()
+    if cache_key in _rule_cache and (now - _rule_cache_ts.get(cache_key, 0)) < RULE_CACHE_TTL:
+        return _rule_cache[cache_key]
+
+    cfg = dict(DEFAULT_SCORING_CONFIG)
+    try:
+        engine = await asyncio.to_thread(_get_sync_db)
+        if not engine:
+            return cfg
+        import sqlalchemy as sa
+        with engine.connect() as conn:
+            row = conn.execute(
+                sa.text(
+                    "SELECT rule_weight, ml_weight, network_weight, low_threshold, medium_threshold, "
+                    "high_threshold, critical_threshold "
+                    "FROM scoring_configs WHERE tenant_id = :tid LIMIT 1"
+                ),
+                {"tid": tenant_id},
+            ).fetchone()
+            if row:
+                cfg.update({k: float(v) if v is not None else cfg[k] for k, v in dict(row._mapping).items()})
+        _rule_cache[cache_key] = cfg
+        _rule_cache_ts[cache_key] = now
+        return cfg
+    except Exception as e:
+        logger.warning("scoring_config_load_failed", tenant_id=tenant_id, error=str(e))
+        return cfg
 
 
 async def load_features(tenant_id: str, player_id: str, redis_client) -> dict:
@@ -273,6 +370,16 @@ def _severity_from_composite(score: float) -> str:
     return "LOW"
 
 
+def _severity_from_scoring_config(score_100: float, cfg: dict[str, Any]) -> str:
+    if score_100 >= float(cfg.get("critical_threshold", 95.0)):
+        return "CRITICAL"
+    if score_100 >= float(cfg.get("high_threshold", 80.0)):
+        return "HIGH"
+    if score_100 >= float(cfg.get("medium_threshold", 60.0)):
+        return "MEDIUM"
+    return "LOW"
+
+
 def _normalize_ml_features(features: dict[str, Any]) -> dict[str, float | bool | str]:
     normalized: dict[str, float | bool | str] = {}
     for k, v in (features or {}).items():
@@ -295,6 +402,14 @@ def _normalize_ml_features(features: dict[str, Any]) -> dict[str, float | bool |
 
 
 def _score_ml_sync(tenant_id: str, player_id: str, features: dict[str, Any]) -> dict[str, Any]:
+    ctx = structlog.contextvars.get_contextvars()
+    headers = {"Content-Type": "application/json"}
+    request_id = ctx.get("request_id")
+    event_id = ctx.get("event_id")
+    if isinstance(request_id, str) and request_id:
+        headers["X-Request-ID"] = request_id
+    if isinstance(event_id, str) and event_id:
+        headers["X-Event-ID"] = event_id
     body = {
         "tenant_id": tenant_id,
         "player_id": player_id,
@@ -303,7 +418,7 @@ def _score_ml_sync(tenant_id: str, player_id: str, features: dict[str, Any]) -> 
     req = urllib.request.Request(
         url=f"{ML_SERVICE_URL.rstrip('/')}/score",
         data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -316,6 +431,7 @@ def _score_ml_sync(tenant_id: str, player_id: str, features: dict[str, Any]) -> 
                 "top_drivers": parsed.get("top_drivers") or [],
             }
     except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        ML_SCORING_FAILURES.labels(tenant_id=tenant_id, reason=exc.__class__.__name__).inc()
         logger.warning("ml_score_unavailable", tenant_id=tenant_id, player_id=player_id, error=str(exc))
         return {"anomaly_score": 0.0, "is_anomaly": False, "model_id": None, "top_drivers": []}
 
@@ -415,36 +531,59 @@ async def evaluate_rules(
 
     # ── Compound rule evaluation ─────────────────────────────────────────────
     for crule in (compound_rules or []):
-        component_ids = crule.get("component_rule_ids") or []
+        component_ids = crule.get("component_rule_ids") or crule.get("child_rule_ids") or []
         score_weights = crule.get("score_weights") or {}
         min_threshold = crule.get("min_score_threshold") or 0.5
+        operator = str(crule.get("operator") or crule.get("logic") or "AND").upper()
+        n_threshold = int(crule.get("n_threshold") or 1)
+        severity_mode = str(crule.get("severity_mode") or "MAX").upper()
+        fixed_severity = crule.get("fixed_severity")
 
         # Compute weighted composite score from component rules
         total_weight = 0.0
         weighted_score = 0.0
+        matched_components = 0
+        max_component_severity = "LOW"
         for rid in component_ids:
             w = float(score_weights.get(str(rid), 1.0))
             total_weight += w
-            weighted_score += rule_scores.get(rid, 0.0) * w
+            score = rule_scores.get(rid, 0.0)
+            weighted_score += score * w
+            if score > 0:
+                matched_components += 1
+                component_rule = next((r for r in rules if str(r.get("id")) == str(rid)), None)
+                if component_rule and _severity_rank(component_rule.get("severity", "LOW")) > _severity_rank(max_component_severity):
+                    max_component_severity = component_rule.get("severity", "LOW")
 
         composite = weighted_score / max(total_weight, 1e-9)
+        should_match = False
+        if operator == "AND":
+            should_match = matched_components == len(component_ids) and len(component_ids) > 0
+        elif operator == "OR":
+            should_match = matched_components >= 1
+        elif operator == "N_OF_M":
+            should_match = matched_components >= max(n_threshold, 1)
+        else:
+            should_match = composite >= min_threshold
 
-        if composite >= min_threshold:
+        if should_match and composite >= min_threshold:
             matches.append({
                 "rule": {
                     "id":            crule["id"],
                     "name":          crule["name"],
-                    "condition_dsl": crule["logic"],
-                    "severity":      "HIGH",
+                    "condition_dsl": f"{operator}({matched_components}/{len(component_ids)})",
+                    "severity":      fixed_severity if severity_mode == "FIXED" and fixed_severity else max_component_severity,
                     "scope":         event_scope,
                     "version":       1,
                     "weight":        1.0,
                     "is_compound":   True,
+                    "compound_rule_id": str(crule["id"]),
+                    "severity_mode": severity_mode,
                 },
                 "eval_ms":           0,
                 "rule_weight":       1.0,
                 "composite_score":   composite,
-                "context_snapshot":  {},
+                "context_snapshot":  {"matched_components": matched_components, "operator": operator, "n_threshold": n_threshold},
                 "features_snapshot": {},
             })
 
@@ -457,6 +596,7 @@ async def publish_alert(
     producer,
     db_write_queue: asyncio.Queue,
     ml_signal: dict[str, Any] | None = None,
+    scoring_cfg: dict[str, Any] | None = None,
 ):
     rule = match["rule"]
     payload = envelope.get("payload", {})
@@ -464,11 +604,12 @@ async def publish_alert(
     tenant_id = envelope.get("tenant_id", "")
 
     ml_signal = ml_signal or {}
+    scoring_cfg = scoring_cfg or dict(DEFAULT_SCORING_CONFIG)
     rule_weight = float(match.get("rule_weight") or 1.0)
     rule_score = min(max(rule_weight, 0.0), 1.0)
-    ml_weight = 0.4
-    rule_component_weight = 0.4
-    network_component_weight = 0.2
+    rule_component_weight = float(scoring_cfg.get("rule_weight", 0.4))
+    ml_weight = float(scoring_cfg.get("ml_weight", 0.4))
+    network_component_weight = float(scoring_cfg.get("network_weight", 0.2))
     anomaly_score = float(ml_signal.get("anomaly_score") or 0.0)
     network_score = float(
         match.get("features_snapshot", {}).get("shared_instrument_score")
@@ -484,7 +625,8 @@ async def publish_alert(
             + (network_score * network_component_weight),
         ),
     )
-    computed_severity = _severity_from_composite(composite_score)
+    risk_score_100 = composite_score * 100.0
+    computed_severity = _severity_from_scoring_config(risk_score_100, scoring_cfg)
     base_severity = str(rule.get("severity") or "LOW").upper()
     final_severity = computed_severity if _severity_rank(computed_severity) > _severity_rank(base_severity) else base_severity
 
@@ -497,11 +639,13 @@ async def publish_alert(
         "severity":       final_severity,
         "title":          f"{rule['name']} — {player_id[:8]}",
         "description":    f"Regra '{rule['name']}' disparada para player {player_id}",
-        "rule_id":        str(rule["id"]),
+        "rule_id":        None if rule.get("is_compound") else str(rule["id"]),
+        "compound_rule_id": str(rule.get("compound_rule_id") or rule["id"]) if rule.get("is_compound") else None,
         "rule_version":   rule.get("version", 1),
         "source_event_id": envelope.get("event_id", ""),
         "anomaly_score":  round(anomaly_score, 4),
         "composite_score": round(composite_score, 4),
+        "risk_score": round(risk_score_100, 2),
         "score_breakdown": {
             "rule_score": round(rule_score, 4),
             "ml_anomaly_score": round(anomaly_score, 4),
@@ -509,6 +653,10 @@ async def publish_alert(
             "rule_weight": rule_component_weight,
             "ml_weight": ml_weight,
             "network_weight": network_component_weight,
+            "rule_contribution": round(rule_score * rule_component_weight * 100.0, 2),
+            "ml_contribution": round(anomaly_score * ml_weight * 100.0, 2),
+            "network_contribution": round(network_score * network_component_weight * 100.0, 2),
+            "risk_score": round(risk_score_100, 2),
         },
         "rule_weight":    rule_component_weight,
         "ml_weight":      ml_weight,
@@ -528,6 +676,7 @@ async def publish_alert(
 
     # Publicar no Kafka
     await producer.send("scoring.alerts", alert_msg, key=alert_id)
+    ALERTS_GENERATED.labels(severity=final_severity, tenant_id=str(tenant_id or "unknown")).inc()
 
     # Enfileirar para escrita async no Postgres
     await db_write_queue.put({
@@ -575,12 +724,12 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
             # Upsert alert
             conn.execute(sa.text("""
                 INSERT INTO alerts
-                    (id, tenant_id, player_id, rule_id, alert_type, severity, status,
+                    (id, tenant_id, player_id, rule_id, compound_rule_id, alert_type, severity, status,
                      title, description, evidence, source_event_id, anomaly_score,
                      composite_score, score_breakdown, rule_weight, ml_weight,
                      network_weight, created_at)
                 VALUES
-                    (:id, :tenant_id, :player_id, :rule_id, :alert_type, :severity, 'OPEN',
+                    (:id, :tenant_id, :player_id, :rule_id, :compound_rule_id, :alert_type, :severity, 'OPEN',
                      :title, :description, :evidence, :source_event_id, :anomaly_score,
                      :composite_score, CAST(:score_breakdown AS jsonb), :rule_weight,
                      :ml_weight, :network_weight, :created_at)
@@ -590,6 +739,7 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                 "tenant_id":      alert["tenant_id"],
                 "player_id":      alert.get("player_id") or None,
                 "rule_id":        alert.get("rule_id") or None,
+                "compound_rule_id": alert.get("compound_rule_id") or None,
                 "alert_type":     alert["alert_type"],
                 "severity":       alert["severity"],
                 "title":          alert["title"],
@@ -727,6 +877,9 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
 async def main():
     from libs.clients import KafkaConsumerClient, KafkaProducerClient, RedisClient
 
+    start_http_server(METRICS_PORT)
+    init_opentelemetry_stub("rules-engine")
+
     redis_client = RedisClient(REDIS_URL)
     await redis_client.connect()
 
@@ -747,12 +900,22 @@ async def main():
 
     try:
         async for msg in consumer:
+            started = time.monotonic()
+            topic = getattr(msg, "topic", "unknown")
             try:
                 value = msg.value if isinstance(msg.value, dict) else json.loads(msg.value)
-                topic = msg.topic
+                structlog.contextvars.bind_contextvars(
+                    event_id=str(value.get("event_id") or value.get("source_event_id") or ""),
+                    tenant_id=str(value.get("tenant_id") or ""),
+                )
+                highwater = getattr(msg, "highwater", None)
+                offset = getattr(msg, "offset", None)
+                if isinstance(highwater, int) and isinstance(offset, int):
+                    CONSUMER_LAG.labels(group_id="rules-engine", topic=topic).set(max(highwater - offset - 1, 0))
 
                 # features.player_daily: apenas atualiza cache/estado, sem regras
                 if topic == "features.player_daily":
+                    EVENTS_PROCESSED.labels(topic=topic, status="skipped").inc()
                     continue
 
                 tenant_id = value.get("tenant_id")
@@ -768,6 +931,7 @@ async def main():
                 macros         = await load_macros(tenant_id)
                 player_lists   = await load_player_lists(tenant_id)
                 compound_rules = await load_compound_rules(tenant_id)
+                scoring_cfg    = await load_scoring_config(tenant_id)
                 matches        = await evaluate_rules(
                     value, features, rules,
                     macros=macros,
@@ -776,10 +940,14 @@ async def main():
                 )
 
                 for match in matches:
-                    await publish_alert(value, match, producer, db_queue, ml_signal=ml_signal)
+                    await publish_alert(value, match, producer, db_queue, ml_signal=ml_signal, scoring_cfg=scoring_cfg)
+                EVENTS_PROCESSED.labels(topic=topic, status="processed").inc()
 
             except Exception as e:
-                logger.error("message_processing_error", topic=msg.topic, error=str(e))
+                EVENTS_PROCESSED.labels(topic=topic, status="failed").inc()
+                logger.error("message_processing_error", topic=topic, error=str(e))
+            finally:
+                RULES_PROCESSING_LATENCY.labels(topic=topic).observe(time.monotonic() - started)
 
     finally:
         await consumer.stop()

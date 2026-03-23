@@ -101,6 +101,36 @@ async def test_get_population_stats_returns_data():
 
 
 @pytest.mark.asyncio
+async def test_get_population_stats_supports_wrapped_payload_with_computed_at():
+    """New cache format stores computed_at plus nested features payload."""
+    from routers.feature_store import get_feature_population_stats
+
+    raw_stats = {
+        "computed_at": "2026-03-20T06:00:00+00:00",
+        "features": {
+            "deposit_sum_30d": {
+                "mean": 150.0,
+                "std": 50.0,
+                "p10": 50.0,
+                "p25": 100.0,
+                "p50": 150.0,
+                "p75": 200.0,
+                "p90": 250.0,
+                "count": 2,
+            }
+        },
+    }
+    redis_mock = _make_redis(get_return=json.dumps(raw_stats))
+    user = _make_user("tenant-abc")
+
+    with patch("redis.asyncio.from_url", return_value=redis_mock):
+        result = await get_feature_population_stats(current_user=user)
+
+    assert result.computed_at == "2026-03-20T06:00:00+00:00"
+    assert result.features["deposit_sum_30d"].count == 2
+
+
+@pytest.mark.asyncio
 async def test_get_population_stats_redis_key_uses_tenant_id():
     """Endpoint must read from feature_stats:{tenant_id} key for tenant isolation."""
     from routers.feature_store import get_feature_population_stats
@@ -139,6 +169,13 @@ def test_population_stats_router_has_path():
     assert "/feature-store/population-stats" in paths
 
 
+def test_quality_latest_router_has_path():
+    """GET /feature-store/quality/latest must be registered."""
+    from routers.feature_store import router
+    paths = [r.path for r in router.routes if hasattr(r, "path")]
+    assert "/feature-store/quality/latest" in paths
+
+
 # ---------------------------------------------------------------------------
 # Schema structure
 # ---------------------------------------------------------------------------
@@ -157,6 +194,21 @@ def test_feature_store_history_item_has_drift_score():
     fields = FeatureStoreHistoryItemOut.model_fields
     assert "drift_score" in fields
     assert fields["drift_score"].default is None
+
+
+def test_feature_store_current_schema_has_gold_metadata():
+    from libs.schemas import FeatureStoreCurrentOut
+    fields = FeatureStoreCurrentOut.model_fields
+    assert "snapshot_version" in fields
+    assert "entity_type" in fields
+    assert "gold_object_path" in fields
+
+
+def test_feature_store_history_item_has_gold_metadata():
+    from libs.schemas import FeatureStoreHistoryItemOut
+    fields = FeatureStoreHistoryItemOut.model_fields
+    assert "entity_type" in fields
+    assert "gold_object_path" in fields
 
 
 def test_population_stats_schema_structure():
@@ -182,3 +234,27 @@ def test_population_stats_schema_structure():
     )
     assert with_data.features["deposit_sum_30d"].mean == pytest.approx(1.0)
     assert with_data.features["deposit_sum_30d"].count == 0
+
+
+def test_feature_quality_status_schema_structure():
+    from libs.schemas import FeatureQualityStatusOut
+
+    status = FeatureQualityStatusOut(
+        feature_date="2026-03-20",
+        previous_feature_date="2026-03-19",
+        drift_detected=True,
+        max_drift_score=0.75,
+        admin_notification_sent=True,
+        findings=[
+            {
+                "feature_name": "deposit_velocity",
+                "finding_type": "MEAN_DRIFT",
+                "current_value": 10.0,
+                "previous_value": 1.0,
+                "delta": 9.0,
+                "severity": "CRITICAL",
+            }
+        ],
+    )
+    assert status.findings[0].feature_name == "deposit_velocity"
+    assert status.findings[0].severity == "CRITICAL"

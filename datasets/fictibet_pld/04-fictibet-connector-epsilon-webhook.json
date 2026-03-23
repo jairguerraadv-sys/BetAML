@@ -1,0 +1,86 @@
+{
+  "version": "1.0",
+  "source": "FictiBet-Epsilon",
+  "events": [
+    {
+      "event_id": "EPS-5001",
+      "player_id": "PLY-STR-001",
+      "event_type": "DEPOSIT",
+      "event_time": "2026-03-21T15:00:00Z",
+      "gross_amount": 4200.0,
+      "currency_code": "BRL",
+      "device_fingerprint": "dev-str-01",
+      "payment_method": "PIX",
+      "payment_reference": "pix-eps-5001",
+      "client_ip": "177.10.10.10",
+      "session_token": "sess-eps-5001",
+      "sport_category": "FOOTBALL",
+      "market_name": "LIVE"
+    },
+    {
+      "event_id": "EPS-5002",
+      "player_id": "PLY-RTR-003",
+      "event_type": "WITHDRAWAL",
+      "event_time": "2026-03-21T15:05:00Z",
+      "gross_amount": 4100.0,
+      "currency_code": "BRL",
+      "device_fingerprint": "dev-rtr-03",
+      "payment_method": "PIX",
+      "payment_reference": "pix-eps-5002",
+      "client_ip": "177.30.30.30",
+      "session_token": "sess-eps-5002"
+    },
+    {
+      "event_id": "EPS-5003",
+      "player_id": "PLY-MULTI-007",
+      "event_type": "CHARGEBACK",
+      "event_time": "2026-03-21T15:10:00Z",
+      "gross_amount": 280.0,
+      "currency_code": "USD",
+      "device_fingerprint": "dev-multi-07",
+      "payment_method": "CARD",
+      "payment_reference": "card-eps-5003",
+      "client_ip": "201.77.88.90",
+      "session_token": "sess-eps-5003"
+    },
+    {
+      "event_id": "EPS-5004",
+      "player_id": "PLY-PEP-006",
+      "event_type": "BONUS",
+      "event_time": "2026-03-21T15:12:00Z",
+      "gross_amount": 350.0,
+      "currency_code": "BRL",
+      "device_fingerprint": "dev-shared-77",
+      "payment_method": "PROMO",
+      "payment_reference": "bonus-eps-5004",
+      "client_ip": "200.155.10.12",
+      "session_token": "sess-eps-5004"
+    },
+    {
+      "event_id": "EPS-5005",
+      "player_id": "PLY-NET-004",
+      "event_type": "DEPOSIT",
+      "event_time": "2026-03-21T15:15:00Z",
+      "gross_amount": 900.0,
+      "currency_code": "BRL",
+      "device_fingerprint": "dev-shared-77",
+      "payment_method": "PIX",
+      "payment_reference": "pix-eps-5005",
+      "client_ip": "200.155.10.10",
+      "session_token": "sess-eps-5005"
+    },
+    {
+      "event_id": "EPS-5006",
+      "player_id": "PLY-NET-005",
+      "event_type": "DEPOSIT",
+      "event_time": "2026-03-21T15:16:00Z",
+      "gross_amount": 930.0,
+      "currency_code": "BRL",
+      "device_fingerprint": "dev-shared-77",
+      "payment_method": "PIX",
+      "payment_reference": "pix-eps-5006",
+      "client_ip": "200.155.10.11",
+      "session_token": "sess-eps-5006"
+    }
+  ]
+}

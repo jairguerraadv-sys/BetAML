@@ -9,7 +9,7 @@ Tests cover:
   - close_alert: 404, status set to CLOSED
   - link_alert_to_case: 404 alert, 404 case, success
   - get_alert_related_transactions: 404, no player_id early exit, with player_id
-  - label_alert: 404, success
+  - label_alert: 404, success, forbidden for AUDITOR
   - Router registration
 """
 from __future__ import annotations
@@ -475,6 +475,32 @@ async def test_label_alert_success():
     assert result["label"] == "FALSE_POSITIVE"
     assert alert.label == "FALSE_POSITIVE"
     assert alert.label_note == "reviewed manually"
+
+
+@pytest.mark.asyncio
+async def test_label_alert_forbidden_for_auditor():
+    from routers.alerts import label_alert, AlertLabelIn
+    from fastapi import BackgroundTasks, HTTPException
+
+    alert = _make_alert(tenant_id="t1")
+    db = _make_db()
+
+    async def _execute(stmt):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = alert
+        result.scalars.return_value.all.return_value = []
+        return result
+
+    db.execute = _execute
+    user = _make_user(tenant_id="t1", role="AUDITOR")
+    body = AlertLabelIn(label="FALSE_POSITIVE", label_note="should fail")
+    bg = BackgroundTasks()
+
+    with pytest.raises(HTTPException) as exc:
+        await label_alert(alert_id="a1", body=body, background_tasks=bg, db=db, current_user=user)
+
+    assert exc.value.status_code == 403
+    assert alert.label is None
 
 
 # ---------------------------------------------------------------------------

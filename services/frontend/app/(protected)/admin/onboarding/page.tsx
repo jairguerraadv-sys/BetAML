@@ -11,11 +11,11 @@ import {
 import {
   fetchMappingTemplates,
   fetchRules,
-  createMapping,
   createTenant,
   TenantCreateResult,
-  createRule,
-  ingestFile,
+  adminOnboardingCreateMapping,
+  adminOnboardingCreateRule,
+  adminOnboardingIngestFile,
 } from '@/lib/api';
 
 // ── Step metadata ─────────────────────────────────────────────────────────────
@@ -36,10 +36,10 @@ const FALLBACK_CONNECTORS = [
   {
     connector_name: 'ConnectorGamma',
     label:           'ConnectorGamma (XML)',
-    source_system:   'connector_gamma',
+    source_system:   'ConnectorGamma',
     payload_format:  'XML',
     template: [
-      'source_system: connector_gamma',
+      'source_system: ConnectorGamma',
       'entity_type: transaction',
       'format: xml',
       'auth_mode: basic',
@@ -54,10 +54,10 @@ const FALLBACK_CONNECTORS = [
   {
     connector_name: 'ConnectorDelta',
     label:           'ConnectorDelta (NDJSON)',
-    source_system:   'connector_delta',
+    source_system:   'ConnectorDelta',
     payload_format:  'NDJSON',
     template: [
-      'source_system: connector_delta',
+      'source_system: ConnectorDelta',
       'entity_type: transaction',
       'format: ndjson',
       'auth_mode: api_key',
@@ -72,10 +72,10 @@ const FALLBACK_CONNECTORS = [
   {
     connector_name: 'ConnectorEpsilon',
     label:           'ConnectorEpsilon (Webhook)',
-    source_system:   'connector_epsilon',
+    source_system:   'ConnectorEpsilon',
     payload_format:  'Webhook',
     template: [
-      'source_system: connector_epsilon',
+      'source_system: ConnectorEpsilon',
       'entity_type: transaction',
       'format: json',
       'auth_mode: hmac_sha256',
@@ -98,14 +98,14 @@ const RULE_BOOTSTRAP_TEMPLATES = [
   {
     name:          'Spike de Depósito',
     description:   'Detecta depósito de alto valor combinado com frequência elevada nas últimas 24h.',
-    condition_dsl: 'event.type == "DEPOSIT" AND event.amount > 10000 AND player.deposit_count_24h >= 3',
+    condition_dsl: 'transaction.type == "DEPOSIT" and transaction.amount > 10000 and features.deposit_count_24h >= 3',
     severity:      'HIGH',
     scope:         'TRANSACTION',
   },
   {
     name:          'Muitos Depósitos Pequenos (Structuring)',
     description:   'Detecta padrão de fracionamento — múltiplos depósitos abaixo do limite de reporte.',
-    condition_dsl: 'event.type == "DEPOSIT" AND event.amount BETWEEN 2000 AND 9999 AND player.deposit_count_24h >= 5',
+    condition_dsl: 'transaction.type == "DEPOSIT" and transaction.amount >= 2000 and transaction.amount <= 9999 and features.deposit_count_24h >= 5',
     severity:      'CRITICAL',
     scope:         'TRANSACTION',
   },
@@ -161,10 +161,18 @@ function parseCsvPreview(text: string, maxRows = 3): string[][] {
 }
 
 function extractError(err: unknown): string {
-  return (
-    (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
-    'Ocorreu um erro inesperado. Tente novamente.'
-  );
+  const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (detail && typeof detail === 'object') {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return 'Ocorreu um erro inesperado. Tente novamente.';
+    }
+  }
+  return 'Ocorreu um erro inesperado. Tente novamente.';
 }
 
 // ── StepIndicator ─────────────────────────────────────────────────────────────
@@ -379,7 +387,7 @@ export default function OnboardingPage() {
 
   const mappingMut = useMutation({
     mutationFn: () =>
-      createMapping({
+      adminOnboardingCreateMapping(tenantResult!.tenant_id, {
         name:          connName.trim() || selConnector!.connector_name,
         source_system: selConnector!.source_system,
         entity_type:   'transaction',
@@ -395,7 +403,8 @@ export default function OnboardingPage() {
     mutationFn: () => {
       const fd = new FormData();
       fd.append('file', csvFile!);
-      return ingestFile(fd);
+      fd.append('source_system', selConnector?.source_system ?? 'ConnectorDelta');
+      return adminOnboardingIngestFile(tenantResult!.tenant_id, fd);
     },
     onSuccess: () => { setMutError(''); setStep(5); },
     onError:   (err) => setMutError(extractError(err)),
@@ -404,7 +413,7 @@ export default function OnboardingPage() {
   const ruleMut = useMutation({
     mutationFn: () => {
       const tpl = rulesList[selRule!];
-      return createRule({
+      return adminOnboardingCreateRule(tenantResult!.tenant_id, {
         name:          tpl.name,
         condition_dsl: tpl.condition_dsl,
         severity:      tpl.severity,
@@ -503,6 +512,29 @@ export default function OnboardingPage() {
         <StepIndicator current={step} />
       </div>
 
+      {tenantResult && (
+        <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4 text-sm shadow-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="rounded-full bg-white px-2.5 py-1 font-semibold text-blue-700">
+              Tenant: {tenantResult.slug}
+            </span>
+            <span className="rounded-full bg-white px-2.5 py-1 font-semibold text-blue-700">
+              Admin inicial: {tenantResult.admin_username}
+            </span>
+            {selConnector && (
+              <span className="rounded-full bg-white px-2.5 py-1 font-semibold text-blue-700">
+                Conector: {selConnector.connector_name}
+              </span>
+            )}
+            {csvFile && (
+              <span className="rounded-full bg-white px-2.5 py-1 font-semibold text-blue-700">
+                Arquivo: {csvFile.name}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Step card */}
       <div className="rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
         {/* Error banner */}
@@ -536,6 +568,7 @@ export default function OnboardingPage() {
               <div className="sm:col-span-2">
                 <Label text="Nome do Operador" required />
                 <Input
+                  aria-label="Nome do Operador"
                   value={s1.nome}
                   onChange={(e) => {
                     const nome = e.target.value;
@@ -553,6 +586,7 @@ export default function OnboardingPage() {
               <div className="sm:col-span-2">
                 <Label text="Slug (identificador único)" required />
                 <Input
+                  aria-label="Slug (identificador único)"
                   value={s1.slug}
                   onChange={(e) => {
                     setSlugEdited(true);
@@ -569,6 +603,7 @@ export default function OnboardingPage() {
               <div>
                 <Label text="CNPJ" required />
                 <Input
+                  aria-label="CNPJ"
                   value={s1.cnpj}
                   onChange={(e) =>
                     setS1((prev) => ({ ...prev, cnpj: applyCnpjMask(e.target.value) }))
@@ -583,6 +618,7 @@ export default function OnboardingPage() {
               <div>
                 <Label text="Email de Contato" />
                 <Input
+                  aria-label="Email de Contato"
                   type="email"
                   value={s1.email_contato}
                   onChange={(e) =>
@@ -612,6 +648,7 @@ export default function OnboardingPage() {
               <div>
                 <Label text="Username" required />
                 <Input
+                  aria-label="Username"
                   value={s2.username}
                   onChange={(e) => setS2((prev) => ({ ...prev, username: e.target.value }))}
                   placeholder="admin_bet"
@@ -622,6 +659,7 @@ export default function OnboardingPage() {
               <div>
                 <Label text="Email" required />
                 <Input
+                  aria-label="Email"
                   type="email"
                   value={s2.email}
                   onChange={(e) => setS2((prev) => ({ ...prev, email: e.target.value }))}
@@ -638,6 +676,7 @@ export default function OnboardingPage() {
                 <Label text="Senha" required />
                 <div className="relative">
                   <Input
+                    aria-label="Senha"
                     type={showPw ? 'text' : 'password'}
                     value={s2.senha}
                     onChange={(e) => setS2((prev) => ({ ...prev, senha: e.target.value }))}
@@ -676,6 +715,7 @@ export default function OnboardingPage() {
                 <Label text="Confirmar Senha" required />
                 <div className="relative">
                   <Input
+                    aria-label="Confirmar Senha"
                     type={showCf ? 'text' : 'password'}
                     value={s2.confirmar_senha}
                     onChange={(e) =>
@@ -756,6 +796,7 @@ export default function OnboardingPage() {
                 <div>
                   <Label text="Nome do Conector" />
                   <Input
+                    aria-label="Nome do Conector"
                     value={connName}
                     onChange={(e) => setConnName(e.target.value)}
                     placeholder={selConnector.connector_name}

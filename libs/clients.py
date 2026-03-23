@@ -36,11 +36,35 @@ def _try_bind_request_id(request_id: str | None) -> None:
         return
 
 
+def _try_bind_event_id(event_id: str | None) -> None:
+    try:
+        import structlog  # type: ignore
+
+        if event_id:
+            structlog.contextvars.bind_contextvars(event_id=event_id)
+    except Exception:
+        return
+
+
 def _request_id_from_kafka_headers(headers: list[tuple[str, bytes]] | None) -> str | None:
     if not headers:
         return None
     for key, value in headers:
         if key == "X-Request-ID":
+            try:
+                if isinstance(value, (bytes, bytearray)):
+                    decoded = value.decode("utf-8", errors="replace")
+                    return decoded or None
+            except Exception:
+                return None
+    return None
+
+
+def _event_id_from_kafka_headers(headers: list[tuple[str, bytes]] | None) -> str | None:
+    if not headers:
+        return None
+    for key, value in headers:
+        if key == "X-Event-ID":
             try:
                 if isinstance(value, (bytes, bytearray)):
                     decoded = value.decode("utf-8", errors="replace")
@@ -94,9 +118,15 @@ class KafkaProducerClient:
             raise RuntimeError("KafkaProducerClient não iniciado")
         effective_headers = headers
         if effective_headers is None:
+            effective_headers = []
             request_id = _try_get_request_id_from_context()
             if request_id:
-                effective_headers = [("X-Request-ID", request_id.encode("utf-8"))]
+                effective_headers.append(("X-Request-ID", request_id.encode("utf-8")))
+            event_id = value.get("event_id") if isinstance(value, dict) else None
+            if isinstance(event_id, str) and event_id:
+                effective_headers.append(("X-Event-ID", event_id.encode("utf-8")))
+            if not effective_headers:
+                effective_headers = None
         await self._producer.send_and_wait(topic, value=value, key=key, headers=effective_headers)
 
 
@@ -146,7 +176,9 @@ class KafkaConsumerClient:
         async for msg in self._consumer:
             try:
                 request_id = _request_id_from_kafka_headers(getattr(msg, "headers", None))
+                event_id = _event_id_from_kafka_headers(getattr(msg, "headers", None))
                 _try_bind_request_id(request_id)
+                _try_bind_event_id(event_id)
             except Exception:
                 # best-effort correlation only
                 pass

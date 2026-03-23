@@ -33,6 +33,10 @@ export default function CompoundRulesPage() {
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
+  const [operator, setOperator] = useState('AND');
+  const [nThreshold, setNThreshold] = useState(2);
+  const [severityMode, setSeverityMode] = useState('MAX');
+  const [fixedSeverity, setFixedSeverity] = useState('HIGH');
   const [minScore, setMinScore] = useState(1.0);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [err, setErr] = useState('');
@@ -46,6 +50,11 @@ export default function CompoundRulesPage() {
     mutationFn: () =>
       api.post('/rules/compound', {
         name,
+        logic: operator,
+        operator,
+        n_threshold: operator === 'N_OF_M' ? nThreshold : undefined,
+        severity_mode: severityMode,
+        fixed_severity: severityMode === 'FIXED' ? fixedSeverity : undefined,
         min_score_threshold: minScore,
         component_rule_ids: selectedIds,
       }),
@@ -53,6 +62,10 @@ export default function CompoundRulesPage() {
       qc.invalidateQueries({ queryKey: ['compound-rules'] });
       setShowForm(false);
       setName('');
+      setOperator('AND');
+      setNThreshold(2);
+      setSeverityMode('MAX');
+      setFixedSeverity('HIGH');
       setSelectedIds([]);
       setErr('');
     },
@@ -113,6 +126,56 @@ export default function CompoundRulesPage() {
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand dark:border-gray-700 dark:bg-gray-800 dark:text-white"
               />
             </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Operador</label>
+              <select
+                value={operator}
+                onChange={(e) => setOperator(e.target.value)}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+              >
+                <option value="AND">AND</option>
+                <option value="OR">OR</option>
+                <option value="N_OF_M">N_OF_M</option>
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Modo severidade</label>
+              <select
+                value={severityMode}
+                onChange={(e) => setSeverityMode(e.target.value)}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+              >
+                <option value="MAX">MAX</option>
+                <option value="FIXED">FIXED</option>
+              </select>
+            </div>
+            {operator === 'N_OF_M' && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">N mínimo</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={nThreshold}
+                  onChange={(e) => setNThreshold(parseInt(e.target.value || '1', 10))}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                />
+              </div>
+            )}
+            {severityMode === 'FIXED' && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Severidade fixa</label>
+                <select
+                  value={fixedSeverity}
+                  onChange={(e) => setFixedSeverity(e.target.value)}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                >
+                  <option value="LOW">LOW</option>
+                  <option value="MEDIUM">MEDIUM</option>
+                  <option value="HIGH">HIGH</option>
+                  <option value="CRITICAL">CRITICAL</option>
+                </select>
+              </div>
+            )}
           </div>
 
           {/* Rule checkboxes */}

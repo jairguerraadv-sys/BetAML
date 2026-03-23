@@ -235,6 +235,7 @@ export default function AlertsPage() {
         </div>
         <div className="flex items-center gap-2">
           <select
+            aria-label="Filtrar status dos alertas"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-sm"

@@ -4,6 +4,10 @@
   "private": true,
   "scripts": {
     "test": "playwright test",
+    "test:smoke": "bash scripts/run-playwright.sh tests/auth.spec.ts tests/dashboard.spec.ts tests/alerts.spec.ts tests/cases.spec.ts && bash scripts/run-playwright.sh tests/global-search.spec.ts tests/mappings.spec.ts tests/player-lists.spec.ts tests/ingest-jobs.spec.ts tests/ingest-errors.spec.ts tests/feature-store.spec.ts && bash scripts/run-playwright.sh tests/model-registry.spec.ts tests/audit-logs.spec.ts tests/reports.spec.ts tests/notifications.spec.ts && bash scripts/run-playwright.sh tests/admin-settings.spec.ts tests/admin-ops.spec.ts tests/api-keys.spec.ts",
+    "test:extended": "bash scripts/run-playwright.sh tests/mappings-versioning.spec.ts && bash scripts/run-playwright.sh tests/ingest-operations.spec.ts && bash scripts/run-playwright.sh tests/ingest-rate-limit.spec.ts && bash scripts/run-playwright.sh tests/ingest-connectors.spec.ts && bash scripts/run-playwright.sh tests/ingest-tenant-isolation.spec.ts && bash scripts/run-playwright.sh tests/fictibet-dataset-pack.spec.ts && bash scripts/run-playwright.sh tests/report-exports.spec.ts && bash scripts/run-playwright.sh tests/maintenance-mode.spec.ts && bash scripts/run-playwright.sh tests/report-audit.spec.ts && bash scripts/run-playwright.sh tests/onboarding.spec.ts",
+    "test:security": "bash scripts/run-playwright.sh tests/security-rbac.spec.ts -g \"analyst sees full CPF\" && bash scripts/run-playwright.sh tests/security-rbac.spec.ts -g \"auditor cannot mutate alert labels\" && bash scripts/run-playwright.sh tests/security-rbac.spec.ts -g \"auditor can access audit logs\"",
+    "test:nightly": "npm run test:smoke && npm run test:extended && npm run test:security",
     "test:ui": "playwright test --ui",
     "test:headed": "playwright test --headed"
   },

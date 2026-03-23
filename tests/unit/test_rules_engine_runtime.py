@@ -98,3 +98,34 @@ def test_evaluate_rules_includes_module2_feature_snapshot():
     assert snapshot["cluster_size"] == 4
     assert snapshot["bonus_to_real_money_ratio_30d"] == 0.5
     assert matches[0]["context_snapshot"]["player"]["pep_flag"] is True
+
+
+def test_evaluate_rules_supports_compound_n_of_m():
+    rules = _load_module()
+    envelope = {
+        "entity_type": "TRANSACTION",
+        "payload": {"player_id": "player-1", "amount": 1500, "type": "DEPOSIT", "status": "SETTLED", "currency": "BRL"},
+    }
+    features = {"deposit_sum_24h": 1500.0}
+    ruleset = [
+        {"id": "r1", "name": "A", "condition_dsl": "transaction.amount > 1000", "params": {}, "severity": "HIGH", "scope": "TRANSACTION", "version": 1, "weight": 1.0},
+        {"id": "r2", "name": "B", "condition_dsl": "transaction.type == 'DEPOSIT'", "params": {}, "severity": "MEDIUM", "scope": "TRANSACTION", "version": 1, "weight": 1.0},
+        {"id": "r3", "name": "C", "condition_dsl": "transaction.amount > 999999", "params": {}, "severity": "LOW", "scope": "TRANSACTION", "version": 1, "weight": 1.0},
+    ]
+    compound_rules = [{
+        "id": "c1",
+        "name": "2 of 3",
+        "operator": "N_OF_M",
+        "n_threshold": 2,
+        "component_rule_ids": ["r1", "r2", "r3"],
+        "score_weights": {},
+        "min_score_threshold": 0.5,
+        "severity_mode": "MAX",
+    }]
+
+    matches = asyncio.run(rules.evaluate_rules(envelope, features, ruleset, compound_rules=compound_rules))
+
+    compound = next((m for m in matches if m["rule"].get("is_compound")), None)
+    assert compound is not None
+    assert compound["rule"]["compound_rule_id"] == "c1"
+    assert compound["context_snapshot"]["matched_components"] == 2

@@ -103,6 +103,12 @@ def test_night_activity_ratio_range():
     assert 0.0 <= feats["night_activity_ratio"] <= 1.0
 
 
+def test_weekend_activity_ratio_range():
+    txns = [_make_txn(hours_ago=i * 12) for i in range(8)]
+    feats = compute_features("P1", _history(txns))
+    assert 0.0 <= feats["weekend_activity_ratio"] <= 1.0
+
+
 # ── Multi-currency flag ───────────────────────────────────────────────────────
 
 def test_multi_currency_flag_true():
@@ -137,6 +143,22 @@ def test_win_loss_ratio_mixed():
     assert abs(feats["win_loss_ratio_30d"] - 1.0) < 0.01
 
 
+def test_avg_odds_bet_7d():
+    bets = [
+        _make_txn(txn_type="BET", odds=1.5, hours_ago=2),
+        _make_txn(txn_type="BET", odds=2.5, hours_ago=4),
+    ]
+    feats = compute_features("P1", _history(bets))
+    assert feats["avg_odds_bet_7d"] == pytest.approx(2.0)
+
+
+def test_avg_time_between_deposit_and_withdrawal_7d():
+    deposit = _make_txn(txn_type="DEPOSIT", hours_ago=10)
+    withdrawal = _make_txn(txn_type="WITHDRAWAL", hours_ago=8)
+    feats = compute_features("P1", _history([deposit, withdrawal]))
+    assert feats["avg_time_between_deposit_and_withdrawal_7d"] == pytest.approx(2.0)
+
+
 # ── Chargeback rate ───────────────────────────────────────────────────────────
 
 def test_chargeback_rate_zero():
@@ -150,6 +172,25 @@ def test_chargeback_rate_nonzero():
     bad = [_make_txn(txn_type="DEPOSIT", is_chargeback=True,  hours_ago=50)]
     feats = compute_features("P1", _history(ok + bad))
     assert feats["chargeback_rate_30d"] > 0.0
+
+
+def test_bonus_to_real_money_ratio_30d():
+    txns = [
+        _make_txn(txn_type="DEPOSIT", hours_ago=2),
+        _make_txn(txn_type="DEPOSIT", hours_ago=4),
+        _make_txn(txn_type="BONUS", hours_ago=1),
+    ]
+    feats = compute_features("P1", _history(txns))
+    assert feats["bonus_to_real_money_ratio_30d"] == pytest.approx(1 / 3)
+
+
+def test_cashout_ratio_7d():
+    bets = [
+        {**_make_txn(txn_type="BET", hours_ago=2), "result": "CASHOUT", "cashout_amount": 90.0},
+        _make_txn(txn_type="BET", hours_ago=4, result="LOSS"),
+    ]
+    feats = compute_features("P1", _history(bets))
+    assert feats["cashout_ratio_7d"] == pytest.approx(0.5)
 
 
 # ── Feature version ───────────────────────────────────────────────────────────
@@ -175,6 +216,8 @@ def test_cluster_metadata_present():
     feats = compute_features("P1", _history(txns))
     assert feats["cluster_id"].startswith("cluster:")
     assert feats["cluster_size"] >= 1
+    assert feats["shared_device_score"] >= 0.0
+    assert feats["shared_instrument_score"] >= 0.0
 
 
 # ── Empty history ─────────────────────────────────────────────────────────────

@@ -49,6 +49,29 @@ jobs:
           pip install -r services/api/requirements.txt
           pip install -r requirements-dev.txt
 
+      - name: Run batched backend gate
+        env:
+          JWT_SECRET: ci-test-secret-at-least-32-characters-long
+          PII_ENCRYPTION_KEY: ci-pii-test-key-32-characters-long!!
+          ENVIRONMENT: test
+          DATABASE_URL: postgresql+asyncpg://betaml:betaml@localhost/betaml
+          REDIS_URL: redis://localhost:6379/0
+          KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+        run: |
+          bash scripts/run_critical_unit_batches.sh --include-remainder -q --tb=short \
+            --cov=services/api \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage-readiness.xml \
+            --cov-fail-under=40
+
+      - name: Upload backend coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-backend-coverage-readiness
+          path: coverage-readiness.xml
+          retention-days: 7
+
       - name: Validate Alembic chain
         working-directory: services/api
         run: |
@@ -59,7 +82,7 @@ jobs:
         run: |
           cp .env.example .env
           docker compose -f infra/docker-compose.yml up -d \
-            postgres redis redpanda topic-init api frontend
+            postgres redis minio clickhouse redpanda topic-init api frontend stream-processor rules-engine ml-service
 
       - name: Wait for API and frontend health
         run: |
@@ -101,14 +124,77 @@ jobs:
           E2E_API_URL=${E2E_API_URL}
           E2E_USERNAME=${E2E_USERNAME}
           E2E_PASSWORD=${E2E_PASSWORD}
+          E2E_ADMIN_USERNAME=${E2E_ADMIN_USERNAME}
+          E2E_ADMIN_PASSWORD=${E2E_ADMIN_PASSWORD}
+          E2E_SECONDARY_ADMIN_USERNAME=${E2E_SECONDARY_ADMIN_USERNAME}
+          E2E_SECONDARY_ADMIN_PASSWORD=${E2E_SECONDARY_ADMIN_PASSWORD}
+          E2E_AUDITOR_USERNAME=${E2E_AUDITOR_USERNAME}
+          E2E_AUDITOR_PASSWORD=${E2E_AUDITOR_PASSWORD}
           EOF
         env:
           E2E_USERNAME: ${{ github.event.inputs.e2e_username }}
           E2E_PASSWORD: ${{ github.event.inputs.e2e_password }}
+          E2E_ADMIN_USERNAME: admin_a
+          E2E_ADMIN_PASSWORD: admin123
+          E2E_SECONDARY_ADMIN_USERNAME: admin_b
+          E2E_SECONDARY_ADMIN_PASSWORD: admin123
+          E2E_AUDITOR_USERNAME: auditor_a
+          E2E_AUDITOR_PASSWORD: auditor123
 
       - name: Run readiness smoke tests
         working-directory: e2e
-        run: npx playwright test tests/auth.spec.ts tests/cases.spec.ts --reporter=line
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-readiness
+          PLAYWRIGHT_JUNIT_OUTPUT_DIR: test-results-readiness
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: readiness-smoke.xml
+        run: npm run test:smoke -- --reporter=html,junit
+
+      - name: Run readiness extended tests
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-readiness
+          PLAYWRIGHT_JUNIT_OUTPUT_DIR: test-results-readiness
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: readiness-extended.xml
+        run: npm run test:extended -- --reporter=html,junit
+
+      - name: Run readiness security tests
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-readiness
+          PLAYWRIGHT_JUNIT_OUTPUT_DIR: test-results-readiness
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: readiness-security.xml
+        run: npm run test:security -- --reporter=html,junit
+
+      - name: Upload readiness Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-readiness-playwright-report
+          path: e2e/playwright-report-readiness/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload readiness Playwright results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-readiness-playwright-results
+          path: e2e/test-results-readiness/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Dump docker logs on failure
+        if: failure()
+        run: docker compose -f infra/docker-compose.yml logs --no-color > /tmp/release-readiness-docker-logs.txt || true
+
+      - name: Upload docker logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-readiness-docker-logs
+          path: /tmp/release-readiness-docker-logs.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Stop services
         if: always()

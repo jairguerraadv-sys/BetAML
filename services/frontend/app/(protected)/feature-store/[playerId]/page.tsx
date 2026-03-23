@@ -5,13 +5,16 @@ import {
   fetchFeatureStoreCurrent,
   fetchFeatureStoreHistory,
   fetchFeaturePopulationStats,
+  fetchFeatureQualityLatest,
   type FeatureStoreCurrent,
   type FeatureStoreHistory,
   type FeaturePopulationStats,
+  type FeatureQualityStatus,
 } from '@/lib/api';
 import { BarChart2, Database, RefreshCw } from 'lucide-react';
 
-type Props = { params: Promise<{ playerId: string }> };
+type RouteParams = { playerId: string };
+type Props = { params: RouteParams | Promise<RouteParams> };
 
 // ── Feature groups for current tab ───────────────────────────────────────────
 
@@ -26,11 +29,11 @@ const GROUPS = [
   },
   {
     label: 'Comportamento',
-    keys: ['night_activity_ratio', 'weekend_activity_ratio', 'avg_odds_bet_7d', 'win_loss_ratio_30d', 'unique_instruments_7d', 'avg_deposit_to_withdrawal_hours', 'bonus_to_real_ratio_30d'],
+    keys: ['night_activity_ratio', 'weekend_activity_ratio', 'avg_odds_bet_7d', 'win_loss_ratio_30d', 'unique_instruments_used_7d', 'avg_time_between_deposit_and_withdrawal_7d', 'bonus_to_real_money_ratio_30d'],
   },
   {
     label: 'Rede & Risco',
-    keys: ['multi_currency_flag', 'shared_instrument_score', 'cluster_size', 'cluster_id'],
+    keys: ['multi_currency_flag', 'shared_device_score', 'shared_instrument_score', 'cluster_size', 'cluster_id'],
   },
 ];
 
@@ -51,10 +54,11 @@ const LABELS: Record<string, string> = {
   weekend_activity_ratio: 'Atividade fim de semana',
   avg_odds_bet_7d: 'Odd média (7d)',
   win_loss_ratio_30d: 'Win/Loss (30d)',
-  unique_instruments_7d: 'Instrumentos únicos (7d)',
-  avg_deposit_to_withdrawal_hours: 'Tempo méd. depósito->saque',
-  bonus_to_real_ratio_30d: 'Ratio bônus/dinheiro real (30d)',
+  unique_instruments_used_7d: 'Instrumentos únicos (7d)',
+  avg_time_between_deposit_and_withdrawal_7d: 'Tempo méd. depósito->saque',
+  bonus_to_real_money_ratio_30d: 'Ratio bônus/dinheiro real (30d)',
   multi_currency_flag: 'Multi-moeda',
+  shared_device_score: 'Score device compartilhado',
   shared_instrument_score: 'Score rede (instrumento)',
   cluster_size: 'Tamanho do cluster',
   cluster_id: 'Cluster ID',
@@ -67,9 +71,10 @@ function fmt(key: string, val: unknown): string {
     if (key.includes('ratio') || key.includes('rate') || key.includes('score')) {
       return (val as number).toFixed(4);
     }
-    if (key.includes('amount') || key.includes('sum') || key.includes('velocity')) {
+    if (key.includes('amount') || key.includes('sum')) {
       return `R$ ${(val as number).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
     }
+    if (key.includes('velocity')) return `${(val as number).toFixed(4)} /h`;
     return (val as number).toLocaleString('pt-BR');
   }
   return String(val);
@@ -106,7 +111,11 @@ function DriftBadge({ score }: { score?: number | null }) {
 // ── Page component ────────────────────────────────────────────────────────────
 
 export default function FeatureDetailPage({ params }: Props) {
-  const { playerId } = use(params);
+  const resolvedParams =
+    params && typeof params === 'object' && 'then' in params
+      ? use(params as Promise<RouteParams>)
+      : (params as RouteParams);
+  const { playerId } = resolvedParams;
 
   const [activeTab, setActiveTab] = useState<Tab>('Atuais');
   const [dateFrom, setDateFrom] = useState('');
@@ -132,6 +141,13 @@ export default function FeatureDetailPage({ params }: Props) {
   const { data: popStats, isLoading: loadingStats } = useQuery({
     queryKey: ['feature-population-stats'],
     queryFn: fetchFeaturePopulationStats,
+    retry: false,
+    enabled: activeTab === 'Distribuição',
+  });
+
+  const { data: quality, isLoading: loadingQuality } = useQuery({
+    queryKey: ['feature-quality-latest'],
+    queryFn: fetchFeatureQualityLatest,
     retry: false,
     enabled: activeTab === 'Distribuição',
   });
@@ -195,6 +211,24 @@ export default function FeatureDetailPage({ params }: Props) {
                   </strong>
                 </span>
                 <span>
+                  Snapshot:{' '}
+                  <strong className="text-gray-700 dark:text-gray-300">
+                    v{current.snapshot_version}
+                  </strong>
+                </span>
+                <span>
+                  Fonte:{' '}
+                  <strong className="text-gray-700 dark:text-gray-300">
+                    {current.source}
+                  </strong>
+                </span>
+                <span>
+                  Entidade:{' '}
+                  <strong className="text-gray-700 dark:text-gray-300">
+                    {current.entity_type}
+                  </strong>
+                </span>
+                <span>
                   Atualizado:{' '}
                   <strong className="text-gray-700 dark:text-gray-300">
                     {current.computed_at
@@ -202,7 +236,19 @@ export default function FeatureDetailPage({ params }: Props) {
                       : '—'}
                   </strong>
                 </span>
+                <span>
+                  Feature date:{' '}
+                  <strong className="text-gray-700 dark:text-gray-300">
+                    {current.snapshot_date ?? '—'}
+                  </strong>
+                </span>
               </div>
+
+              {current.gold_object_path && (
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+                  Gold path: <span className="font-mono">{current.gold_object_path}</span>
+                </div>
+              )}
 
               {GROUPS.map((g) => (
                 <div
@@ -278,6 +324,7 @@ export default function FeatureDetailPage({ params }: Props) {
                     <th className="px-4 py-2.5 text-right">Depósitos 24h</th>
                     <th className="px-4 py-2.5 text-right">Volume 30d</th>
                     <th className="px-4 py-2.5 text-right">Score Instrumento</th>
+                    <th className="px-4 py-2.5 text-right">Cluster</th>
                     <th className="px-4 py-2.5 text-center">Drift Score</th>
                     <th className="px-4 py-2.5 text-right">Versão</th>
                   </tr>
@@ -298,6 +345,9 @@ export default function FeatureDetailPage({ params }: Props) {
                       </td>
                       <td className="px-4 py-2 text-right">
                         {fmt('shared_instrument_score', item.features.shared_instrument_score)}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        {fmt('cluster_size', item.features.cluster_size)}
                       </td>
                       <td className="px-4 py-2 text-center">
                         <DriftBadge score={item.drift_score} />
@@ -329,6 +379,92 @@ export default function FeatureDetailPage({ params }: Props) {
               Estatísticas calculadas sobre todos os jogadores do tenant — job diário às 06:00 UTC.
             </span>
           </div>
+
+          {loadingQuality && (
+            <p className="text-sm text-gray-500">Carregando resumo de qualidade…</p>
+          )}
+
+          {quality && (
+            <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900">
+              <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                <span>
+                  Data monitorada:{' '}
+                  <strong className="text-gray-700 dark:text-gray-200">
+                    {quality.feature_date ?? '—'}
+                  </strong>
+                </span>
+                <span>
+                  Base anterior:{' '}
+                  <strong className="text-gray-700 dark:text-gray-200">
+                    {quality.previous_feature_date ?? '—'}
+                  </strong>
+                </span>
+                <span>
+                  Drift:{' '}
+                  <strong className={quality.drift_detected ? 'text-red-600' : 'text-green-600'}>
+                    {quality.drift_detected ? 'Detectado' : 'Estável'}
+                  </strong>
+                </span>
+                <span>
+                  Score máx:{' '}
+                  <strong className="text-gray-700 dark:text-gray-200">
+                    {quality.max_drift_score.toFixed(4)}
+                  </strong>
+                </span>
+                <span>
+                  Alertou ADMIN:{' '}
+                  <strong className="text-gray-700 dark:text-gray-200">
+                    {quality.admin_notification_sent ? 'Sim' : 'Não'}
+                  </strong>
+                </span>
+              </div>
+
+              {quality.findings.length > 0 && (
+                <div className="mt-4 overflow-hidden rounded-lg border border-gray-100 dark:border-gray-800">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-xs uppercase text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Feature</th>
+                        <th className="px-3 py-2 text-left">Tipo</th>
+                        <th className="px-3 py-2 text-right">Atual</th>
+                        <th className="px-3 py-2 text-right">Anterior</th>
+                        <th className="px-3 py-2 text-right">Delta</th>
+                        <th className="px-3 py-2 text-right">Severidade</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
+                      {quality.findings.map((item) => (
+                        <tr key={`${item.feature_name}-${item.finding_type}`}>
+                          <td className="px-3 py-2 font-mono text-xs text-gray-700 dark:text-gray-300">
+                            {item.feature_name}
+                          </td>
+                          <td className="px-3 py-2 text-gray-500">{item.finding_type}</td>
+                          <td className="px-3 py-2 text-right">{item.current_value.toFixed(4)}</td>
+                          <td className="px-3 py-2 text-right text-gray-500">
+                            {item.previous_value != null ? item.previous_value.toFixed(4) : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-right text-gray-500">
+                            {item.delta != null ? item.delta.toFixed(4) : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <span
+                              className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${
+                                item.severity === 'CRITICAL'
+                                  ? 'bg-red-100 text-red-700'
+                                  : 'bg-yellow-100 text-yellow-700'
+                              }`}
+                            >
+                              {item.severity}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
           <input
             type="text"

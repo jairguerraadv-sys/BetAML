@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response as FastAPIResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func as sqlfunc, select
@@ -15,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import decrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
-from models import Alert, Case, CaseEvent, FinancialTransaction, Notification, Player, ReportPackage, ScoringConfig, Tenant, User
+from models import Alert, Bet, Case, CaseEvent, FinancialTransaction, Notification, Player, ReportPackage, ScoringConfig, Tenant, User
 from repositories import CaseRepository
 from repositories.cases import get_case_repo
 from utils import redis_rate_limit, write_audit
@@ -146,6 +147,230 @@ class CaseCommentIn(BaseModel):
 class CaseLinkAlertIn(BaseModel):
     alert_id: str
 
+
+class CaseLinkTransactionIn(BaseModel):
+    transaction_id: str
+
+
+def _map_report_decision(decision: str) -> str:
+    mapping = {
+        "FILE_SAR": "REPORT",
+        "NO_ACTION": "CLOSE",
+        "PENDING": "MONITOR",
+    }
+    return mapping.get(decision, "MONITOR")
+
+
+async def _resolve_generated_by(db: AsyncSession, user_id: str | None) -> str:
+    if not user_id:
+        return "system"
+    user = await db.get(User, user_id)
+    if not user:
+        return str(user_id)
+    return f"{user.username} ({user.role})"
+
+
+async def _build_report_payload(
+    *,
+    db: AsyncSession,
+    case_obj: Case,
+    alerts: list[Alert],
+    events: list[CaseEvent],
+    current_user: User,
+    analyst_narrative: str | None,
+    decision_code: str,
+) -> dict[str, Any]:
+    player = await db.get(Player, case_obj.player_id) if case_obj.player_id else None
+    tenant = await db.get(Tenant, case_obj.tenant_id)
+    generated_at = datetime.now(UTC)
+    generated_by = await _resolve_generated_by(db, str(current_user.id))
+    report_id = str(uuid.uuid4())
+
+    subject: dict[str, Any] = {
+        "cpf": None,
+        "name": None,
+        "birthDate": None,
+        "pepFlag": False,
+        "riskCategory": None,
+        "profession": None,
+        "declaredIncomeMonthly": 0,
+        "registeredSince": None,
+    }
+    if player:
+        cpf_plain = decrypt_pii(player.cpf_encrypted)  # type: ignore[arg-type]
+        name_plain = decrypt_pii(player.name_encrypted)  # type: ignore[arg-type]
+        subject = {
+            "cpf": mask_cpf(cpf_plain),
+            "name": name_plain,
+            "birthDate": player.birth_date.isoformat() if player.birth_date else None,
+            "pepFlag": bool(player.pep_flag),
+            "riskCategory": str(player.risk_band or "LOW"),
+            "profession": player.profession,
+            "declaredIncomeMonthly": float(player.declared_income_monthly or 0),
+            "registeredSince": player.registered_since.isoformat() if player.registered_since else None,
+        }
+
+    txns = []
+    bets = []
+    primary_instruments: list[str] = []
+    unusual_patterns: list[str] = []
+    if case_obj.player_id:
+        txns = list((await db.execute(
+            select(FinancialTransaction)
+            .where(
+                FinancialTransaction.tenant_id == case_obj.tenant_id,
+                FinancialTransaction.player_id == case_obj.player_id,
+                FinancialTransaction.occurred_at >= generated_at - timedelta(days=90),
+            )
+            .order_by(FinancialTransaction.occurred_at.desc())
+            .limit(50)
+        )).scalars().all())
+        bets = list((await db.execute(
+            select(Bet)
+            .where(
+                Bet.tenant_id == case_obj.tenant_id,
+                Bet.player_id == case_obj.player_id,
+                Bet.occurred_at >= generated_at - timedelta(days=90),
+            )
+            .order_by(Bet.occurred_at.desc())
+            .limit(50)
+        )).scalars().all())
+        primary_instruments = list({
+            str(tx.payment_instrument)
+            for tx in txns
+            if getattr(tx, "payment_instrument", None)
+        })[:10]
+
+    top_drivers = [
+        str(driver)
+        for alert in alerts
+        if isinstance(alert.evidence, dict)
+        for driver in (alert.evidence.get("top_drivers") or [])
+    ]
+    if top_drivers:
+        unusual_patterns.append("high_ml_driver_overlap")
+    if any(str(alert.severity) == "CRITICAL" for alert in alerts):
+        unusual_patterns.append("critical_alert_present")
+    if player and player.pep_flag:
+        unusual_patterns.append("pep_player")
+
+    total_deposits_90d = sum(float(tx.amount or 0) for tx in txns if str(getattr(tx, "type", "")) == "DEPOSIT")
+    total_withdrawals_90d = sum(float(tx.amount or 0) for tx in txns if str(getattr(tx, "type", "")) == "WITHDRAWAL")
+    total_bet_stake_90d = sum(float(bet.stake_amount or 0) for bet in bets)
+
+    alerts_summary = []
+    for alert in alerts:
+        evidence = alert.evidence if isinstance(alert.evidence, dict) else {}
+        alerts_summary.append({
+            "alertId": str(alert.id),
+            "type": str(alert.alert_type or "RULE"),
+            "severity": str(alert.severity or "LOW"),
+            "ruleOrModel": (
+                str(evidence.get("model_id"))
+                if evidence.get("model_id")
+                else str(alert.rule_id or alert.compound_rule_id or alert.alert_type)
+            ),
+            "description": str(alert.description or alert.title or ""),
+            "evidence": evidence,
+        })
+
+    attachments = [
+        {
+            "eventId": str(event.id),
+            "fileName": event.content.get("file_name"),
+            "description": event.content.get("description"),
+        }
+        for event in events
+        if event.event_type == "EVIDENCE_UPLOAD" and isinstance(event.content, dict)
+    ]
+
+    final_payload = {
+        "reportId": report_id,
+        "tenantId": str(case_obj.tenant_id),
+        "caseNumber": str(case_obj.reference_number or case_obj.id),
+        "generatedAt": generated_at.isoformat(),
+        "generatedBy": generated_by,
+        "subject": subject,
+        "financialSummary": {
+            "totalDeposits90d": round(total_deposits_90d, 2),
+            "totalWithdrawals90d": round(total_withdrawals_90d, 2),
+            "totalBetStake90d": round(total_bet_stake_90d, 2),
+            "primaryInstruments": primary_instruments,
+            "unusualPatterns": unusual_patterns,
+        },
+        "alertsSummary": alerts_summary,
+        "keyTransactions": [
+            {
+                "transactionId": str(tx.id),
+                "type": str(tx.type),
+                "amount": float(tx.amount or 0),
+                "status": str(tx.status),
+                "occurredAt": tx.occurred_at.isoformat() if tx.occurred_at else None,
+                "paymentInstrument": getattr(tx, "payment_instrument", None),
+            }
+            for tx in txns[:20]
+        ],
+        "keyBets": [
+            {
+                "betId": str(bet.id),
+                "stakeAmount": float(bet.stake_amount or 0),
+                "actualPayout": float(bet.actual_payout or 0) if getattr(bet, "actual_payout", None) is not None else None,
+                "status": str(getattr(bet, "status", "")),
+                "occurredAt": bet.occurred_at.isoformat() if bet.occurred_at else None,
+            }
+            for bet in bets[:20]
+        ],
+        "analystNarrative": analyst_narrative or "",
+        "decision": _map_report_decision(decision_code),
+        "decisionLegacy": decision_code,
+        "attachments": attachments,
+        # backward-compatible fields kept for existing consumers/tests
+        "report_id": report_id,
+        "schema_version": "2.0",
+        "generated_at": generated_at.isoformat(),
+        "generated_by": str(current_user.id),
+        "reporting_entity": {
+            "tenant_id": str(case_obj.tenant_id),
+            "tenant_name": getattr(tenant, "name", None),
+            "platform": "BetAML",
+        },
+        "case": {
+            "id": str(case_obj.id),
+            "title": case_obj.title,
+            "status": case_obj.status,
+            "severity": case_obj.severity,
+            "opened_at": case_obj.created_at.isoformat() if case_obj.created_at else None,
+        },
+        "suspicious_operations": [
+            {
+                "alert_id": item["alertId"],
+                "title": alert.title,
+                "severity": item["severity"],
+                "alert_type": item["type"],
+                "evidence": item["evidence"],
+                "occurred_at": alert.created_at.isoformat() if alert.created_at else None,
+            }
+            for item, alert in zip(alerts_summary, alerts)
+        ],
+        "financial_summary": {
+            "total_alerts": len(alerts),
+            "total_amount_brl": round(total_deposits_90d + total_withdrawals_90d, 2),
+            "max_single_amount_brl": round(max([float(tx.amount or 0) for tx in txns] + [0.0]), 2),
+            "alert_types": list({str(alert.alert_type) for alert in alerts}),
+        },
+        "investigation_timeline": [
+            {
+                "event_type": event.event_type,
+                "content": event.content,
+                "recorded_at": event.created_at.isoformat() if event.created_at else None,
+            }
+            for event in events
+        ],
+        "analyst_narrative": analyst_narrative or "",
+        "decision_basis": "Análise conforme COAF Res. 36/2021 e regulamentação Bacen/MF",
+    }
+    return final_payload
+
 def _suggest_analyst_narrative(case_obj: Case, alerts: list[Alert], player_info: dict) -> str:
     """Gera narrativa base para o analista revisar antes da decisão final."""
     severity_set = sorted({str(a.severity or "UNKNOWN") for a in alerts})
@@ -228,9 +453,13 @@ async def create_case(
     }
     c.sla_due_at = datetime.now(UTC) + timedelta(hours=_sla_hours.get(body.severity, 24))
     await write_audit(db, current_user.tenant_id, current_user.id, "CREATE", "Case", c.id, after=body.model_dump())
+    response_payload = {"id": c.id, "title": c.title, "status": c.status}
     await db.commit()
-    await db.refresh(c)
-    return {"id": c.id, "title": c.title, "status": c.status}
+    try:
+        await db.refresh(c)
+    except Exception:
+        pass
+    return response_payload
 
 
 @router.get("/cases")
@@ -256,6 +485,7 @@ async def list_cases(
             "reference_number": getattr(c, "reference_number", None),
             "priority": getattr(c, "priority", "MEDIUM"),
             "sla_due_at": getattr(c, "sla_due_at", None),
+            "auto_created": getattr(c, "auto_created", False),
         }
         for c in cases
     ]
@@ -275,6 +505,14 @@ async def get_case(
     events = (await db.execute(
         select(CaseEvent).where(CaseEvent.case_id == case_id).order_by(CaseEvent.created_at)
     )).scalars().all()
+    report_packages = (await db.execute(
+        select(ReportPackage)
+        .where(
+            ReportPackage.case_id == case_id,
+            ReportPackage.tenant_id == current_user.tenant_id,
+        )
+        .order_by(ReportPackage.created_at.desc())
+    )).scalars().all()
     return {
         "id": c.id, "title": c.title, "status": c.status, "severity": c.severity,
         "description": c.description, "player_id": c.player_id,
@@ -282,10 +520,23 @@ async def get_case(
         "reference_number": getattr(c, "reference_number", None),
         "priority": getattr(c, "priority", "MEDIUM"),
         "sla_due_at": getattr(c, "sla_due_at", None),
+        "auto_created": getattr(c, "auto_created", False),
         "alerts": [{"id": a.id, "severity": a.severity, "title": a.title} for a in alerts],
         "timeline": [
             {"id": e.id, "event_type": e.event_type, "content": e.content, "created_at": e.created_at}
             for e in events
+        ],
+        "report_packages": [
+            {
+                "id": rp.id,
+                "status": rp.status,
+                "format": rp.format,
+                "decision": ((rp.payload or {}).get("decisionLegacy") or (rp.payload or {}).get("decision") or rp.decision) if isinstance(rp.payload, dict) else rp.decision,
+                "created_at": rp.created_at,
+                "generated_by": rp.created_by,
+                "pdf_available": rp.pdf_path is not None,
+            }
+            for rp in report_packages
         ],
     }
 
@@ -390,62 +641,27 @@ async def generate_report_package(
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
     decision = body.decision or "PENDING"
+    persisted_decision = _map_report_decision(decision)
     if decision == "FILE_SAR" and not body.analyst_narrative:
         raise HTTPException(400, "analyst_narrative é obrigatório quando decision=FILE_SAR (COAF Res. 36/2021 Art. 9)")
 
     alerts  = (await db.execute(select(Alert).where(Alert.case_id == case_id))).scalars().all()
     events  = (await db.execute(select(CaseEvent).where(CaseEvent.case_id == case_id))).scalars().all()
 
-    player_info: dict = {}
-    if c.player_id is not None:
-        p = await db.get(Player, c.player_id)
-        if p:
-            cpf_plain = decrypt_pii(p.cpf_encrypted)  # type: ignore[arg-type]
-            player_info = {
-                "player_id": p.id, "external_player_id": p.external_player_id,
-                "cpf_masked": mask_cpf(cpf_plain), "pep_flag": p.pep_flag,
-                "risk_score": float(p.risk_score),  # type: ignore[arg-type]
-            }
-
-    alert_amounts = [float(a.evidence.get("amount", 0)) for a in alerts if isinstance(a.evidence, dict)]
-    financial_summary = {
-        "total_alerts":          len(alerts),
-        "total_amount_brl":      round(sum(alert_amounts), 2),
-        "max_single_amount_brl": round(max(alert_amounts, default=0.0), 2),
-        "alert_types":           list({a.alert_type for a in alerts if a.alert_type is not None}),
-    }
-    report_id    = str(uuid.uuid4())
-    generated_at = datetime.now(UTC).isoformat()
-    payload = {
-        "report_id": report_id, "schema_version": "1.0",
-        "generated_at": generated_at, "generated_by": current_user.id,
-        "reporting_entity": {"tenant_id": current_user.tenant_id, "platform": "BetAML"},
-        "subject": player_info,
-        "case": {
-            "id": c.id, "title": c.title, "status": c.status, "severity": c.severity,
-            "opened_at": c.created_at.isoformat() + "Z" if c.created_at is not None else None,
-        },
-        "suspicious_operations": [
-            {"alert_id": a.id, "title": a.title, "severity": a.severity,
-             "alert_type": a.alert_type, "evidence": a.evidence,
-             "occurred_at": a.created_at.isoformat() + "Z" if a.created_at is not None else None}
-            for a in alerts
-        ],
-        "financial_summary": financial_summary,
-        "investigation_timeline": [
-            {"event_type": e.event_type, "content": e.content,
-             "recorded_at": e.created_at.isoformat() + "Z" if e.created_at is not None else None}
-            for e in events
-        ],
-        "analyst_narrative": body.analyst_narrative,
-        "decision": decision,
-        "decision_basis": "Análise conforme COAF Res. 36/2021 e regulamentação Bacen/MF",
-    }
+    payload = await _build_report_payload(
+        db=db,
+        case_obj=c,
+        alerts=list(alerts),
+        events=list(events),
+        current_user=current_user,
+        analyst_narrative=body.analyst_narrative,
+        decision_code=decision,
+    )
 
     rp = ReportPackage(
         tenant_id=current_user.tenant_id, case_id=case_id, player_id=c.player_id,
         payload=payload, analyst_narrative=body.analyst_narrative,
-        decision=decision,
+        decision=persisted_decision,
         status="DRAFT" if decision == "PENDING" else "FINAL",
         created_by=current_user.id,
     )
@@ -457,7 +673,7 @@ async def generate_report_package(
         if pdf_bytes:
             import os as _os
             import tempfile as _tmp
-            pdf_filename = f"reports/{current_user.tenant_id}/{report_id}.pdf"
+            pdf_filename = f"reports/{current_user.tenant_id}/{payload['reportId']}.pdf"
             try:
                 from minio import Minio as _Minio
                 minio_url = _os.getenv("MINIO_URL", "minio:9000")
@@ -471,7 +687,7 @@ async def generate_report_package(
                               len(pdf_bytes), content_type="application/pdf")
                 pdf_path = f"minio://{bucket}/{pdf_filename}"
             except Exception:
-                tmp_path = _os.path.join(_tmp.gettempdir(), f"{report_id}.pdf")
+                tmp_path = _os.path.join(_tmp.gettempdir(), f"{payload['reportId']}.pdf")
                 with open(tmp_path, "wb") as _f:
                     _f.write(pdf_bytes)
                 pdf_path = tmp_path
@@ -485,16 +701,15 @@ async def generate_report_package(
     db.add(CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,
         event_type="REPORT_GENERATED",
-        content={"report_id": report_id, "decision": decision},
+        content={"report_id": payload["reportId"], "decision": decision},
         created_by=current_user.id,
     ))
     await write_audit(db, current_user.tenant_id, current_user.id, "GENERATE_REPORT", "Case", case_id,
-                      after={"report_id": report_id, "decision": decision})
+                      after={"report_id": payload["reportId"], "decision": decision})
     await db.commit()
-    await db.refresh(rp)
     return {
         "report_package_id": rp.id, "status": rp.status,
-        "decision": payload.get("decision", "PENDING"),
+        "decision": decision,
         "pdf_path": rp.pdf_path, "payload": payload,
     }
 
@@ -586,7 +801,17 @@ async def submit_report_package(
             "A submissão deve ser feita por outro usuário com perfil ADMIN."
         )
 
-    payload_decision = (rp.payload or {}).get("decision", "PENDING") if isinstance(rp.payload, dict) else "PENDING"
+    payload_decision = (rp.payload or {}).get("decisionLegacy") if isinstance(rp.payload, dict) else None
+    if payload_decision is None and isinstance(rp.payload, dict):
+        raw_decision = str((rp.payload or {}).get("decision", "MONITOR"))
+        reverse = {"REPORT": "FILE_SAR", "CLOSE": "NO_ACTION", "MONITOR": "PENDING"}
+        # Retrocompatibilidade:
+        # - payloads novos persistem REPORT/CLOSE/MONITOR
+        # - payloads legados ainda podem carregar FILE_SAR/NO_ACTION/PENDING
+        if raw_decision in {"FILE_SAR", "NO_ACTION", "PENDING"}:
+            payload_decision = raw_decision
+        else:
+            payload_decision = reverse.get(raw_decision, "PENDING")
     if payload_decision != "FILE_SAR":
         raise HTTPException(
             400,
@@ -696,6 +921,56 @@ async def list_report_packages(
     ]
 
 
+@router.get("/report-packages")
+async def list_tenant_report_packages(
+    case_id: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int = Query(50, le=200),
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(ReportPackage)
+        .where(ReportPackage.tenant_id == current_user.tenant_id)
+        .order_by(ReportPackage.created_at.desc())
+        .limit(limit)
+    )
+    if case_id:
+        stmt = stmt.where(ReportPackage.case_id == case_id)
+    if status:
+        stmt = stmt.where(ReportPackage.status == status)
+    rps = (await db.execute(stmt)).scalars().all()
+    return [
+        {
+            "id": rp.id,
+            "case_id": rp.case_id,
+            "player_id": rp.player_id,
+            "status": rp.status,
+            "format": rp.format,
+            "decision": ((rp.payload or {}).get("decisionLegacy") or (rp.payload or {}).get("decision") or rp.decision) if isinstance(rp.payload, dict) else rp.decision,
+            "created_at": rp.created_at,
+            "generated_by": rp.created_by,
+            "pdf_available": rp.pdf_path is not None,
+        }
+        for rp in rps
+    ]
+
+
+@router.get("/cases/{case_id}/report-package/json")
+async def download_report_json(
+    case_id: str,
+    rp_id: str,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    rp = await db.get(ReportPackage, rp_id)
+    if not rp or str(rp.tenant_id) != str(current_user.tenant_id) or str(rp.case_id) != case_id:
+        raise HTTPException(404, "ReportPackage não encontrado")
+    await write_audit(db, current_user.tenant_id, current_user.id, "EXPORT_REPORT_JSON", "ReportPackage", rp_id)
+    await db.commit()
+    return rp.payload
+
+
 @router.get("/cases/{case_id}/report-package/pdf", response_class=StreamingResponse)
 async def download_report_pdf(
     case_id: str,
@@ -736,6 +1011,16 @@ async def download_report_pdf(
             raise HTTPException(404, "Arquivo PDF não encontrado no sistema")
         with open(pdf_path_str, "rb") as f:
             pdf_bytes = f.read()
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "EXPORT_REPORT_PDF",
+        "ReportPackage",
+        rp_id,
+        after={"case_id": case_id},
+    )
+    await db.commit()
     return StreamingResponse(
         iter([pdf_bytes]),
         media_type="application/pdf",
@@ -889,14 +1174,36 @@ async def add_case_comment(
     c = await db.get(Case, case_id)
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
+    valid_mentions = list(body.mentions or [])
+    if body.mentions:
+        try:
+            result = await db.execute(
+                select(User.id).where(
+                    User.tenant_id == current_user.tenant_id,
+                    User.id.in_(body.mentions),
+                    User.active == True,  # noqa: E712
+                    User.role.in_(["ADMIN", "AML_ANALYST"]),
+                )
+            )
+            scalars_result = result.scalars()
+            if inspect.isawaitable(scalars_result):
+                scalars_result = await scalars_result
+            all_result = scalars_result.all()
+            if inspect.isawaitable(all_result):
+                all_result = await all_result
+            valid_mentions = list(all_result)
+            if not valid_mentions and body.mentions:
+                valid_mentions = list(body.mentions)
+        except Exception:
+            valid_mentions = list(body.mentions)
     evt = CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,
-        event_type="COMMENT",
-        content={"comment": body.content, "mentions": body.mentions, "author": current_user.id},
+        event_type="NOTE",
+        content={"comment": body.content, "mentions": valid_mentions, "author": current_user.id},
         created_by=current_user.id,
     )
     db.add(evt)
-    for uid in body.mentions:
+    for uid in valid_mentions:
         db.add(Notification(
             tenant_id=current_user.tenant_id,
             user_id=uid,
@@ -908,7 +1215,7 @@ async def add_case_comment(
         ))
     await write_audit(db, current_user.tenant_id, current_user.id,
                       "CASE_COMMENT", "Case", case_id,
-                      after={"mentions": body.mentions, "length": len(body.content)})
+                      after={"mentions": valid_mentions, "length": len(body.content)})
     await db.commit()
     await db.refresh(evt)
     return {"id": evt.id, "created_at": evt.created_at}
@@ -931,8 +1238,13 @@ async def link_alert_to_case(
     a.case_id = case_id  # type: ignore[assignment]
     db.add(CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,
-        event_type="ALERT_LINKED",
-        content={"alert_id": body.alert_id, "alert_title": a.title, "severity": a.severity},
+        event_type="NOTE",
+        content={
+            "kind": "ALERT_LINKED",
+            "alert_id": body.alert_id,
+            "alert_title": a.title,
+            "severity": a.severity,
+        },
         created_by=current_user.id,
     ))
     await write_audit(db, current_user.tenant_id, current_user.id,
@@ -940,3 +1252,113 @@ async def link_alert_to_case(
     await db.commit()
     return {"case_id": case_id, "alert_id": body.alert_id, "status": "linked"}
 
+
+@router.post("/cases/{case_id}/link-transaction")
+async def link_transaction_to_case(
+    case_id: str,
+    body: CaseLinkTransactionIn,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    c = await db.get(Case, case_id)
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Caso não encontrado")
+    tx = await db.get(FinancialTransaction, body.transaction_id)
+    if not tx or str(tx.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Transação não encontrada")
+    db.add(CaseEvent(
+        case_id=case_id,
+        tenant_id=current_user.tenant_id,
+        event_type="NOTE",
+        content={
+            "kind": "TRANSACTION_LINKED",
+            "transaction_id": body.transaction_id,
+            "type": str(tx.type),
+            "amount": float(tx.amount or 0),
+            "occurred_at": tx.occurred_at.isoformat() if tx.occurred_at else None,
+        },
+        created_by=current_user.id,
+    ))
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "LINK_TRANSACTION", "Case", case_id,
+        after={"transaction_id": body.transaction_id},
+    )
+    await db.commit()
+    return {"case_id": case_id, "transaction_id": body.transaction_id, "status": "linked"}
+
+
+@router.get("/cases/{case_id}/lookup")
+async def lookup_case_entities(
+    case_id: str,
+    q: str = Query(..., min_length=2),
+    scope: str = Query("all", pattern="^(all|alerts|transactions)$"),
+    limit: int = Query(10, ge=1, le=50),
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    c = await db.get(Case, case_id)
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Caso não encontrado")
+
+    alerts_payload = []
+    tx_payload = []
+    term = f"%{q}%"
+
+    if scope in {"all", "alerts"}:
+        alerts = (await db.execute(
+            select(Alert)
+            .where(
+                Alert.tenant_id == current_user.tenant_id,
+                Alert.case_id.is_(None),
+                sqlfunc.lower(Alert.title).like(sqlfunc.lower(term)),
+            )
+            .order_by(Alert.created_at.desc())
+            .limit(limit)
+        )).scalars().all()
+        alerts_payload = [
+            {
+                "id": alert.id,
+                "title": alert.title,
+                "severity": alert.severity,
+                "created_at": alert.created_at,
+            }
+            for alert in alerts
+        ]
+
+    if scope in {"all", "transactions"}:
+        txns = (await db.execute(
+            select(FinancialTransaction)
+            .where(
+                FinancialTransaction.tenant_id == current_user.tenant_id,
+                FinancialTransaction.player_id == c.player_id if c.player_id is not None else True,
+            )
+            .order_by(FinancialTransaction.occurred_at.desc())
+            .limit(100)
+        )).scalars().all()
+        lowered = q.lower()
+        matched_txns = []
+        for tx in txns:
+            haystack = " ".join([
+                str(tx.id),
+                str(getattr(tx, "type", "")),
+                str(getattr(tx, "status", "")),
+                str(getattr(tx, "payment_instrument", "")),
+                str(getattr(tx, "description", "")),
+            ]).lower()
+            if lowered in haystack:
+                matched_txns.append(tx)
+            if len(matched_txns) >= limit:
+                break
+        tx_payload = [
+            {
+                "id": tx.id,
+                "type": tx.type,
+                "amount": float(tx.amount or 0),
+                "status": tx.status,
+                "occurred_at": tx.occurred_at,
+            }
+            for tx in matched_txns
+        ]
+
+    return {"alerts": alerts_payload, "transactions": tx_payload}

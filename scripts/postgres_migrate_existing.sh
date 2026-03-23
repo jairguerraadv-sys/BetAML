@@ -48,7 +48,7 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! docker compose -f "${COMPOSE_FILE}" ps "${PG_SERVICE}" >/dev/null 2>&1; then
+if ! docker compose -f "${COMPOSE_FILE}" ps --services 2>/dev/null | grep -Fxq "${PG_SERVICE}"; then
   echo "Nao foi possivel acessar o servico ${PG_SERVICE} no compose ${COMPOSE_FILE}" >&2
   exit 1
 fi

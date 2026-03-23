@@ -27,7 +27,7 @@ Veja docs/security-secrets-management.md para guia completo.
 """
 from __future__ import annotations
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -45,6 +45,7 @@ class Settings(BaseSettings):
 
     # Kafka
     kafka_bootstrap_servers: str = "localhost:9092"
+    redpanda_admin_url: str = "http://redpanda:9644"
 
     # JWT
     # AVISO: altere JWT_SECRET para um valor aleatório em staging/prod.
@@ -52,6 +53,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-secret-change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_min: int = 60
+    epsilon_webhook_secret: str = "dev-secret-change-me"
 
     # CORS
     # Em produção, defina CORS_ALLOW_ORIGINS como lista separada por vírgula,
@@ -69,6 +71,11 @@ class Settings(BaseSettings):
     clickhouse_port: int = 9000
     clickhouse_db: str = "betaml"
 
+    # Internal service endpoints / metrics
+    ml_service_url: str = "http://ml-service:8001"
+    rules_engine_metrics_url: str = "http://rules-engine:8002/metrics"
+    stream_processor_metrics_url: str = "http://stream-processor:8003/metrics"
+
     # Encryption key for PII (AES-256 — base64 encoded 32 bytes)
     pii_encryption_key: str = "ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5"
 
@@ -78,6 +85,20 @@ class Settings(BaseSettings):
     # Internal webhook secret (AlertManager → /internal/alerts/webhook)
     # Em produção, gere com: python -c "import secrets; print(secrets.token_hex(32))"
     internal_webhook_secret: str = "dev-webhook-secret-change-me"
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def normalize_debug_flag(cls, value):
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        normalized = str(value).strip().lower()
+        if normalized in {"1", "true", "yes", "on", "debug", "development"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "release", "prod", "production"}:
+            return False
+        return value
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":

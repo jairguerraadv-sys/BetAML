@@ -25,8 +25,12 @@
 - SLO: <= 2/1000 eventos.
 
 5. E2E de negocio
-- SLI: suite smoke Playwright (auth + cases).
+- SLI: suite smoke Playwright (`auth`, `dashboard`, `alerts`, `cases`, `global-search`, `mappings`, `player-lists`, `ingest-jobs`, `ingest-errors`, `feature-store`, `model-registry`, `audit-logs`, `reports`, `notifications`, `admin/settings`, `admin/ops`, `api-keys`).
 - SLO: 100% em main, 98% em janelas semanais.
+- SLI adicional: suite extended Playwright (`mappings-versioning`, `ingest-operations`, `report-exports`, `maintenance-mode`, `report-audit`, `onboarding`) em agenda semanal/readiness.
+- SLO: 95% em janelas semanais.
+- SLI adicional: suite security Playwright (`security-rbac`) em readiness.
+- SLO: 100% dos cenários críticos por role.
 
 ## Alertas recomendados
 

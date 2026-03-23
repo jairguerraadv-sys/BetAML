@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Events>
+  <Transaction>
+    <EventId>GAMMA-3001</EventId>
+    <PlayerId>PLY-STR-001</PlayerId>
+    <Type>DEPOSIT</Type>
+    <Amount currency="BRL">5000.00</Amount>
+    <Timestamp>2026-03-21T13:00:00Z</Timestamp>
+    <Instrument>
+      <Type>PIX</Type>
+      <Token>pix-gamma-3001</Token>
+    </Instrument>
+    <DeviceId>dev-str-01</DeviceId>
+  </Transaction>
+
+  <Transaction>
+    <EventId>GAMMA-3002</EventId>
+    <PlayerId>PLY-NET-004</PlayerId>
+    <Type>WITHDRAWAL</Type>
+    <Amount currency="BRL">2200.00</Amount>
+    <Timestamp>2026-03-21T13:10:00Z</Timestamp>
+    <Instrument>
+      <Type>PIX</Type>
+      <Token>pix-gamma-3002</Token>
+    </Instrument>
+    <DeviceId>dev-shared-77</DeviceId>
+  </Transaction>
+
+  <Transaction>
+    <EventId>GAMMA-3003</EventId>
+    <PlayerId>PLY-MULTI-007</PlayerId>
+    <Type>CHARGEBACK</Type>
+    <Amount currency="USD">1500.00</Amount>
+    <Timestamp>2026-03-21T13:20:00Z</Timestamp>
+    <Instrument>
+      <Type>CARD</Type>
+      <Token>card-gamma-3003</Token>
+    </Instrument>
+    <DeviceId>dev-multi-07</DeviceId>
+  </Transaction>
+
+  <Transaction>
+    <EventId>GAMMA-ERR-NEG</EventId>
+    <PlayerId>PLY-RTR-003</PlayerId>
+    <Type>DEPOSIT</Type>
+    <Amount currency="BRL">-100.00</Amount>
+    <Timestamp>2026-03-21T13:30:00Z</Timestamp>
+    <Instrument>
+      <Type>PIX</Type>
+      <Token>pix-gamma-err-neg</Token>
+    </Instrument>
+    <DeviceId>dev-rtr-03</DeviceId>
+  </Transaction>
+
+  <Transaction>
+    <EventId>GAMMA-ERR-DATE</EventId>
+    <PlayerId>PLY-SPI-002</PlayerId>
+    <Type>DEPOSIT</Type>
+    <Amount currency="BRL">300.00</Amount>
+    <Timestamp>2026-99-99T99:99:99Z</Timestamp>
+    <Instrument>
+      <Type>CARD</Type>
+      <Token>card-gamma-err-date</Token>
+    </Instrument>
+    <DeviceId>dev-spi-02</DeviceId>
+  </Transaction>
+</Events>

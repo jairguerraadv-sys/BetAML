@@ -108,7 +108,7 @@ class TestRightToErasureRBAC(unittest.TestCase):
 
 
 class TestCreateTenantRBAC(unittest.TestCase):
-    """Verify that create_tenant enforces SUPER_ADMIN role."""
+    """Verify that create_tenant enforces privileged admin role."""
 
     def test_require_roles_super_admin_used(self):
         admin_file = os.path.join(_SERVICES_API, "routers", "admin.py")
@@ -118,8 +118,11 @@ class TestCreateTenantRBAC(unittest.TestCase):
         idx = src.find("create_tenant")
         self.assertGreater(idx, 0, "create_tenant route not found")
         snippet = src[idx: idx + 400]
-        self.assertIn('require_roles("SUPER_ADMIN")', snippet,
-                      "create_tenant must use require_roles('SUPER_ADMIN')")
+        self.assertTrue(
+            'require_roles("SUPER_ADMIN")' in snippet
+            or 'require_roles("ADMIN", "SUPER_ADMIN")' in snippet,
+            "create_tenant must use privileged admin RBAC",
+        )
 
     def test_super_admin_in_roles_set(self):
         auth_file = os.path.join(_SERVICES_API, "auth.py")

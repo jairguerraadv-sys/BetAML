@@ -241,6 +241,210 @@ docker compose down
 docker compose up -d --build
 ```
 
+## 5.1 Operações de Ingestão (Módulo 1)
+
+### Backfill de dados históricos
+
+Use o fluxo de backfill quando houver arquivos legados, correção de mapping ou onboard de um tenant antigo.
+
+Passos recomendados:
+
+1. Garanta que o `MappingConfig` da origem esteja validado e ativo.
+2. Faça upload do arquivo histórico por `POST /ingest/file`.
+3. Monitore `GET /ingest/jobs` e `GET /ingest/jobs/{id}`.
+4. Se houver falhas de mapping, trate na quarentena e faça replay.
+5. Quando necessário, reprocessar o Bronze com a versao correta de mapping.
+
+Exemplo:
+
+```bash
+curl -X POST "http://localhost:8000/ingest/file" \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@historico-marco.ndjson;type=application/x-ndjson" \
+  -F "source_system=ConnectorDelta" \
+  -F "entity_type=transaction"
+```
+
+### Smoke real com pacote FictiBet
+
+Para validar ingestao ponta a ponta com cenarios PLD realistas (canonical + Gamma + Delta + Epsilon), use:
+
+```bash
+API_URL=http://localhost:8000 \
+USERNAME=admin_a \
+PASSWORD=admin123 \
+EPSILON_WEBHOOK_SECRET=dev-secret-change-me \
+scripts/ingest_fictibet_pack.sh
+```
+
+O script publica os arquivos de `datasets/fictibet_pld`, aguarda o job canonical chegar em estado terminal e imprime o detalhe final de todos os jobs criados.
+
+### Reprocessar um IngestJob
+
+1. Acesse `Jobs de Ingestão` no frontend ou chame `POST /ingest/jobs/{id}/reprocess`.
+2. Informe o motivo do reprocessamento.
+3. Opcionalmente selecione uma versão específica de `MappingConfig`.
+4. O backend reenfileira a leitura do objeto Bronze salvo em MinIO.
+
+Exemplo:
+
+```bash
+curl -X POST "http://localhost:8000/ingest/jobs/<job-id>/reprocess" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"mapping ajustado","mapping_version_id":"<mapping-version-id>"}'
+```
+
+## 5.2 Operações de ML (Módulo 4)
+
+### Acompanhar champion vs challenger
+
+1. Abra `/model-registry` no frontend.
+2. Ajuste a janela para `7d`, `30d` ou `90d`.
+3. Revise:
+   - precisão estimada e false positive rate do período;
+   - comparativo champion vs challenger;
+   - distribuição por regra e por modelo.
+
+APIs operacionais equivalentes:
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/model-registry/performance/summary?days=30"
+
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/model-registry/<model-id>/ab-metrics?days=30"
+```
+
+### Promover challenger para produção
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/model-registry/<model-id>/promote"
+```
+
+### Consultar explicabilidade de um alerta ML
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/alerts/<alert-id>/explainability"
+```
+
+O payload devolve as 5 features mais relevantes, com valor atual, baseline inferido e contribuição.
+
+### Re-treinar modelos manualmente
+
+Quando houver volume novo de labels, drift de comportamento ou comparativo champion/challenger desfavoravel, execute retreino manual.
+
+ML service:
+
+```bash
+curl -X POST "http://localhost:8001/train"
+curl -X POST "http://localhost:8001/train/structuring"
+curl -X POST "http://localhost:8001/train/graph"
+curl -X POST "http://localhost:8001/train/recurrence"
+```
+
+Fluxo operacional recomendado:
+
+1. Rode o treino adequado ao problema.
+2. Revise a nova entrada no `Model Registry`.
+3. Compare metricas em `/model-registry/{id}/ab-metrics`.
+4. Promova o challenger apenas se a regressao de precision nao violar o gate.
+
+## 5.3 Operações de Casos (Módulo 5)
+
+### Vincular rapidamente alertas e transações a um caso
+
+No detalhe do caso, a caixa de busca rápida agora consulta alertas avulsos e transações do cliente.
+
+API equivalente:
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/cases/<case-id>/lookup?q=deposito&scope=all"
+```
+
+### Exportar ReportPackage
+
+```bash
+# JSON
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/cases/<case-id>/report-package/json?rp_id=<report-package-id>"
+
+# PDF
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/cases/<case-id>/report-package/pdf?rp_id=<report-package-id>" \
+  --output report.pdf
+```
+
+### Submeter reporte com maker-checker
+
+```bash
+curl -X POST -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/cases/<case-id>/report-package/submit"
+```
+
+Regras aplicadas:
+- o último pacote precisa ter `decisionLegacy=FILE_SAR`
+- o mesmo usuário que gerou o pacote não pode submetê-lo
+
+### Corrigir item em Quarentena
+
+1. Acesse `Quarentena de Erros`.
+2. Abra o item para inspecionar `error_detail` e `raw_payload`.
+3. Use `Replay` para editar o JSON corrigido.
+4. Escolha `entity_type` e, se necessário, a versão do `MappingConfig`.
+5. O erro original pode ser marcado como resolvido automaticamente.
+
+Exemplo:
+
+```bash
+curl -X POST "http://localhost:8000/ingest/errors/<error-id>/replay" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "corrected_payload":{
+          "event_id":"evt-fix-1",
+          "external_player_id":"CPF123",
+          "transaction_type":"DEPOSIT",
+          "amount":120.50,
+          "occurred_at":"2026-03-20T12:00:00Z",
+          "currency":"BRL"
+        },
+        "entity_type":"TRANSACTION",
+        "resolve_original":true
+      }'
+```
+
+### Rollback de MappingConfig
+
+1. Acesse `Conectores` no frontend.
+2. Selecione o mapping.
+3. Abra a lista de versões.
+4. Acione `Rollback` na versão desejada.
+
+Exemplo:
+
+```bash
+curl -X POST "http://localhost:8000/mappings/<mapping-id>/rollback?version_number=2" \
+  -H "Authorization: Bearer <token>"
+```
+
+Checklist antes do rollback:
+
+- confirmar que a versao alvo possui preview valido
+- registrar motivo no ticket interno ou runbook
+- verificar impacto em jobs pendentes e reprocessamentos
+- se necessario, reprocessar os jobs Bronze afetados apos o rollback
+
+### Streaming Operacional
+
+- `GET /ingest/stream` expõe heartbeat SSE para atualização operacional near-real-time.
+- `WS /ingest/ws` aceita ingestão contínua com fila limitada e resposta de backpressure.
+- Eventos que falham após `DLQ_MAX_RETRIES` são publicados em `<topic>.dlq`.
+
 ## 6. Observabilidade
 
 ### Prometheus
@@ -372,6 +576,12 @@ GET /feature-store/players/{player_id}/current
 
 # Histórico de snapshots (Postgres/Gold)
 GET /feature-store/players/{player_id}/history?from=2026-03-01T00:00:00Z&to=2026-03-10T23:59:59Z
+
+# Estatísticas populacionais do tenant (baseline para zscore/percentile_rank)
+GET /feature-store/population-stats
+
+# Resumo mais recente de drift e qualidade das features do tenant
+GET /feature-store/quality/latest
 ```
 
 ### Endpoints Legados Compatíveis
@@ -387,8 +597,50 @@ GET /players/{player_id}/feature-history?days=30
 ### Observações Operacionais
 
 - O endpoint current normaliza tipos vindos do Redis antes de responder, preservando `bool`, `int` e `float`.
-- O histórico canônico retorna `items[]` com `snapshot_date`, `created_at`, `features` e `drift_score`.
+- O histórico canônico retorna `items[]` com `snapshot_date`, `created_at`, `features`, `drift_score`, `entity_type` e `gold_object_path`.
+- O cache online é aquecido no startup da API a partir do snapshot Gold mais recente por player.
+- `GET /feature-store/population-stats` retorna `computed_at` e a distribuição agregada do tenant usada pela DSL avançada (`zscore`, `percentile_rank`).
+- `GET /feature-store/quality/latest` resume os achados do último ciclo de monitoramento, incluindo null-rate, mean drift, `max_drift_score` e se houve notificação para ADMIN.
+- O monitor diário de drift marca `drift_score` nos snapshots do dia e envia `Notification(type="FEATURE_DRIFT")` para ADMINs quando detecta aumento anormal de nulos ou mudança forte de distribuição.
 - A rota legada `feature-history` expõe aliases compatíveis como `unique_instruments_used_7d` e `bonus_to_real_money_ratio_30d`.
+
+## 11.1 Motor de Risco Operacional
+
+### Simulação de regra
+
+```bash
+# Simulação manual com payload de evento/contexto
+POST /rules/{rule_id}/simulate
+
+# Simulação histórica por janela de datas
+POST /rules/{rule_id}/simulate
+{
+  "from": "2026-03-01",
+  "to": "2026-03-20",
+  "player_ids": ["player-123"]
+}
+```
+
+- A resposta histórica retorna `total_alerts`, `players`, `false_positive_estimated`, `precision_estimated`, `recall_estimated`, `performance_score` e `timeline[]`.
+- A validação DSL agora aceita named args como `window="24h"`, `baseline_window="30d"` e `segment="profession"`, além do alias `if(...)`.
+
+### Compound Rules e Player Lists
+
+```bash
+GET  /rules/compound
+POST /rules/compound
+PUT  /rules/compound/{rule_id}
+
+GET    /player-lists
+GET    /player-lists/{list_id}
+PATCH  /player-lists/{list_id}
+GET    /player-lists/{list_id}/entries
+POST   /player-lists/{list_id}/entries
+DELETE /player-lists/{list_id}/entries/{entry_id}
+```
+
+- Compound rules suportam `AND`, `OR` e `N_OF_M`, com `severity_mode=MAX|FIXED`.
+- O `rules_engine` aplica pesos do tenant vindos de `scoring_configs` para combinar regra, ML e rede no `score_breakdown`.
 
 ## 12. Troubleshooting
 
@@ -472,9 +724,60 @@ que recursos de um tenant não são acessíveis pelo outro.
 ```bash
 curl -i -s http://localhost:8000/audit-logs -H "Authorization: Bearer $TOKEN_A"
 curl -i -s http://localhost:8000/audit-log  -H "Authorization: Bearer $TOKEN_A"
+curl -i -s "http://localhost:8000/audit-logs?action=EXPORT_REPORT_JSON&pii_only=true" \
+  -H "Authorization: Bearer $TOKEN_A"
 ```
 
 Sem token, ambos devem retornar `401`/`403`.
+
+### 13.1.1 Relatório regulatório mensal
+
+```bash
+curl -s "http://localhost:8000/reports/monthly-summary?date_from=2026-03-01&date_to=2026-03-31" \
+  -H "Authorization: Bearer $TOKEN_A"
+curl -OJ "http://localhost:8000/reports/monthly-summary/csv?date_from=2026-03-01&date_to=2026-03-31" \
+  -H "Authorization: Bearer $TOKEN_A"
+```
+
+Verifique no payload:
+- `total_communications_generated`
+- `total_sar_reports`
+- `quality_metrics.true_positive_rate`
+- `quality_metrics.false_positive_rate`
+
+### 13.1.2 Saúde agregada e observabilidade
+
+```bash
+curl -s http://localhost:8000/health | jq
+curl -s http://localhost:8000/health/ready | jq
+curl -s http://localhost:8000/admin/ops/summary -H "Authorization: Bearer $TOKEN_A" | jq
+```
+
+Verifique:
+- `checks.rules_engine == "ok"`
+- `checks.stream_processor == "ok"`
+- `kafka_consumer_lag`
+- `ingest_error_rate_24h_percent`
+- `alerts[]`
+
+### 13.1.3 Métricas Prometheus / Grafana
+
+```bash
+curl -s http://localhost:9090/-/ready
+curl -s http://localhost:8000/metrics | head
+curl -s http://localhost:8001/metrics | head
+```
+
+No ambiente docker-compose:
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3001`
+- Alertmanager: `http://localhost:9093`
+
+Métricas esperadas:
+- `betaml_kafka_consumer_lag_messages`
+- `betaml_rules_events_processed_total`
+- `betaml_stream_events_processed_total`
+- `betaml_ml_scoring_failures_total`
 
 ### 13.2 Ingest job por tenant
 

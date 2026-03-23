@@ -1,27 +1,31 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import {
+  createApiKey,
+  fetchApiKeys,
+  fetchApiKeyUsage,
+  revokeApiKey,
+  fetchSystemFlags,
+  toggleMaintenanceMode,
+  fetchScoringConfig,
   fetchTenants, createTenant, updateTenant,
   TenantOut, TenantCreatePayload,
   fetchAdminUsers, createAdminUser, updateAdminUser, deleteAdminUser, resetUserPassword,
   AdminUser, AdminUserCreateIn,
   fetchUsageStats, generateInviteLink, UsageStats,
+  AdminApiKey,
+  AdminApiKeyCreatePayload,
+  AdminApiKeyUsage,
+  ScoringConfig,
+  SystemFlag,
 } from '@/lib/api';
 import {
   Shield, Key, Trash2, Plus, Power, Building2,
   CheckCircle2, XCircle, Users, ChevronDown, ChevronUp,
-  UserPlus, RefreshCw, Lock, BarChart3, Copy,
+  UserPlus, RefreshCw, Lock, BarChart3, Copy, Activity, CalendarClock, Link2, Eye,
 } from 'lucide-react';
-
-interface ApiKey { id: string; name: string; prefix: string; created_at: string; last_used_at?: string; is_active: boolean; }
-interface SystemFlag { key: string; value: unknown; updated_at?: string; }
-
-const fetchApiKeys   = () => api.get<ApiKey[]>('/admin/api-keys').then((r) => r.data);
-const fetchFlags     = () => api.get<SystemFlag[]>('/admin/flags').then((r) => r.data).catch(() => [] as SystemFlag[]);
-const deleteKey      = (id: string) => api.delete(`/admin/api-keys/${id}`);
-const toggleMaint    = (enabled: boolean) => api.post('/admin/maintenance-mode', null, { params: { enabled } });
 const updateFlag     = (flagName: string, value: string) => api.put(`/admin/flags/${flagName}`, { value });
 
 type Tab = 'tenants' | 'keys' | 'flags' | 'users' | 'usage';
@@ -173,6 +177,240 @@ function InviteModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+function ApiKeyUsageDrawer({
+  apiKey,
+  onClose,
+}: {
+  apiKey: AdminApiKey;
+  onClose: () => void;
+}) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['api-key-usage', apiKey.id],
+    queryFn: () => fetchApiKeyUsage(apiKey.id),
+  });
+
+  const recentDays = useMemo(() => {
+    const source = data?.days ?? {};
+    return Object.entries(source)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-14);
+  }, [data]);
+
+  const peak = recentDays.reduce((acc, [, value]) => Math.max(acc, value), 1);
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
+      <div
+        className="h-full w-full max-w-xl overflow-y-auto bg-white p-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-bold text-gray-900">{apiKey.name}</h3>
+            <p className="mt-1 text-xs text-gray-500">
+              Prefixo <span className="font-mono text-gray-700">{apiKey.key_prefix}</span>
+              {apiKey.source_system ? ` · ${apiKey.source_system}` : ''}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-50"
+          >
+            Fechar
+          </button>
+        </div>
+
+        {isLoading ? (
+          <p className="mt-6 text-sm text-gray-400">Carregando uso da chave…</p>
+        ) : data ? (
+          <div className="mt-6 space-y-6">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+                <p className="text-[11px] uppercase tracking-wide text-gray-400">Requests 30d</p>
+                <p className="mt-1 text-2xl font-bold text-gray-900">
+                  {data.total_requests_30d.toLocaleString('pt-BR')}
+                </p>
+              </div>
+              <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+                <p className="text-[11px] uppercase tracking-wide text-gray-400">Último uso</p>
+                <p className="mt-1 text-sm font-semibold text-gray-800">
+                  {data.last_used_at ? new Date(data.last_used_at).toLocaleString('pt-BR') : 'Sem uso ainda'}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-gray-100 p-4">
+              <h4 className="text-sm font-semibold text-gray-800">Escopo e permissões</h4>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                  {data.source_system || 'Todos os source systems'}
+                </span>
+                {(data.permissions.length ? data.permissions : ['ingest']).map((permission) => (
+                  <span
+                    key={permission}
+                    className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700"
+                  >
+                    {permission}
+                  </span>
+                ))}
+                <span
+                  className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                    data.active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                  }`}
+                >
+                  {data.active ? 'Ativa' : 'Revogada'}
+                </span>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-gray-100 p-4">
+              <h4 className="text-sm font-semibold text-gray-800">Uso diário recente</h4>
+              <div className="mt-4 space-y-2">
+                {recentDays.length === 0 && (
+                  <p className="text-sm text-gray-400">Sem eventos registrados nos últimos 14 dias.</p>
+                )}
+                {recentDays.map(([day, value]) => (
+                  <div key={day} className="grid grid-cols-[88px_1fr_60px] items-center gap-3">
+                    <span className="text-xs text-gray-500">{new Date(day).toLocaleDateString('pt-BR')}</span>
+                    <div className="h-2 rounded-full bg-gray-100">
+                      <div
+                        className="h-2 rounded-full bg-brand"
+                        style={{ width: `${Math.max((value / peak) * 100, value > 0 ? 8 : 0)}%` }}
+                      />
+                    </div>
+                    <span className="text-right text-xs font-semibold text-gray-700">
+                      {value.toLocaleString('pt-BR')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="mt-6 text-sm text-red-600">Não foi possível carregar o histórico da chave.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ApiKeyCreateForm({
+  onCreate,
+  isPending,
+  latestKey,
+}: {
+  onCreate: (payload: AdminApiKeyCreatePayload) => void;
+  isPending: boolean;
+  latestKey: string;
+}) {
+  const [form, setForm] = useState<AdminApiKeyCreatePayload>({
+    name: '',
+    source_system: '',
+    permissions: ['ingest'],
+    expires_in_days: 90,
+  });
+  const [copied, setCopied] = useState(false);
+
+  const submit = () => {
+    onCreate({
+      name: form.name.trim(),
+      source_system: form.source_system?.trim() || undefined,
+      permissions: form.permissions?.length ? form.permissions : ['ingest'],
+      expires_in_days: form.expires_in_days || undefined,
+    });
+    setForm({ name: '', source_system: '', permissions: ['ingest'], expires_in_days: 90 });
+  };
+
+  const copy = () => {
+    if (!latestKey) return;
+    navigator.clipboard.writeText(latestKey);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-5">
+      <h3 className="text-sm font-semibold text-blue-800">Nova API key de ingestão</h3>
+      <p className="mt-1 text-xs text-blue-700/80">
+        Associe a chave a um `source_system` para isolar integrações do operador.
+      </p>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-4">
+        <div className="md:col-span-2">
+          <label className="mb-1 block text-xs font-medium text-gray-600">Nome *</label>
+          <input
+            aria-label="Nome *"
+            value={form.name}
+            onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+            placeholder="backoffice-prod"
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-600">Source system</label>
+          <input
+            aria-label="Source system"
+            value={form.source_system ?? ''}
+            onChange={(e) => setForm((prev) => ({ ...prev, source_system: e.target.value }))}
+            placeholder="connector_delta"
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-600">Expira em</label>
+          <select
+            aria-label="Expira em"
+            value={String(form.expires_in_days ?? '')}
+            onChange={(e) => setForm((prev) => ({
+              ...prev,
+              expires_in_days: e.target.value ? Number(e.target.value) : undefined,
+            }))}
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+          >
+            <option value="">Sem expiração</option>
+            <option value="30">30 dias</option>
+            <option value="90">90 dias</option>
+            <option value="180">180 dias</option>
+            <option value="365">365 dias</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="mt-4 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!form.name.trim() || isPending}
+          className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand/90 disabled:opacity-50"
+        >
+          <Plus size={15} /> {isPending ? 'Gerando…' : 'Gerar Chave'}
+        </button>
+        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+          Permissão fixa: ingest
+        </span>
+      </div>
+
+      {latestKey && (
+        <div className="mt-4 rounded-lg border border-green-200 bg-green-50 p-3">
+          <p className="mb-1 text-xs font-semibold text-green-700">Copie agora. A chave completa não será exibida novamente.</p>
+          <div className="flex gap-2">
+            <code className="flex-1 break-all rounded border border-green-100 bg-white px-3 py-2 text-xs text-green-800">
+              {latestKey}
+            </code>
+            <button
+              type="button"
+              onClick={copy}
+              className="flex items-center gap-1 rounded-lg border border-green-200 px-3 py-2 text-xs font-medium text-green-700 hover:bg-white"
+            >
+              <Copy size={13} /> {copied ? 'Copiado' : 'Copiar'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Tenant Form ───────────────────────────────────────────────────────────────
 function TenantCreateForm({ onSuccess }: { onSuccess: () => void }) {
   const [form, setForm] = useState<TenantCreatePayload>({
@@ -286,24 +524,38 @@ export default function AdminPage() {
   const [showCreateUser, setShowCreateUser]     = useState(false);
   const [resetTarget, setResetTarget]           = useState<AdminUser | null>(null);
   const [showInvite, setShowInvite]             = useState(false);
-  const [newKeyName, setNewKeyName] = useState('');
+  const [selectedKey, setSelectedKey] = useState<AdminApiKey | null>(null);
   const [newKeyRaw, setNewKeyRaw]   = useState('');
   const [maintOn, setMaintOn]       = useState(false);
 
   // Data
   const { data: apiKeys = [], isLoading: loadingKeys }     = useQuery({ queryKey: ['api-keys'],     queryFn: fetchApiKeys });
-  const { data: flags  = [], isLoading: loadingFlags }     = useQuery({ queryKey: ['system-flags'], queryFn: fetchFlags });
+  const { data: flags  = [], isLoading: loadingFlags }     = useQuery({ queryKey: ['system-flags'], queryFn: fetchSystemFlags });
   const { data: tenants = [], isLoading: loadingTenants }  = useQuery({ queryKey: ['tenants'],      queryFn: fetchTenants });
   const { data: users  = [], isLoading: loadingUsers }     = useQuery({ queryKey: ['admin-users'],  queryFn: fetchAdminUsers, enabled: activeTab === 'users' });
   const { data: usageStats, isLoading: loadingUsage }      = useQuery<UsageStats>({ queryKey: ['usage-stats'], queryFn: fetchUsageStats, refetchInterval: 60_000, enabled: activeTab === 'usage' });
+  const { data: scoringConfig } = useQuery<ScoringConfig>({
+    queryKey: ['scoring-config'],
+    queryFn: fetchScoringConfig,
+    enabled: activeTab === 'usage',
+  });
+
+  useEffect(() => {
+    const maintenanceFlag = flags.find((flag) => flag.key.endsWith(':maintenance_mode'));
+    const enabled = Boolean(maintenanceFlag && (maintenanceFlag.value as { enabled?: boolean })?.enabled);
+    setMaintOn(enabled);
+  }, [flags]);
 
   // Mutations
   const createKey = useMutation({
-    mutationFn: () => api.post<{ raw_key: string }>('/admin/api-keys', { name: newKeyName }),
-    onSuccess: (res) => { setNewKeyRaw(res.data.raw_key); setNewKeyName(''); qc.invalidateQueries({ queryKey: ['api-keys'] }); },
+    mutationFn: (payload: AdminApiKeyCreatePayload) => createApiKey(payload),
+    onSuccess: (res) => {
+      setNewKeyRaw(res.raw_key);
+      qc.invalidateQueries({ queryKey: ['api-keys'] });
+    },
   });
-  const removeKey    = useMutation({ mutationFn: deleteKey,   onSuccess: () => qc.invalidateQueries({ queryKey: ['api-keys'] }) });
-  const maint        = useMutation({ mutationFn: (v: boolean) => toggleMaint(v), onSuccess: () => qc.invalidateQueries({ queryKey: ['system-flags'] }) });
+  const removeKey    = useMutation({ mutationFn: revokeApiKey, onSuccess: () => qc.invalidateQueries({ queryKey: ['api-keys'] }) });
+  const maint        = useMutation({ mutationFn: (v: boolean) => toggleMaintenanceMode(v), onSuccess: () => qc.invalidateQueries({ queryKey: ['system-flags'] }) });
   const saveFlag     = useMutation({ mutationFn: ({ name, value }: { name: string; value: string }) => updateFlag(name, value), onSuccess: () => qc.invalidateQueries({ queryKey: ['system-flags'] }) });
   const toggleTenant = useMutation({
     mutationFn: ({ id, active }: { id: string; active: boolean }) => updateTenant(id, { active }),
@@ -330,6 +582,14 @@ export default function AdminPage() {
     { id: 'usage',   label: 'Uso',          icon: <BarChart3 size={14} /> },
   ];
 
+  const usageCards = usageStats ? [
+    { label: 'Eventos este mês', value: usageStats.events_this_month.toLocaleString('pt-BR'), icon: <Activity size={15} className="text-blue-500" /> },
+    { label: 'Alertas este mês', value: usageStats.alerts_this_month.toLocaleString('pt-BR'), icon: <Shield size={15} className="text-amber-500" /> },
+    { label: 'Casos abertos', value: usageStats.open_cases.toLocaleString('pt-BR'), icon: <Users size={15} className="text-rose-500" /> },
+    { label: 'Banco de dados', value: `${usageStats.db_size_mb} MB`, icon: <BarChart3 size={15} className="text-sky-500" /> },
+    { label: 'Armazenamento MinIO', value: `${usageStats.minio_mb} MB`, icon: <Building2 size={15} className="text-emerald-500" /> },
+  ] : [];
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -348,6 +608,7 @@ export default function AdminPage() {
           <label className="flex cursor-pointer items-center gap-3 ml-2">
             <div
               onClick={() => { const next = !maintOn; setMaintOn(next); maint.mutate(next); }}
+              aria-label="Alternar modo manutenção"
               className={`relative h-6 w-11 rounded-full transition-colors ${maintOn ? 'bg-red-500' : 'bg-gray-200'}`}
             >
               <div className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-transform ${maintOn ? 'translate-x-5' : 'translate-x-1'}`} />
@@ -553,64 +814,79 @@ export default function AdminPage() {
 
       {/* ── Tab: Chaves de API ─────────────────────────────────────────────── */}
       {activeTab === 'keys' && (
-        <section className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold text-gray-700">
-            <Key size={15} /> Chaves de API
-          </h2>
+        <section className="space-y-4">
+          <ApiKeyCreateForm
+            onCreate={(payload) => createKey.mutate(payload)}
+            isPending={createKey.isPending}
+            latestKey={newKeyRaw}
+          />
 
-          <form className="mb-4 flex gap-3" onSubmit={(e) => { e.preventDefault(); createKey.mutate(); }}>
-            <input
-              value={newKeyName}
-              onChange={(e) => setNewKeyName(e.target.value)}
-              placeholder="Nome da chave (ex: integration-sap)"
-              className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
-            />
-            <button
-              type="submit"
-              disabled={!newKeyName || createKey.isPending}
-              className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand/90 disabled:opacity-50"
-            >
-              <Plus size={15} /> Gerar Chave
-            </button>
-          </form>
-
-          {newKeyRaw && (
-            <div className="mb-4 rounded-lg border border-green-200 bg-green-50 p-3">
-              <p className="mb-1 text-xs font-semibold text-green-700">⚠️ Copie agora — não será exibida novamente:</p>
-              <code className="break-all text-xs text-green-800 select-all">{newKeyRaw}</code>
+          <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
+            <div className="border-b border-gray-100 px-5 py-3">
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+                <Key size={15} /> Chaves de API ({apiKeys.length})
+              </h2>
             </div>
-          )}
-
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-xs font-semibold uppercase text-gray-500">
-              <tr>
-                <th className="px-4 py-2.5 text-left">Nome</th>
-                <th className="px-4 py-2.5 text-left">Prefixo</th>
-                <th className="px-4 py-2.5 text-left">Criado em</th>
-                <th className="px-4 py-2.5 text-left">Último uso</th>
-                <th className="px-4 py-2.5" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {loadingKeys && <tr><td colSpan={5} className="py-6 text-center text-gray-400">Carregando…</td></tr>}
-              {apiKeys.map((k) => (
-                <tr key={k.id} className={`hover:bg-gray-50/50 ${!k.is_active ? 'opacity-40 line-through' : ''}`}>
-                  <td className="px-4 py-2.5 font-medium">{k.name}</td>
-                  <td className="px-4 py-2.5 font-mono text-xs">{k.prefix}…</td>
-                  <td className="px-4 py-2.5 text-gray-500">{new Date(k.created_at).toLocaleDateString('pt-BR')}</td>
-                  <td className="px-4 py-2.5 text-gray-500">{k.last_used_at ? new Date(k.last_used_at).toLocaleString('pt-BR') : '—'}</td>
-                  <td className="px-4 py-2.5 text-right">
-                    <button onClick={() => removeKey.mutate(k.id)} className="rounded p-1 text-gray-400 hover:text-red-500" title="Revogar chave">
-                      <Trash2 size={14} />
-                    </button>
-                  </td>
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-xs font-semibold uppercase text-gray-500">
+                <tr>
+                  <th className="px-4 py-2.5 text-left">Nome</th>
+                  <th className="px-4 py-2.5 text-left">Source system</th>
+                  <th className="px-4 py-2.5 text-left">Prefixo</th>
+                  <th className="px-4 py-2.5 text-left">Expira em</th>
+                  <th className="px-4 py-2.5 text-left">Último uso</th>
+                  <th className="px-4 py-2.5" />
                 </tr>
-              ))}
-              {!loadingKeys && apiKeys.length === 0 && (
-                <tr><td colSpan={5} className="py-6 text-center text-gray-400">Nenhuma chave criada</td></tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {loadingKeys && <tr><td colSpan={6} className="py-6 text-center text-gray-400">Carregando…</td></tr>}
+                {apiKeys.map((k) => (
+                  <tr key={k.id} className={`hover:bg-gray-50/50 ${!k.active ? 'opacity-50' : ''}`}>
+                    <td className="px-4 py-2.5">
+                      <div className="font-medium text-gray-900">{k.name}</div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {(k.permissions.length ? k.permissions : ['ingest']).map((permission) => (
+                          <span key={permission} className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                            {permission}
+                          </span>
+                        ))}
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${k.active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {k.active ? 'Ativa' : 'Revogada'}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-gray-600">{k.source_system || '—'}</td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-gray-600">{k.key_prefix}…</td>
+                    <td className="px-4 py-2.5 text-gray-500">{k.expires_at ? new Date(k.expires_at).toLocaleDateString('pt-BR') : 'Sem expiração'}</td>
+                    <td className="px-4 py-2.5 text-gray-500">{k.last_used_at ? new Date(k.last_used_at).toLocaleString('pt-BR') : '—'}</td>
+                    <td className="px-4 py-2.5 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => setSelectedKey(k)}
+                          aria-label={`Ver uso da chave ${k.name}`}
+                          className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-brand"
+                          title="Ver uso"
+                        >
+                          <Eye size={14} />
+                        </button>
+                        <button
+                          onClick={() => removeKey.mutate(k.id)}
+                          aria-label={`Revogar chave ${k.name}`}
+                          className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-500"
+                          title="Revogar chave"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {!loadingKeys && apiKeys.length === 0 && (
+                  <tr><td colSpan={6} className="py-6 text-center text-gray-400">Nenhuma chave criada</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
 
@@ -660,15 +936,12 @@ export default function AdminPage() {
               <p className="text-sm text-gray-400">Carregando…</p>
             ) : usageStats ? (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                {[
-                  { label: 'Eventos este mês', value: usageStats.events_this_month.toLocaleString('pt-BR') },
-                  { label: 'Alertas este mês',  value: usageStats.alerts_this_month.toLocaleString('pt-BR') },
-                  { label: 'Casos abertos',     value: usageStats.open_cases.toLocaleString('pt-BR') },
-                  { label: 'Banco de dados',    value: `${usageStats.db_size_mb} MB` },
-                  { label: 'Armazenamento MinIO', value: `${usageStats.minio_mb} MB` },
-                ].map((s) => (
+                {usageCards.map((s) => (
                   <div key={s.label} className="rounded-lg bg-gray-50 p-4 dark:bg-gray-800">
-                    <p className="text-xs text-gray-500">{s.label}</p>
+                    <div className="flex items-center gap-2">
+                      {s.icon}
+                      <p className="text-xs text-gray-500">{s.label}</p>
+                    </div>
                     <p className="mt-1 text-xl font-bold text-gray-900 dark:text-gray-100">{s.value}</p>
                   </div>
                 ))}
@@ -677,6 +950,57 @@ export default function AdminPage() {
               <p className="text-sm text-gray-400">Sem dados disponíveis.</p>
             )}
           </div>
+
+          {scoringConfig && (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+                  <Link2 size={15} /> Configuração do tenant
+                </h3>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                  <div className="rounded-lg bg-gray-50 p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Auto-case threshold</p>
+                    <p className="mt-1 font-semibold text-gray-900">{(scoringConfig.auto_case_threshold * 100).toFixed(0)}%</p>
+                  </div>
+                  <div className="rounded-lg bg-gray-50 p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Rate limit ingestão</p>
+                    <p className="mt-1 font-semibold text-gray-900">{scoringConfig.ingest_rate_limit_tpm.toLocaleString('pt-BR')} req/min</p>
+                  </div>
+                  <div className="rounded-lg bg-gray-50 p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Peso regras / ML / rede</p>
+                    <p className="mt-1 font-semibold text-gray-900">
+                      {scoringConfig.rule_weight} / {scoringConfig.ml_weight} / {scoringConfig.network_weight}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-gray-50 p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Retenção</p>
+                    <p className="mt-1 font-semibold text-gray-900">
+                      Raw {scoringConfig.data_retention_raw_years}a · Silver {scoringConfig.data_retention_silver_years}a · Gold {scoringConfig.data_retention_gold_years}a
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+                  <CalendarClock size={15} /> SLA por severidade
+                </h3>
+                <div className="mt-4 space-y-2 text-sm">
+                  {[
+                    { label: 'Critical', value: scoringConfig.sla_critical_hours, cls: 'text-red-600' },
+                    { label: 'High', value: scoringConfig.sla_high_hours, cls: 'text-orange-600' },
+                    { label: 'Medium', value: scoringConfig.sla_medium_hours, cls: 'text-amber-600' },
+                    { label: 'Low', value: scoringConfig.sla_low_hours, cls: 'text-blue-600' },
+                  ].map((sla) => (
+                    <div key={sla.label} className="flex items-center justify-between rounded-lg bg-gray-50 px-3 py-2">
+                      <span className="text-gray-600">{sla.label}</span>
+                      <span className={`font-semibold ${sla.cls}`}>{sla.value}h</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -685,7 +1009,8 @@ export default function AdminPage() {
 
       {/* Invite modal */}
       {showInvite && <InviteModal onClose={() => setShowInvite(false)} />}
+
+      {selectedKey && <ApiKeyUsageDrawer apiKey={selectedKey} onClose={() => setSelectedKey(null)} />}
     </div>
   );
 }
-

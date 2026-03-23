@@ -22,19 +22,19 @@ scrape_configs:
 
   - job_name: "betaml-ml-service"
     static_configs:
-      - targets: ["ml_service:8001"]
+      - targets: ["ml-service:8001"]
     metrics_path: /metrics
     scheme: http
 
   - job_name: "betaml-rules-engine"
     static_configs:
-      - targets: ["rules_engine:8002"]
+      - targets: ["rules-engine:8002"]
     metrics_path: /metrics
     scheme: http
 
   - job_name: "betaml-stream-processor"
     static_configs:
-      - targets: ["stream_processor:8080"]
+      - targets: ["stream-processor:8003"]
     metrics_path: /metrics
     scheme: http
 

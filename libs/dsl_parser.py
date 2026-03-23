@@ -82,7 +82,7 @@ KEYWORDS = {"and", "or", "not", "in", "contains", "true", "false", "True", "Fals
 FUNCTIONS = {
     "sum", "count", "zscore", "ratio", "abs",
     "window_sum", "window_count",
-    "iff", "is_in_list",
+    "iff", "if", "is_in_list",
     "shared_device_count", "cluster_size", "is_in_cluster",
     "percentile_rank",
     "min", "max",
@@ -318,6 +318,7 @@ class DSLParser:
 
 def parse_dsl(expression: str) -> ASTNode:
     """Parsa uma expressão DSL e retorna a AST raiz."""
+    expression = _normalize_dsl_expression(expression)
     tokens = tokenize(expression)
     parser = DSLParser(tokens)
     ast = parser.parse_expr()
@@ -343,6 +344,12 @@ def _resolve_field(path: str, context: dict[str, Any]) -> Any:
     parts = path.split(".")
     root = parts[0]
     obj = context.get(root)
+    if obj is None and len(parts) == 1:
+        if root in context:
+            return context.get(root)
+        features = context.get("features", {})
+        if isinstance(features, dict) and root in features:
+            return features.get(root)
     if obj is None:
         return None
     for part in parts[1:]:
@@ -393,6 +400,10 @@ def evaluate(node: ASTNode, context: dict[str, Any]) -> Any:
 def _eval_func(node: FuncCallNode, context: dict[str, Any]) -> Any:
     args = [evaluate(a, context) for a in node.args]
 
+    def _nested_feature_stats(feature_name: str) -> dict[str, Any]:
+        raw_stats = context.get("feature_stats", {}).get(feature_name)
+        return raw_stats if isinstance(raw_stats, dict) else {}
+
     # ── numeric helpers ──────────────────────────────────────────────────────
     if node.name == "zscore":
         if len(args) == 3:
@@ -400,9 +411,11 @@ def _eval_func(node: FuncCallNode, context: dict[str, Any]) -> Any:
             return (v - mean) / std if std != 0 else Decimal("0")
         if len(args) == 2:
             # zscore(feature_name_string, window) — fetch from features
-            feat_val = context.get("features", {}).get(str(args[0]), 0)
-            mean     = context.get("feature_stats", {}).get(f"{args[0]}_mean", 0)
-            std      = context.get("feature_stats", {}).get(f"{args[0]}_std", 1)
+            feature_name = node.args[0].path if isinstance(node.args[0], FieldNode) else str(args[0])
+            feat_val = context.get("features", {}).get(feature_name, 0)
+            nested_stats = _nested_feature_stats(feature_name)
+            mean = nested_stats.get("mean", context.get("feature_stats", {}).get(f"{args[0]}_mean", 0))
+            std = nested_stats.get("std", context.get("feature_stats", {}).get(f"{args[0]}_std", 1))
             v, m, s = _to_decimal(feat_val), _to_decimal(mean), _to_decimal(std)
             return (v - m) / s if s != 0 else Decimal("0")
         raise DSLEvaluationError("zscore requer 2 ou 3 args")
@@ -433,6 +446,16 @@ def _eval_func(node: FuncCallNode, context: dict[str, Any]) -> Any:
     # ── feature window lookups ───────────────────────────────────────────────
     if node.name in ("sum", "window_sum"):
         # sum(a, b, ...) → arithmetic sum; sum(feature, window) → feature value
+        if (
+            len(node.args) == 2
+            and isinstance(node.args[0], FieldNode)
+            and isinstance(node.args[1], StringNode)
+        ):
+            field_path = node.args[0].path
+            window = str(args[1]).strip('"\'')
+            feature_key = _resolve_window_feature_key(field_path, window, aggregate="sum")
+            if feature_key:
+                return _to_decimal(context.get("features", {}).get(feature_key, 0))
         if len(args) >= 2:
             try:
                 return sum(_to_decimal(a) for a in args if a is not None)
@@ -445,6 +468,16 @@ def _eval_func(node: FuncCallNode, context: dict[str, Any]) -> Any:
         return Decimal("0")
 
     if node.name in ("count", "window_count"):
+        if (
+            len(node.args) == 2
+            and isinstance(node.args[0], FieldNode)
+            and isinstance(node.args[1], StringNode)
+        ):
+            field_path = node.args[0].path
+            window = str(args[1]).strip('"\'')
+            feature_key = _resolve_window_feature_key(field_path, window, aggregate="count")
+            if feature_key:
+                return _to_decimal(context.get("features", {}).get(feature_key, 0))
         if args:
             raw = args[0]
             if raw is not None:
@@ -452,7 +485,7 @@ def _eval_func(node: FuncCallNode, context: dict[str, Any]) -> Any:
         return Decimal("0")
 
     # ── conditional iff(cond, then, else) ────────────────────────────────────
-    if node.name == "iff":
+    if node.name in {"iff", "if"}:
         if len(args) != 3:
             raise DSLEvaluationError("iff(cond, then_value, else_value) requer 3 args")
         cond, then_val, else_val = args
@@ -485,8 +518,23 @@ def _eval_func(node: FuncCallNode, context: dict[str, Any]) -> Any:
     if node.name == "percentile_rank":
         if len(args) < 1:
             raise DSLEvaluationError("percentile_rank(feature, [segment]) requer 1+ args")
-        feat_name = str(args[0])
-        rank_key  = f"{feat_name}_percentile_rank"
+        feat_name = node.args[0].path if isinstance(node.args[0], FieldNode) else str(args[0])
+        nested_stats = _nested_feature_stats(feat_name)
+        if nested_stats:
+            feat_val = context.get("features", {}).get(feat_name, 0)
+            current = float(_to_decimal(feat_val))
+            if current <= float(nested_stats.get("p10", 0)):
+                return Decimal("10")
+            if current <= float(nested_stats.get("p25", 0)):
+                return Decimal("25")
+            if current <= float(nested_stats.get("p50", 0)):
+                return Decimal("50")
+            if current <= float(nested_stats.get("p75", 0)):
+                return Decimal("75")
+            if current <= float(nested_stats.get("p90", 0)):
+                return Decimal("90")
+            return Decimal("100")
+        rank_key = f"{feat_name}_percentile_rank"
         val = context.get("feature_stats", {}).get(rank_key, 50)
         return _to_decimal(val)
 
@@ -583,6 +631,30 @@ def _eval_binop(node: BinOpNode, context: dict[str, Any]) -> Any:
 # ──────────────────────────────────────────────────
 
 _MACRO_RE = re.compile(r"%([A-Za-z_][A-Za-z0-9_]*)%")
+
+
+def _normalize_dsl_expression(expression: str) -> str:
+    normalized = expression
+    normalized = re.sub(r"\bif\s*\(", "iff(", normalized)
+    normalized = re.sub(
+        r"\b(window|baseline_window|segment)\s*=\s*",
+        "",
+        normalized,
+    )
+    return normalized
+
+
+def _resolve_window_feature_key(field_path: str, window: str, aggregate: str) -> str | None:
+    normalized_window = window.strip().lower().replace('"', "").replace("'", "")
+    field_path = field_path.lower()
+
+    if "stake" in field_path or field_path.startswith("bet."):
+        return f"bet_stake_sum_{normalized_window}" if aggregate == "sum" else f"bet_count_{normalized_window}"
+    if "withdraw" in field_path:
+        return f"withdrawal_sum_{normalized_window}" if aggregate == "sum" else f"withdrawal_count_{normalized_window}"
+    if "deposit" in field_path or "transaction.amount" in field_path or field_path.endswith(".amount"):
+        return f"deposit_sum_{normalized_window}" if aggregate == "sum" else f"deposit_count_{normalized_window}"
+    return None
 
 
 def expand_macros(expression: str, macros: dict[str, str], max_depth: int = 10) -> str:

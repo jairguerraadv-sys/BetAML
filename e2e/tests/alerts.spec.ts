@@ -1,15 +1,6 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 
-const USERNAME = process.env.E2E_USERNAME ?? 'analyst_a';
-const PASSWORD = process.env.E2E_PASSWORD ?? 'analyst123';
-
-async function login(page: Page) {
-  await page.goto('/login');
-  await page.getByLabel(/usuário|username/i).fill(USERNAME);
-  await page.getByLabel(/senha|password/i).fill(PASSWORD);
-  await page.getByRole('button', { name: /entrar|login/i }).click();
-  await page.waitForURL('**/dashboard', { timeout: 10_000 });
-}
+import { apiLogin, createAlertViaApi, createCaseViaApi, login } from './helpers';
 
 test.describe('Alerts', () => {
   test.beforeEach(async ({ page }) => {
@@ -18,31 +9,49 @@ test.describe('Alerts', () => {
   });
 
   test('alerts page loads', async ({ page }) => {
-    await expect(page.getByRole('heading', { name: /alertas/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /monitor de alertas/i })).toBeVisible();
   });
 
-  test('severity filter buttons present', async ({ page }) => {
-    for (const label of ['Todos', 'Crítico', 'Alto']) {
+  test('severity and status filters are visible', async ({ page }) => {
+    await expect(page.getByRole('combobox', { name: /filtrar status dos alertas/i })).toBeVisible();
+    for (const label of ['Todos', 'Crítico', 'Alto', 'Médio', 'Baixo']) {
       await expect(page.getByRole('button', { name: new RegExp(label, 'i') })).toBeVisible();
     }
   });
 
-  test('search input filters list', async ({ page }) => {
-    const search = page.getByPlaceholder(/buscar/i);
-    await expect(search).toBeVisible();
-    await search.fill('test-nonexistent-xyz');
-    // Either the list becomes empty or shows "nenhum"
-    await expect(
-      page.getByText(/nenhum alerta/i).or(page.locator('table tbody tr').filter({ hasText: 'test-nonexistent-xyz' }))
-    ).toBeVisible({ timeout: 5_000 });
+  test('alert detail supports triage to false positive', async ({ page, request }) => {
+    const session = await apiLogin(request);
+    const alert = await createAlertViaApi(request, session.access_token, {
+      title: `E2E triage alert ${Date.now()}`,
+    });
+
+    await page.goto(`/alerts/${alert.id}`);
+    await expect(page.getByRole('heading', { name: new RegExp(alert.title ?? 'alerta', 'i') })).toBeVisible();
+
+    await page.getByRole('button', { name: /triagem/i }).click();
+    await page.getByLabel(/disposição da triagem/i).selectOption('FALSE_POSITIVE');
+    await page.getByLabel(/observação da triagem/i).fill('Triagem automatizada via Playwright');
+    await page.getByRole('button', { name: /confirmar triagem/i }).click();
+
+    await expect(page.getByText('FALSE_POSITIVE')).toBeVisible({ timeout: 10_000 });
   });
 
-  test('clicking an alert opens detail view', async ({ page }) => {
-    const firstRow = page.locator('table tbody tr').first();
-    // Only proceed if there are rows
-    const count = await firstRow.count();
-    if (count === 0) test.skip();
-    await firstRow.click();
-    await expect(page.url()).toMatch(/\/alerts\/.+/);
+  test('alert detail can be linked to a newly created case', async ({ page, request }) => {
+    const session = await apiLogin(request);
+    const alert = await createAlertViaApi(request, session.access_token, {
+      title: `E2E link alert ${Date.now()}`,
+    });
+
+    const createdCase = await createCaseViaApi(request, session.access_token, {
+      title: `Case for alert link ${Date.now()}`,
+      severity: 'MEDIUM',
+    });
+
+    await page.goto(`/alerts/${alert.id}`);
+    await page.getByRole('button', { name: /vincular a caso/i }).click();
+    await page.getByLabel(/selecionar caso para vincular/i).selectOption(createdCase.id);
+    await page.getByRole('button', { name: /vincular alerta a caso/i }).click();
+
+    await expect(page.getByRole('link', { name: /ver caso/i })).toBeVisible({ timeout: 10_000 });
   });
 });

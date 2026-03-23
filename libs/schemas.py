@@ -291,6 +291,7 @@ class ApiKeyOut(BaseModel):
     tenant_id: str
     name: str
     key_prefix: str          # first 8 chars only
+    source_system: Optional[str] = None
     permissions: list[str]   # ORM field name (column: permissions)
     active: bool             # ORM field name (column: active)
     last_used_at: Optional[datetime] = None
@@ -302,7 +303,8 @@ class ApiKeyOut(BaseModel):
 
 class ApiKeyCreate(BaseModel):
     name: str
-    permissions: list[str] = Field(default_factory=list)
+    source_system: Optional[str] = None
+    permissions: list[str] = Field(default_factory=lambda: ["ingest"])
     expires_in_days: Optional[int] = None
 
 
@@ -311,6 +313,7 @@ class ApiKeyCreateResponse(BaseModel):
     tenant_id: str
     name: str
     key_prefix: str
+    source_system: Optional[str] = None
     permissions: list[str]
     active: bool
     last_used_at: Optional[datetime] = None
@@ -319,6 +322,18 @@ class ApiKeyCreateResponse(BaseModel):
     raw_key: str             # shown only once on creation
 
     model_config = {"from_attributes": True}
+
+
+class ApiKeyUsageOut(BaseModel):
+    key_id: str
+    key_prefix: str
+    name: str
+    source_system: Optional[str] = None
+    permissions: list[str] = Field(default_factory=list)
+    active: bool = True
+    last_used_at: Optional[datetime] = None
+    total_requests_30d: int = 0
+    days: dict[str, int] = Field(default_factory=dict)
 
 
 class PlayerListOut(BaseModel):
@@ -487,9 +502,15 @@ class ModelRegistryOut(BaseModel):
     model_type: str
     algorithm: Optional[str] = None
     version: str
+    dataset_window_start: Optional[datetime] = None
+    dataset_window_end: Optional[datetime] = None
+    dataset_window_days: Optional[int] = None
+    sample_count: Optional[int] = None
     training_rows: Optional[int] = None
     feature_columns: list[str] = []
     metrics: dict = {}
+    artifact_path: Optional[str] = None
+    artifact_uri: Optional[str] = None
     status: str
     is_challenger: bool
     promoted_by: Optional[str] = None
@@ -499,6 +520,116 @@ class ModelRegistryOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True, "protected_namespaces": ()}
+
+
+class ModelABTimelinePointOut(BaseModel):
+    date: str
+    champion_inferences: int = 0
+    challenger_inferences: int = 0
+    champion_avg_score: Optional[float] = None
+    challenger_avg_score: Optional[float] = None
+    champion_tp: int = 0
+    champion_fp: int = 0
+    challenger_tp: int = 0
+    challenger_fp: int = 0
+
+    model_config = {"protected_namespaces": ()}
+
+
+class ModelABMetricsOut(BaseModel):
+    model_id: str
+    model_name: Optional[str] = None
+    role: str = "champion"
+    status: str
+    days_window: int = 30
+    champion_model_id: Optional[str] = None
+    challenger_model_id: Optional[str] = None
+    champion_inferences: int = 0
+    challenger_inferences: int = 0
+    champion_avg_score: Optional[float] = None
+    challenger_avg_score: Optional[float] = None
+    champion_precision_estimated: Optional[float] = None
+    challenger_precision_estimated: Optional[float] = None
+    champion_recall_estimated: Optional[float] = None
+    challenger_recall_estimated: Optional[float] = None
+    champion_false_positive_rate: Optional[float] = None
+    challenger_false_positive_rate: Optional[float] = None
+    timeline: list[ModelABTimelinePointOut] = Field(default_factory=list)
+
+    model_config = {"protected_namespaces": ()}
+
+
+class ModelPerformanceTotalsOut(BaseModel):
+    total_alerts: int = 0
+    labeled_alerts: int = 0
+    true_positive_count: int = 0
+    false_positive_count: int = 0
+    unknown_count: int = 0
+    precision_estimated: float = 0.0
+    false_positive_rate: float = 0.0
+    recall_estimated: float = 0.0
+
+
+class ModelPerformancePointOut(BaseModel):
+    date: str
+    total_alerts: int = 0
+    true_positive_count: int = 0
+    false_positive_count: int = 0
+    unknown_count: int = 0
+
+
+class RulePerformanceItemOut(BaseModel):
+    rule_id: Optional[str] = None
+    rule_name: str
+    total_alerts: int = 0
+    true_positive_count: int = 0
+    false_positive_count: int = 0
+    unknown_count: int = 0
+    precision_estimated: float = 0.0
+    false_positive_rate: float = 0.0
+
+
+class ModelPerformanceItemOut(BaseModel):
+    model_id: str
+    model_name: Optional[str] = None
+    algorithm: Optional[str] = None
+    status: str
+    total_alerts: int = 0
+    true_positive_count: int = 0
+    false_positive_count: int = 0
+    unknown_count: int = 0
+    precision_estimated: float = 0.0
+    recall_estimated: float = 0.0
+    false_positive_rate: float = 0.0
+
+    model_config = {"protected_namespaces": ()}
+
+
+class ModelPerformanceSummaryOut(BaseModel):
+    days_window: int = 30
+    challenger_split_pct: int = 0
+    totals: ModelPerformanceTotalsOut = Field(default_factory=ModelPerformanceTotalsOut)
+    by_day: list[ModelPerformancePointOut] = Field(default_factory=list)
+    by_rule: list[RulePerformanceItemOut] = Field(default_factory=list)
+    by_model: list[ModelPerformanceItemOut] = Field(default_factory=list)
+
+
+class AlertExplainabilityFeatureOut(BaseModel):
+    feature: str
+    current_value: Any = None
+    baseline_value: Optional[float] = None
+    delta: Optional[float] = None
+    contribution: float = 0.0
+
+
+class AlertExplainabilityOut(BaseModel):
+    alert_id: str
+    model_id: Optional[str] = None
+    explanation_method: str = "heuristic_proxy"
+    anomaly_score: float = 0.0
+    top_features: list[AlertExplainabilityFeatureOut] = Field(default_factory=list)
+
+    model_config = {"protected_namespaces": ()}
 
 
 class FeatureSnapshotOut(BaseModel):
@@ -517,6 +648,10 @@ class FeatureStoreCurrentOut(BaseModel):
     player_id: str
     source: str = "redis"
     feature_version: int = 1
+    snapshot_version: int = 1
+    entity_type: str = "PLAYER"
+    snapshot_date: Optional[str] = None
+    gold_object_path: Optional[str] = None
     computed_at: Optional[str] = None
     features: dict[str, Any]
 
@@ -528,6 +663,8 @@ class FeatureStoreHistoryItemOut(BaseModel):
     features: dict[str, Any]
     drift_score: Optional[float] = None
     feature_version: int = 1
+    entity_type: str = "PLAYER"
+    gold_object_path: Optional[str] = None
 
 
 class FeatureStoreHistoryOut(BaseModel):
@@ -554,6 +691,24 @@ class FeatureStat(BaseModel):
 class FeaturePopulationStatsOut(BaseModel):
     computed_at: Optional[str] = None
     features: dict[str, FeatureStat] = Field(default_factory=dict)
+
+
+class FeatureQualityFindingOut(BaseModel):
+    feature_name: str
+    finding_type: str
+    current_value: float
+    previous_value: Optional[float] = None
+    delta: Optional[float] = None
+    severity: str = "WARN"
+
+
+class FeatureQualityStatusOut(BaseModel):
+    feature_date: Optional[str] = None
+    previous_feature_date: Optional[str] = None
+    drift_detected: bool = False
+    max_drift_score: float = 0.0
+    admin_notification_sent: bool = False
+    findings: list[FeatureQualityFindingOut] = Field(default_factory=list)
 
 
 class SystemFlagOut(BaseModel):

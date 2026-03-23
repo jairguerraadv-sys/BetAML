@@ -181,6 +181,35 @@ async def test_global_search_pii_audit_called_when_players_found():
 
 
 @pytest.mark.asyncio
+async def test_global_search_supports_cpf_digits():
+    """Numeric search terms should also match players by CPF digits."""
+    from routers.search import global_search
+
+    player = MagicMock()
+    player.id = "p-55"
+    player.external_player_id = "ext-055"
+    player.full_name = "Maria Teste"
+    player.risk_band = "MEDIUM"
+    player.cpf_encrypted = b"cipher"
+
+    db = _make_db_with_results([[], [player], [], []])
+    user = _make_user()
+
+    with patch("routers.search.select", return_value=_chainable()), \
+         patch("routers.search.or_", return_value=MagicMock()), \
+         patch("routers.search.Player", MagicMock()), \
+         patch("routers.search.Case", MagicMock()), \
+         patch("routers.search.Alert", MagicMock()), \
+         patch("routers.search.decrypt_pii", return_value="12345678909"), \
+         patch("routers.search.mask_cpf", return_value="***.***.***-09"), \
+         patch("routers.search.write_audit", new_callable=AsyncMock):
+        result = await global_search(q="7890", db=db, current_user=user)
+
+    assert len(result["players"]) == 1
+    assert result["players"][0]["cpf_masked"] == "***.***.***-09"
+
+
+@pytest.mark.asyncio
 async def test_global_search_case_result_shape():
     """Case items have id, reference_number, title, status keys."""
     from routers.search import global_search

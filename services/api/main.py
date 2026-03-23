@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import settings
 from database import AsyncSessionLocal, current_tenant_id, engine
+from libs.telemetry import init_opentelemetry_stub
 from rate_limit import limiter  # Shared rate limiter (slowapi + Redis)
 from models import (
     Base,
@@ -74,14 +75,33 @@ async def lifespan(_app: FastAPI):
     await _shutdown()
 
 
+OPENAPI_TAGS = [
+    {"name": "auth", "description": "Autenticacao, sessao atual, refresh token e logout."},
+    {"name": "ingest", "description": "Conectores, ingestao batch/arquivo, jobs, streaming, DLQ e quarentena."},
+    {"name": "rules", "description": "CRUD de regras DSL, simulacao, macros, listas e compound rules."},
+    {"name": "features", "description": "Feature store online/offline, historico, drift e qualidade."},
+    {"name": "alerts", "description": "Fila de alertas, triagem, labeling e explicabilidade de ML."},
+    {"name": "cases", "description": "Workflow de casos, timeline, uploads, colaboracao e report packages."},
+    {"name": "reports", "description": "Relatorios regulatorios mensais, export JSON/CSV e sumarizacao."},
+    {"name": "admin", "description": "Tenant settings, onboarding, API keys, usuarios e maintenance mode."},
+    {"name": "audit", "description": "Audit trail filtravel de acoes criticas e eventos com PII."},
+    {"name": "players", "description": "Perfis de jogadores, dados financeiros, rede e LGPD."},
+    {"name": "ml", "description": "Model registry, A/B testing, promocao e metricas de modelo."},
+    {"name": "notifications", "description": "Notificacoes in-app e marcacao de leitura."},
+    {"name": "search", "description": "Busca global por CPF, nome, case number e alert id."},
+    {"name": "infra", "description": "Health, readiness e endpoints de infraestrutura."},
+]
+
+
 app = FastAPI(
     title="BetAML API",
     description="PLD/FT Platform para Operadores de Apostas",
-    version="2.0.0",
+    version="2.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
     contact={"name": "BetAML Compliance", "email": "compliance@betaml.io"},
     license_info={"name": "Proprietary"},
+    openapi_tags=OPENAPI_TAGS,
     lifespan=lifespan,
 )
 
@@ -249,6 +269,19 @@ async def _warm_feature_store_cache() -> None:
                     if not features:
                         continue
                     features.setdefault("snapshot_date", str(row.get("feature_date")))
+                    features.setdefault("entity_type", "PLAYER")
+                    features.setdefault("feature_version", int(features.get("feature_version", 2) or 2))
+                    features.setdefault(
+                        "snapshot_version",
+                        int(features.get("snapshot_version", features.get("feature_version", 2)) or 2),
+                    )
+                    features.setdefault(
+                        "gold_object_path",
+                        (
+                            f"gold/tenant_id={row['tenant_id']}/feature_date={row.get('feature_date')}/"
+                            f"entity_type=PLAYER/player_id={row['player_id']}.json"
+                        ),
+                    )
                     features.setdefault("warmed_from", "feature_snapshot")
                     key = f"betaml:{row['tenant_id']}:features:{row['player_id']}"
                     await redis.hset(key, mapping={k: str(v) for k, v in features.items()})
@@ -407,6 +440,7 @@ async def _feature_store_maintenance_loop() -> None:
 
 
 async def _startup():
+    init_opentelemetry_stub("api")
     # Guard: JWT secret inseguro em ambientes não-dev
     if (
         settings.environment not in ("development", "test")
@@ -604,8 +638,10 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
 # ─── Health ───────────────────────────────────────
 @app.get("/health", tags=["infra"])
 async def health():
-    """Backward-compat alias → same response as /health/live."""
-    return {"status": "ok", "version": "2.1.0", "timestamp": datetime.now(UTC).isoformat()}
+    """Aggregate health alias compatible with enterprise ops checks."""
+    from routers.health import health_ready
+
+    return await health_ready()
 
 
 # ═══════════════════════════════════════════════════
@@ -645,4 +681,3 @@ app.include_router(internal_router)
 app.include_router(search_router)
 app.include_router(stats_router)
 app.include_router(external_validation.router)
-

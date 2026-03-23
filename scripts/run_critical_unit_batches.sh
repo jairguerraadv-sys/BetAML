@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ -n "${PYTEST_BIN:-}" ]]; then
+  read -r -a PYTEST_CMD <<<"${PYTEST_BIN}"
+elif [[ -x "$ROOT_DIR/.venv-1/bin/pytest" ]]; then
+  PYTEST_CMD=("$ROOT_DIR/.venv-1/bin/pytest")
+else
+  PYTEST_CMD=(python -m pytest)
+fi
+
+cd "$ROOT_DIR"
+
+INCLUDE_REMAINDER=false
+PASSTHROUGH_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --include-remainder)
+      INCLUDE_REMAINDER=true
+      ;;
+    *)
+      PASSTHROUGH_ARGS+=("$arg")
+      ;;
+  esac
+done
+
+COMMON_ARGS=()
+COVERAGE_SOURCE_ARGS=()
+FINAL_ONLY_ARGS=()
+for arg in "${PASSTHROUGH_ARGS[@]}"; do
+  case "$arg" in
+    --cov=*)
+      COVERAGE_SOURCE_ARGS+=("$arg")
+      ;;
+    --cov-report=*|--cov-fail-under=*)
+      FINAL_ONLY_ARGS+=("$arg")
+      ;;
+    *)
+      COMMON_ARGS+=("$arg")
+      ;;
+  esac
+done
+
+BATCH_1=(
+  tests/unit/test_cases.py
+  tests/unit/test_cases_module5.py
+  tests/unit/test_ingest_core.py
+  tests/unit/test_ingest_extended.py
+  tests/unit/test_mapping.py
+  tests/unit/test_connectors.py
+  tests/unit/test_feature_store.py
+  tests/unit/test_feature_store_runtime.py
+  tests/unit/test_features.py
+  tests/unit/test_stream_processor.py
+  tests/unit/test_rules.py
+  tests/unit/test_dsl.py
+  tests/unit/test_dsl_arithmetic.py
+  tests/unit/test_dsl_macros.py
+  tests/unit/test_rules_engine.py
+  tests/unit/test_rules_engine_runtime.py
+  tests/unit/test_rules_engine_contract.py
+  tests/unit/test_compound_rules_routes.py
+  tests/unit/test_player_lists_routes.py
+  tests/unit/test_rate_limit_role.py
+)
+
+BATCH_2=(
+  tests/unit/test_ml_routes.py
+  tests/unit/test_ml_explainability.py
+  tests/unit/test_ml_service.py
+  tests/unit/test_ml_trainer.py
+  tests/unit/test_reports.py
+  tests/unit/test_module6_audit.py
+  tests/unit/test_audit.py
+  tests/unit/test_notifications.py
+  tests/unit/test_stats.py
+  tests/unit/test_search_internal.py
+  tests/unit/test_module7.py
+  tests/unit/test_infra_resilience.py
+  tests/unit/test_rate_limit_role.py
+)
+
+BATCHES=(BATCH_1 BATCH_2)
+
+declare -A CRITICAL_SET=()
+for file in "${BATCH_1[@]}" "${BATCH_2[@]}"; do
+  CRITICAL_SET["$file"]=1
+done
+
+if [[ "$INCLUDE_REMAINDER" == "true" ]]; then
+  REMAINDER=()
+  while IFS= read -r file; do
+    if [[ -z "${CRITICAL_SET[$file]+x}" ]]; then
+      REMAINDER+=("$file")
+    fi
+  done < <(find tests -type f -name 'test_*.py' | sort)
+  if [[ "${#REMAINDER[@]}" -gt 0 ]]; then
+    BATCHES+=(REMAINDER)
+  fi
+fi
+
+run_batch() {
+  local label="$1"
+  local append_coverage="$2"
+  local is_final="$3"
+  shift 3
+
+  local args=("${COMMON_ARGS[@]}")
+  if [[ "${#COVERAGE_SOURCE_ARGS[@]}" -gt 0 ]]; then
+    args+=("${COVERAGE_SOURCE_ARGS[@]}")
+    if [[ "$append_coverage" == "true" ]]; then
+      args+=("--cov-append")
+    fi
+    if [[ "$is_final" == "true" ]]; then
+      args+=("${FINAL_ONLY_ARGS[@]}")
+    fi
+  fi
+
+  echo "[critical-unit] $label"
+  DEBUG="${DEBUG:-false}" "${PYTEST_CMD[@]}" "$@" "${args[@]}"
+}
+
+for i in "${!BATCHES[@]}"; do
+  batch_name="${BATCHES[$i]}"
+  append_coverage=false
+  is_final=false
+  if [[ "$i" -gt 0 ]]; then
+    append_coverage=true
+  fi
+  if [[ "$i" -eq "$((${#BATCHES[@]} - 1))" ]]; then
+    is_final=true
+  fi
+  # shellcheck disable=SC1083,SC2178
+  eval "batch_files=(\"\${${batch_name}[@]}\")"
+  run_batch "${batch_name,,}" "$append_coverage" "$is_final" "${batch_files[@]}"
+done

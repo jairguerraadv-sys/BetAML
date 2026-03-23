@@ -417,6 +417,20 @@ class ModelRegistry(Base):
         return self.model_version
 
 
+class ModelInferenceLog(Base):
+    __tablename__ = "model_inference_logs"
+
+    id            = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id     = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    player_id     = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="SET NULL"))
+    model_id      = Column(UUID(as_uuid=False), ForeignKey("model_registry.id", ondelete="SET NULL"))
+    model_variant = Column(String(20), nullable=False, default="champion")
+    anomaly_score = Column(Numeric(7, 4), nullable=False, default=0.0)
+    is_anomaly    = Column(Boolean, nullable=False, default=False)
+    request_id    = Column(Text)
+    created_at    = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class FeatureSnapshot(Base):
     __tablename__ = "feature_snapshots"
 

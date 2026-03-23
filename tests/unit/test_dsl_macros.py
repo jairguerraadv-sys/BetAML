@@ -87,6 +87,11 @@ def test_iff_false_branch():
     assert result == 0
 
 
+def test_if_alias_supported():
+    result = eval_dsl("if(risk_score > 0.5, 1, 0)", CTX_BASE)
+    assert result == 1
+
+
 def test_is_in_list_true():
     result = eval_dsl("is_in_list(player_id, 'VIP_LIST')", CTX_BASE)
     assert result is True
@@ -120,6 +125,28 @@ def test_percentile_rank_above():
     """txn_amount_24h=1000 > p90(1200) → False; > p75(700) → True"""
     result = eval_dsl("percentile_rank(txn_amount_24h, 'txn_amount_24h') > 75", CTX_BASE)
     assert isinstance(result, bool)
+
+
+def test_percentile_rank_named_arg_segment_supported():
+    ctx = {
+        "features": {"deposit_velocity": 12.0},
+        "feature_stats": {
+            "deposit_velocity": {"p10": 1, "p25": 2, "p50": 5, "p75": 10, "p90": 20}
+        },
+    }
+    result = eval_dsl("percentile_rank(deposit_velocity, segment='profession') >= 75", ctx)
+    assert result is True
+
+
+def test_zscore_named_arg_baseline_window_supported():
+    ctx = {
+        "features": {"deposit_velocity": 12.0},
+        "feature_stats": {
+            "deposit_velocity": {"mean": 6.0, "std": 2.0}
+        },
+    }
+    result = eval_dsl("zscore(deposit_velocity, baseline_window='30d')", ctx)
+    assert float(result) == pytest.approx(3.0)
 
 
 # ── eval_dsl with macros param ────────────────────────────────────────────────

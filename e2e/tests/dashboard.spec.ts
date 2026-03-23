@@ -1,15 +1,6 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 
-const USERNAME = process.env.E2E_USERNAME ?? 'analyst_a';
-const PASSWORD = process.env.E2E_PASSWORD ?? 'analyst123';
-
-async function login(page: Page) {
-  await page.goto('/login');
-  await page.getByLabel(/usuário|username/i).fill(USERNAME);
-  await page.getByLabel(/senha|password/i).fill(PASSWORD);
-  await page.getByRole('button', { name: /entrar|login/i }).click();
-  await page.waitForURL('**/dashboard', { timeout: 10_000 });
-}
+import { login } from './helpers';
 
 test.describe('Dashboard', () => {
   test.beforeEach(async ({ page }) => {
@@ -17,26 +8,28 @@ test.describe('Dashboard', () => {
   });
 
   test('KPI cards are visible', async ({ page }) => {
-    await expect(page.getByText(/alertas hoje/i)).toBeVisible();
-    await expect(page.getByText(/críticos abertos/i)).toBeVisible();
-    await expect(page.getByText(/casos em andamento/i)).toBeVisible();
-    await expect(page.getByText(/sla vencido/i)).toBeVisible();
+    await expect(page.getByRole('link', { name: /^alertas abertos\b/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /^em investigação\b/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /^próximos do sla\b/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /^jogadores alto risco\b/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /^eventos ingeridos hoje\b/i })).toBeVisible();
   });
 
   test('KPI values are numeric', async ({ page }) => {
-    // Cards should show a number (possibly 0)
-    const kpiValues = page.locator('.text-4xl');
-    await expect(kpiValues.first()).toBeVisible();
-    const text = await kpiValues.first().textContent();
-    expect(Number(text)).toBeGreaterThanOrEqual(0);
+    const kpiCard = page.getByRole('link', { name: /alertas abertos/i });
+    await expect(kpiCard).toBeVisible();
+    const text = await kpiCard.locator('p.text-4xl').textContent();
+    expect(Number(String(text).replace(/[^\d.-]/g, ''))).toBeGreaterThanOrEqual(0);
   });
 
-  test('severity chart renders', async ({ page }) => {
-    await expect(page.getByText(/alertas abertos por prioridade/i)).toBeVisible();
+  test('charts and heatmap render', async ({ page }) => {
+    await expect(page.getByText(/alertas por severidade, últimos 30 dias/i)).toBeVisible();
+    await expect(page.getByText(/distribuição por tipo de alerta/i)).toBeVisible();
+    await expect(page.getByLabel(/mapa de calor de alertas por hora e dia da semana/i)).toBeVisible();
   });
 
   test('navigation links work', async ({ page }) => {
-    await page.getByRole('link', { name: /ver todos/i }).first().click();
-    await expect(page.url()).toMatch(/\/(alerts|cases)/);
+    await page.getByRole('link', { name: /alertas abertos/i }).click();
+    await expect(page).toHaveURL(/\/alerts/, { timeout: 10_000 });
   });
 });

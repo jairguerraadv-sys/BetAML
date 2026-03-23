@@ -14,14 +14,18 @@ import logging
 import os
 import statistics
 import sys
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
+from prometheus_client import Counter, Gauge, Histogram, REGISTRY, start_http_server
 
 # Garante que 'from libs.xxx import' funcione tanto no Docker (/app/libs montado)
 # quanto em desenvolvimento local (raiz do projeto no PYTHONPATH)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+from libs.telemetry import init_opentelemetry_stub
 
 structlog.configure(
     processors=[
@@ -43,6 +47,7 @@ REDIS_URL      = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CH_HOST        = os.getenv("CLICKHOUSE_HOST", "localhost")
 CH_PORT        = int(os.getenv("CLICKHOUSE_PORT", "9000"))
 CH_DB          = os.getenv("CLICKHOUSE_DB", "betaml")
+METRICS_PORT   = int(os.getenv("METRICS_PORT", "8003"))
 
 TOPICS = [
     "raw.transactions",
@@ -56,6 +61,44 @@ TOPICS = [
 ]
 
 _oltp_engine = None
+
+
+def _metric_aliases(name: str) -> list[str]:
+    aliases = [name]
+    if name.endswith("_total"):
+        aliases.append(name[: -len("_total")])
+    return aliases
+
+
+def _get_or_create_metric(metric_cls, name: str, documentation: str, labelnames: list[str]):
+    registry_collectors = getattr(REGISTRY, "_names_to_collectors", {})
+    for alias in _metric_aliases(name):
+        existing = registry_collectors.get(alias)
+        if existing is not None:
+            return existing
+    return metric_cls(name, documentation, labelnames)
+
+
+EVENTS_PROCESSED = _get_or_create_metric(
+    Counter,
+    "betaml_stream_events_processed_total",
+    "Total de eventos processados pelo stream processor",
+    ["topic", "status"],
+)
+
+PROCESSING_LATENCY = _get_or_create_metric(
+    Histogram,
+    "betaml_stream_processing_seconds",
+    "Latência de processamento do stream processor por tópico",
+    ["topic"],
+)
+
+CONSUMER_LAG = _get_or_create_metric(
+    Gauge,
+    "betaml_stream_consumer_lag_messages",
+    "Lag estimado do consumer do stream processor por tópico",
+    ["group_id", "topic"],
+)
 
 
 def _coerce_float(value: object, default: float = 0.0) -> float:
@@ -513,6 +556,7 @@ async def compute_features(
     bets_24h        = [b for b in bets if b["ts"] >= cutoff_24h]
     bets_7d         = [b for b in bets if b["ts"] >= cutoff_7d]
     bets_30d        = [b for b in bets if b["ts"] >= cutoff_30d]
+    bets_90d        = [b for b in bets if b["ts"] >= cutoff_90d]
     deposits_1h     = filter_type(txns, "DEPOSIT", cutoff_1h)
 
     dep_sum_24h  = sum(e["amount"] for e in deposits_24h)
@@ -598,8 +642,14 @@ async def compute_features(
     bonus_30d = filter_type(txns, "BONUS", cutoff_30d)
     bonus_ratio_30d = len(bonus_30d) / max(len(deposits_30d) + len(bonus_30d), 1)
 
-    # 11. Cashout ratio (7d) = withdrawals / deposits
-    cashout_ratio_7d = with_sum_7d / max(dep_sum_7d, 1e-9)
+    # 11. Cashout ratio (7d) = apostas com cashout / apostas totais
+    cashout_bets_7d = [
+        b
+        for b in bets_7d
+        if b.get("cashout_amount") not in (None, "", 0, 0.0)
+        or str(b.get("status") or "").upper() in {"CASHOUT", "CASHED_OUT", "EARLY_CASHOUT"}
+    ]
+    cashout_ratio_7d = len(cashout_bets_7d) / max(len(bets_7d), 1)
 
     # ── Network features (Redis Sets) ─────────────────────────────────────────
     # player_devices: set of device_ids this player used
@@ -638,11 +688,20 @@ async def compute_features(
         else f"solo:{player_id}"
     )
 
+    gold_object_path = (
+        f"gold/tenant_id={tenant_id}/feature_date={now.date().isoformat()}/"
+        f"entity_type=PLAYER/player_id={player_id}.json"
+    )
+
     features = {
         "player_id":     player_id,
         "tenant_id":     tenant_id,
         "computed_at":   now.isoformat(),
         "feature_version": 2,           # bumped for M2
+        "snapshot_version": 2,
+        "entity_type": "PLAYER",
+        "snapshot_date": now.date().isoformat(),
+        "gold_object_path": gold_object_path,
 
         # v1 features
         "deposit_sum_24h":                      float(dep_sum_24h),
@@ -685,6 +744,9 @@ async def compute_features(
         "bonus_to_real_ratio_30d":              float(bonus_ratio_30d),
         "bonus_to_real_money_ratio_30d":        float(bonus_ratio_30d),
         "cashout_ratio_7d":                     float(cashout_ratio_7d),
+        "bet_count_7d":                         len(bets_7d),
+        "bet_count_30d":                        len(bets_30d),
+        "bet_count_90d":                        len(bets_90d),
 
         # network
         "shared_device_score":                  float(shared_device_score),
@@ -864,9 +926,9 @@ def _persist_feature_snapshot(features: dict, feature_date) -> None:
             secret_key=os.getenv("MINIO_SECRET_KEY", "minio123"),
             secure=secure,
         )
-        object_name = (
-            f"gold/{features['tenant_id']}/feature_date={feature_date.isoformat()}/"
-            f"entity_type=player/player_id={features['player_id']}.json"
+        object_name = str(
+            features.get("gold_object_path")
+            or f"gold/tenant_id={features['tenant_id']}/feature_date={feature_date.isoformat()}/entity_type=PLAYER/player_id={features['player_id']}.json"
         )
         encoded = payload.encode("utf-8")
         stream = io.BytesIO(encoded)
@@ -989,6 +1051,9 @@ async def process_bet(msg_value: dict, redis_client, ch_client, producer):
         "amount":  float(payload.get("stake_amount", 0)),
         "odds":    payload.get("odds"),
         "outcome": payload.get("outcome"),
+        "status": payload.get("status"),
+        "settled_payout": payload.get("settled_payout"),
+        "cashout_amount": payload.get("cashout_amount") or payload.get("cashoutValue"),
     }
     bet_key = redis_client.bet_window_key(tenant_id, player_id)
     await _zadd_entry(redis_client, bet_key, placed_at, entry)
@@ -1072,6 +1137,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
     import sqlalchemy as sa
     from minio import Minio
 
+    from libs.connectors import get_connector
     from libs.mapping import MappingEngine
 
     job_id = msg_value.get("job_id")
@@ -1222,7 +1288,145 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
             mapping_cfg = dict(row._mapping)["config_json"] if row else None
             engine.dispose()
         except Exception:
-            mapping_cfg = None
+                mapping_cfg = None
+
+    max_retries = int(os.getenv("DLQ_MAX_RETRIES", "3"))
+
+    async def _publish_with_retries(topic: str, envelope: dict, key: str, row_data: dict, line_number: int) -> bool:
+        for attempt in range(1, max_retries + 1):
+            try:
+                await producer.send(topic, envelope, key=key)
+                return True
+            except Exception as pub_exc:  # noqa: BLE001
+                if attempt >= max_retries:
+                    await producer.send(
+                        f"{topic}.dlq",
+                        {
+                            "tenant_id": tenant_id,
+                            "job_id": job_id,
+                            "source_system": source_system,
+                            "line_number": line_number,
+                            "reason": str(pub_exc),
+                            "attempt": attempt,
+                            "max_retries": max_retries,
+                            "failed_at": datetime.now(timezone.utc).isoformat(),
+                            "target_topic": topic,
+                            "raw_payload": row_data,
+                        },
+                        key=str(job_id),
+                    )
+                    return False
+                await asyncio.sleep(0.1 * attempt)
+        return False
+
+    connector_source_map = {
+        "ConnectorGamma": ("gamma", {"root_tag": "transaction"}),
+        "ConnectorDelta": ("delta", {}),
+        "ConnectorEpsilon": ("epsilon", {}),
+    }
+    connector_conf = connector_source_map.get(str(source_system))
+    if connector_conf:
+        connector_name, connector_kwargs = connector_conf
+        connector = get_connector(connector_name, **connector_kwargs)
+        parse_result = connector.parse(raw_bytes, entity_type="TRANSACTION")
+
+        total = int(parse_result.total or 0)
+        processed = 0
+        failed = 0
+        bytes_processed = len(raw_bytes)
+        error_sample: list[dict[str, object]] = []
+        started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        await asyncio.to_thread(_update_job, "PROCESSING", total, 0, 0)
+
+        for idx, rec in enumerate(parse_result.records, start=1):
+            try:
+                entity_type = str(rec.get("entity_type") or "transaction").lower()
+                source_event_id = str(rec.get("event_id") or rec.get("external_id") or uuid.uuid4())
+                envelope = {
+                    "event_id": str(uuid.uuid4()),
+                    "tenant_id": tenant_id,
+                    "source_system": source_system,
+                    "source_event_id": source_event_id,
+                    "schema_version": 1,
+                    "entity_type": entity_type,
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                    "payload": rec,
+                    "raw_payload": rec,
+                    "ingest_metadata": {
+                        "job_id": job_id,
+                        "source": "file",
+                        "channel": "connector-reprocess",
+                    },
+                }
+                topic = f"raw.{entity_type}s"
+                ok = await _publish_with_retries(
+                    topic,
+                    envelope,
+                    envelope["source_event_id"] or envelope["event_id"],
+                    rec,
+                    idx,
+                )
+                if ok:
+                    processed += 1
+                else:
+                    failed += 1
+                    if len(error_sample) < 10:
+                        error_sample.append({"line": idx, "reason": "publish_failed_after_retries", "raw": rec})
+                    await asyncio.to_thread(
+                        _insert_ingest_error,
+                        raw_payload=rec,
+                        line_number=idx,
+                        reason="publish_failed_after_retries",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                reason = str(exc)
+                if len(error_sample) < 10:
+                    error_sample.append({"line": idx, "reason": reason, "raw": rec})
+                await asyncio.to_thread(
+                    _insert_ingest_error,
+                    raw_payload=rec,
+                    line_number=idx,
+                    reason=reason,
+                )
+
+        for err in parse_result.errors:
+            failed += 1
+            reason = err.get("reason", "parse_error") if isinstance(err, dict) else str(err)
+            raw_payload = err.get("raw", "") if isinstance(err, dict) else ""
+            line_number = err.get("line") if isinstance(err, dict) else None
+            if len(error_sample) < 10:
+                error_sample.append({"line": line_number, "reason": reason, "raw": raw_payload})
+            await asyncio.to_thread(
+                _insert_ingest_error,
+                raw_payload=raw_payload,
+                line_number=int(line_number or 0),
+                reason=reason,
+            )
+
+        final_status = "DONE" if failed == 0 else ("PARTIAL" if processed > 0 else "FAILED")
+        duration_ms = int((datetime.now(timezone.utc).replace(tzinfo=None) - started_at).total_seconds() * 1000)
+        await asyncio.to_thread(
+            _update_job,
+            final_status,
+            total,
+            processed,
+            failed,
+            None,
+            bytes_processed=bytes_processed,
+            duration_ms=duration_ms,
+            error_sample=error_sample,
+        )
+        logger.info(
+            "ingest_job_complete",
+            job_id=job_id,
+            total=total,
+            processed=processed,
+            failed=failed,
+            status=final_status,
+            connector=connector_name,
+        )
+        return
 
     mapper: MappingEngine | None = None
     if isinstance(mapping_cfg, dict):
@@ -1257,35 +1461,6 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
     started_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     await asyncio.to_thread(_update_job, "PROCESSING", total, 0, 0)
-
-    max_retries = int(os.getenv("DLQ_MAX_RETRIES", "3"))
-
-    async def _publish_with_retries(topic: str, envelope: dict, key: str, row_data: dict, line_number: int) -> bool:
-        for attempt in range(1, max_retries + 1):
-            try:
-                await producer.send(topic, envelope, key=key)
-                return True
-            except Exception as pub_exc:  # noqa: BLE001
-                if attempt >= max_retries:
-                    await producer.send(
-                        f"{topic}.dlq",
-                        {
-                            "tenant_id": tenant_id,
-                            "job_id": job_id,
-                            "source_system": source_system,
-                            "line_number": line_number,
-                            "reason": str(pub_exc),
-                            "attempt": attempt,
-                            "max_retries": max_retries,
-                            "failed_at": datetime.now(timezone.utc).isoformat(),
-                            "target_topic": topic,
-                            "raw_payload": row_data,
-                        },
-                        key=str(job_id),
-                    )
-                    return False
-                await asyncio.sleep(0.1 * attempt)
-        return False
 
     try:
         for idx, row_data in enumerate(row_iter, start=1):
@@ -1398,6 +1573,9 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
 async def main():
     from libs.clients import KafkaConsumerClient, KafkaProducerClient, RedisClient, ClickHouseClient
 
+    start_http_server(METRICS_PORT)
+    init_opentelemetry_stub("stream-processor")
+
     redis_client = RedisClient(REDIS_URL)
     await redis_client.connect()
 
@@ -1418,9 +1596,18 @@ async def main():
 
     try:
         async for msg in consumer:
+            started = time.monotonic()
+            topic = getattr(msg, "topic", "unknown")
             try:
                 value = msg.value if isinstance(msg.value, dict) else json.loads(msg.value)
-                topic = msg.topic
+                structlog.contextvars.bind_contextvars(
+                    event_id=str(value.get("event_id") or value.get("source_event_id") or ""),
+                    tenant_id=str(value.get("tenant_id") or ""),
+                )
+                highwater = getattr(msg, "highwater", None)
+                offset = getattr(msg, "offset", None)
+                if isinstance(highwater, int) and isinstance(offset, int):
+                    CONSUMER_LAG.labels(group_id="stream-processor", topic=topic).set(max(highwater - offset - 1, 0))
 
                 if topic == "raw.transactions":
                     await process_raw_transaction(value, producer)
@@ -1438,9 +1625,13 @@ async def main():
                     await process_ingest_job(value, redis_client, ch_client, producer)
                 elif topic == "ingest.jobs.reprocess":
                     await process_ingest_job(value, redis_client, ch_client, producer)
+                EVENTS_PROCESSED.labels(topic=topic, status="processed").inc()
 
             except Exception as e:
-                logger.error("message_processing_error", topic=msg.topic, error=str(e))
+                EVENTS_PROCESSED.labels(topic=topic, status="failed").inc()
+                logger.error("message_processing_error", topic=topic, error=str(e))
+            finally:
+                PROCESSING_LATENCY.labels(topic=topic).observe(time.monotonic() - started)
 
     finally:
         await consumer.stop()
@@ -1486,12 +1677,17 @@ def compute_features_offline(player_id: str, history: dict) -> dict:
         return t["ts"] >= since
 
     deposits_24h = [t for t in txns if t.get("txn_type") == "DEPOSIT" and in_win(t, cutoff_24h)]
+    deposits_7d = [t for t in txns if t.get("txn_type") == "DEPOSIT" and in_win(t, cutoff_7d)]
     deposits_30d = [t for t in txns if t.get("txn_type") == "DEPOSIT" and in_win(t, cutoff_30d)]
     deposits_90d = [t for t in txns if t.get("txn_type") == "DEPOSIT" and in_win(t, cutoff_90d)]
+    withdrawals_24h = [t for t in txns if t.get("txn_type") == "WITHDRAWAL" and in_win(t, cutoff_24h)]
+    withdrawals_7d = [t for t in txns if t.get("txn_type") == "WITHDRAWAL" and in_win(t, cutoff_7d)]
     txns_24h     = [t for t in txns if in_win(t, cutoff_24h)]
     txns_7d      = [t for t in txns if in_win(t, cutoff_7d)]
     txns_30d     = [t for t in txns if in_win(t, cutoff_30d)]
     txns_90d     = [t for t in txns if in_win(t, cutoff_90d)]
+    bets_7d      = [t for t in txns_7d if t.get("txn_type") == "BET"]
+    bets_30d     = [t for t in txns_30d if t.get("txn_type") == "BET"]
 
     # Deposit velocity = deposits per hour in 24h
     dep_velocity = len(deposits_24h) / 24.0
@@ -1506,22 +1702,51 @@ def compute_features_offline(player_id: str, history: dict) -> dict:
 
     night_ratio = len([t for t in txns_7d if _is_night(t)]) / max(len(txns_7d), 1)
 
+    # Weekend activity ratio (Sat/Sun in 7d)
+    weekend_ratio = len([t for t in txns_7d if t["ts"].weekday() >= 5]) / max(len(txns_7d), 1)
+
     # Multi-currency flag
     currencies = {t.get("currency", "BRL") for t in txns_7d}
     multi_currency = len(currencies) > 1
 
     # Win/loss ratio 30d
-    bets_30d   = [t for t in txns_30d if t.get("txn_type") == "BET"]
     wins_30d   = [b for b in bets_30d if b.get("result") == "WIN"]
     losses_30d = [b for b in bets_30d if b.get("result") == "LOSS"]
     win_loss_30d = len(wins_30d) / max(len(losses_30d), 1)
+
+    odds_vals_7d = [float(b.get("odds")) for b in bets_7d if b.get("odds") not in (None, "")]
+    avg_odds_7d = (sum(odds_vals_7d) / len(odds_vals_7d)) if odds_vals_7d else None
 
     # Chargeback rate 30d
     chargebacks_30d  = [t for t in txns_30d if t.get("is_chargeback")]
     chargeback_rate  = len(chargebacks_30d) / max(len(deposits_30d), 1)
 
+    dep_ts_7d = sorted(t["ts"] for t in deposits_7d)
+    wdraw_ts_7d = sorted(t["ts"] for t in withdrawals_7d)
+    dep_to_wdraw_hours = []
+    for dep_ts in dep_ts_7d:
+        later = [w for w in wdraw_ts_7d if w > dep_ts]
+        if later:
+            dep_to_wdraw_hours.append((later[0] - dep_ts).total_seconds() / 3600.0)
+    avg_dep_to_wdraw = (
+        sum(dep_to_wdraw_hours) / len(dep_to_wdraw_hours) if dep_to_wdraw_hours else None
+    )
+
+    bonus_30d = [t for t in txns_30d if t.get("txn_type") == "BONUS"]
+    bonus_ratio_30d = len(bonus_30d) / max(len(bonus_30d) + len(deposits_30d), 1)
+
+    cashout_bets_7d = [
+        b
+        for b in bets_7d
+        if b.get("cashout_amount") not in (None, "", 0, 0.0)
+        or str(b.get("result") or b.get("status") or "").upper() in {"CASHOUT", "CASHED_OUT", "EARLY_CASHOUT"}
+    ]
+    cashout_ratio_7d = len(cashout_bets_7d) / max(len(bets_7d), 1)
+
     devices = sorted({t.get("device_id") for t in txns_90d if t.get("device_id")})
     banks = sorted({t.get("bank_id") for t in txns_90d if t.get("bank_id")})
+    shared_device_score = min(max(len(devices) - 1, 0) / 10.0, 1.0)
+    shared_instrument_score = min((max(len(devices) - 1, 0) * 0.4 + max(len(banks) - 1, 0) * 0.6) / 10.0, 1.0)
     cluster_seed = devices + banks
     cluster_id = (
         f"cluster:{hashlib.sha1('|'.join(cluster_seed).encode()).hexdigest()[:12]}"
@@ -1536,19 +1761,32 @@ def compute_features_offline(player_id: str, history: dict) -> dict:
         "deposit_velocity":      float(dep_velocity),
         "deposit_count_1h":      len([t for t in txns if t.get("txn_type") == "DEPOSIT" and in_win(t, now - _td(hours=1))]),
         "deposit_count_24h":     len(deposits_24h),
+        "deposit_count_7d":      len(deposits_7d),
         "deposit_sum_24h":       float(sum(t.get("amount", 0) for t in deposits_24h)),
+        "deposit_sum_7d":        float(sum(t.get("amount", 0) for t in deposits_7d)),
+        "deposit_sum_30d":       float(sum(t.get("amount", 0) for t in deposits_30d)),
         "deposit_sum_90d":       float(sum(t.get("amount", 0) for t in deposits_90d)),
+        "withdrawal_count_24h":  len(withdrawals_24h),
+        "withdrawal_sum_24h":    float(sum(t.get("amount", 0) for t in withdrawals_24h)),
+        "withdrawal_sum_7d":     float(sum(t.get("amount", 0) for t in withdrawals_7d)),
         "unique_instruments_7d": unique_instruments_7d,
         "unique_instruments_used_7d": unique_instruments_7d,
         "night_activity_ratio":  float(night_ratio),
+        "weekend_activity_ratio": float(weekend_ratio),
+        "avg_odds_bet_7d":       float(avg_odds_7d) if avg_odds_7d is not None else None,
         "multi_currency_flag":   multi_currency,
         "win_loss_ratio_30d":    float(win_loss_30d),
         "chargeback_rate_30d":   float(chargeback_rate),
-        "avg_time_between_deposit_and_withdrawal_7d": None,
-        "bonus_to_real_money_ratio_30d": 0.0,
-        "shared_device_score":   0.0,
-        "shared_instrument_score": 0.0,
+        "avg_time_between_deposit_and_withdrawal_7d": float(avg_dep_to_wdraw) if avg_dep_to_wdraw is not None else None,
+        "avg_deposit_to_withdrawal_hours": float(avg_dep_to_wdraw) if avg_dep_to_wdraw is not None else None,
+        "bonus_to_real_money_ratio_30d": float(bonus_ratio_30d),
+        "bonus_to_real_ratio_30d": float(bonus_ratio_30d),
+        "cashout_ratio_7d": float(cashout_ratio_7d),
+        "shared_device_score":   float(shared_device_score),
+        "shared_instrument_score": float(shared_instrument_score),
         "cluster_id":            cluster_id,
         "cluster_size":          max(len(devices), len(banks), 1),
         "txn_count_24h":         len(txns_24h),
+        "bet_count_7d":          len(bets_7d),
+        "bet_count_30d":         len(bets_30d),
     }

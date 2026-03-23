@@ -3,7 +3,13 @@ Testes unitários do MappingEngine (libs/mapping.py).
 Cobertura: BackofficeAlpha/Beta, todos os transform types.
 """
 import pytest
-from libs.mapping import MappingEngine, get_default_mapping, TransformType
+from libs.mapping import (
+    MappingEngine,
+    TransformType,
+    get_default_mapping,
+    validate_mapped_payload_against_canonical_schema,
+    validate_mapping_targets_against_canonical_schema,
+)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -146,3 +152,51 @@ def test_get_default_mapping_alpha_transaction():
 def test_get_default_mapping_beta_player():
     m = get_default_mapping("BackofficeBeta", "PLAYER")
     assert m is not None
+
+
+def test_connector_gamma_transaction_mapping_matches_canonical_schema():
+    mapping = get_default_mapping("ConnectorGamma", "TRANSACTION")
+    result = validate_mapping_targets_against_canonical_schema(mapping)
+    assert result["valid"] is True
+    assert result["unknown_targets"] == []
+
+
+def test_mapping_schema_validation_flags_unknown_target():
+    bad_mapping = {
+        "version": "1.0",
+        "source_system": "ConnectorGamma",
+        "entity_type": "TRANSACTION",
+        "fields": [
+            {"target": "amount", "source": "amount", "transform": "coerceDecimal"},
+            {"target": "unsupported_field_xyz", "source": "foo", "transform": "copy"},
+        ],
+    }
+    result = validate_mapping_targets_against_canonical_schema(bad_mapping)
+    assert result["valid"] is False
+    assert "unsupported_field_xyz" in result["unknown_targets"]
+
+
+def test_preview_validation_accepts_transaction_payload_shape():
+    payload = {
+        "external_transaction_id": "TX-1",
+        "player_cpf": "12345678901",
+        "type": "DEPOSIT",
+        "amount": 500.0,
+        "occurred_at": "2026-03-20T12:00:00Z",
+        "currency": "BRL",
+        "method": "PIX",
+    }
+    result = validate_mapped_payload_against_canonical_schema("TRANSACTION", payload)
+    assert result["valid"] is True
+    assert result["unknown_fields"] == []
+
+
+def test_preview_validation_flags_missing_transaction_identity():
+    payload = {
+        "amount": 500.0,
+        "occurred_at": "2026-03-20T12:00:00Z",
+        "type": "DEPOSIT",
+    }
+    result = validate_mapped_payload_against_canonical_schema("TRANSACTION", payload)
+    assert result["valid"] is False
+    assert ["external_player_id", "player_cpf", "player_id"] in result["missing_required_groups"]

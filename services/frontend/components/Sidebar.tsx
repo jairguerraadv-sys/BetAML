@@ -111,7 +111,8 @@ export default function Sidebar() {
       {/* Busca rápida */}
       <div className="px-2 pt-3">
         <button
-          onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))}
+          onClick={() => window.dispatchEvent(new CustomEvent('betaml:open-global-search'))}
+          aria-label="Abrir busca global"
           className="flex w-full items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-400 transition hover:border-gray-300 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-500 dark:hover:bg-gray-700"
         >
           <Search size={12} />

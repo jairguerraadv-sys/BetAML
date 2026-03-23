@@ -10,6 +10,7 @@ routers/admin.py — Endpoints administrativos do tenant:
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 import string
 import uuid
@@ -17,9 +18,9 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func as sqlfunc, select
+from sqlalchemy import desc, func as sqlfunc, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import create_access_token, get_current_user, hash_password, require_roles
@@ -29,8 +30,12 @@ from libs.models import (
     ApiKey,
     AuditLog,
     Case,
+    IngestError,
     IngestJob,
+    MappingConfig,
+    ModelRegistry,
     RuleDefinition,
+    RuleMacro,
     ScoringConfig,
     SystemFlag,
     Tenant,
@@ -40,6 +45,7 @@ from libs.schemas import (
     ApiKeyCreate,
     ApiKeyCreateResponse,
     ApiKeyOut,
+    ApiKeyUsageOut,
     InviteIn,
     ScoringConfigOut,
     ScoringConfigUpdate,
@@ -65,6 +71,32 @@ def _tenant_filter(model, tenant_id: str):
     return model.tenant_id == tenant_id
 
 
+def _normalize_source_system_alias(
+    source_system: str,
+    allowed_source_systems: set[str] | frozenset[str],
+) -> str:
+    value = (source_system or "").strip()
+    if not value:
+        return value
+    if value in allowed_source_systems:
+        return value
+
+    normalized = re.sub(r"[^a-z0-9]+", "", value.lower())
+    canonical_map = {
+        re.sub(r"[^a-z0-9]+", "", item.lower()): item
+        for item in allowed_source_systems
+    }
+    alias_map = {
+        "gamma": "ConnectorGamma",
+        "delta": "ConnectorDelta",
+        "epsilon": "ConnectorEpsilon",
+        "connectorgamma": "ConnectorGamma",
+        "connectordelta": "ConnectorDelta",
+        "connectorepsilon": "ConnectorEpsilon",
+    }
+    return canonical_map.get(normalized) or alias_map.get(normalized) or value
+
+
 async def _write_audit(db, tenant_id, actor, action, resource_type, resource_id=None, details=None):
     db.add(AuditLog(
         tenant_id=tenant_id, user_id=actor, action=action,
@@ -72,6 +104,19 @@ async def _write_audit(db, tenant_id, actor, action, resource_type, resource_id=
         entity_id=str(resource_id) if resource_id else None,
         after=details or {},
     ))
+
+
+async def _require_target_tenant(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+) -> Tenant:
+    tenant = await db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(404, "Tenant não encontrado")
+    if not getattr(tenant, "active", True):
+        raise HTTPException(409, "Tenant está inativo")
+    return tenant
 
 
 # ── Schemas locais ─────────────────────────────────────────────────────────────
@@ -94,6 +139,35 @@ class TenantCreateOut(BaseModel):
     message: str
 
 
+class AdminOnboardingMappingIn(BaseModel):
+    name: str = Field(..., min_length=2, max_length=120)
+    source_system: str = Field(..., min_length=2, max_length=100)
+    entity_type: str = Field(default="transaction", min_length=3, max_length=50)
+    config_json: dict | None = None
+    config_text: str | None = None
+    format: str = Field(default="yaml", pattern="^(json|yaml)$")
+    change_notes: str | None = None
+    version: str = "1.0"
+
+
+class AdminOnboardingRuleIn(BaseModel):
+    name: str = Field(..., min_length=2, max_length=160)
+    description: Optional[str] = None
+    status: str = "ACTIVE"
+    severity: str = "MEDIUM"
+    scope: str = "TRANSACTION"
+    condition_dsl: str
+    params: dict = Field(default_factory=dict)
+    weight: float = 0.5
+
+
+class AdminOnboardingImportOut(BaseModel):
+    job_id: str
+    status: str
+    source_system: str
+    file_name: Optional[str] = None
+
+
 class AMLKPIOut(BaseModel):
     generated_at: datetime
     window_days: int
@@ -106,6 +180,25 @@ class AMLKPIOut(BaseModel):
     cases_overdue: int
     sla_breach_rate_open_cases_percent: float
     avg_case_resolution_hours_30d: float
+
+
+class OperationalAlertOut(BaseModel):
+    code: str
+    severity: str
+    message: str
+    value: float | int | None = None
+    threshold: float | int | None = None
+
+
+class OpsSummaryOut(BaseModel):
+    generated_at: datetime
+    maintenance_mode: bool
+    kafka_consumer_lag: int
+    ingest_error_rate_24h_percent: float
+    unresolved_dlq_events: int
+    stale_models: int
+    oldest_model_age_days: int | None = None
+    alerts: list[OperationalAlertOut]
 
 
 # ── Maintenance mode ───────────────────────────────────────────────────────────
@@ -133,7 +226,140 @@ async def set_maintenance_mode(
     await _write_audit(db, current_user.tenant_id, current_user.id,
                        "SET_MAINTENANCE_MODE", "SystemFlag", None, {"enabled": enabled})
     await db.commit()
+    try:
+        import time as _time
+        from middleware import _CACHE_TTL, _maintenance_cache
+
+        _maintenance_cache[str(current_user.tenant_id)] = (enabled, _time.monotonic() + _CACHE_TTL)
+    except Exception:
+        pass
     return {"maintenance_mode": enabled}
+
+
+@router.put("/admin/maintenance-mode", tags=["admin"])
+async def set_maintenance_mode_put(
+    enabled: bool = Query(...),
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("ADMIN")),
+):
+    """REST-friendly alias for maintenance mode toggle."""
+    return await set_maintenance_mode(enabled=enabled, db=db, current_user=current_user)
+
+
+@router.get("/admin/ops/summary", response_model=OpsSummaryOut, tags=["admin"])
+async def get_ops_summary(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_roles("ADMIN", "AUDITOR")),
+):
+    """Operational summary for infra dashboards and admin triage."""
+    import httpx
+
+    now_utc = datetime.now(UTC)
+    since_24h = now_utc - timedelta(hours=24)
+    tenant_id = current_user.tenant_id
+
+    maintenance_flag = await db.get(SystemFlag, f"{tenant_id}:maintenance_mode")
+    maintenance_enabled = bool((maintenance_flag.value or {}).get("enabled", False)) if maintenance_flag else False
+
+    unresolved_dlq = int((await db.execute(
+        select(sqlfunc.count(IngestError.id)).where(
+            IngestError.tenant_id == tenant_id,
+            IngestError.resolved.is_(False),
+        )
+    )).scalar() or 0)
+
+    ingest_rows = (await db.execute(
+        select(
+            sqlfunc.coalesce(sqlfunc.sum(IngestJob.processed_records), 0),
+            sqlfunc.coalesce(sqlfunc.sum(IngestJob.failed_records), 0),
+        ).where(
+            IngestJob.tenant_id == tenant_id,
+            IngestJob.created_at >= since_24h,
+        )
+    )).one()
+    processed_24h = int(ingest_rows[0] or 0)
+    failed_24h = int(ingest_rows[1] or 0)
+    ingest_total = processed_24h + failed_24h
+    ingest_error_rate = round((failed_24h / ingest_total) * 100.0, 2) if ingest_total else 0.0
+
+    stale_cutoff = now_utc - timedelta(days=30)
+    stale_models = int((await db.execute(
+        select(sqlfunc.count(ModelRegistry.id)).where(
+            ModelRegistry.tenant_id == tenant_id,
+            ModelRegistry.status.in_(["PRODUCTION", "STAGING"]),
+            ModelRegistry.trained_at.is_not(None),
+            ModelRegistry.trained_at < stale_cutoff,
+        )
+    )).scalar() or 0)
+
+    oldest_model_dt = (await db.execute(
+        select(sqlfunc.min(ModelRegistry.trained_at)).where(
+            ModelRegistry.tenant_id == tenant_id,
+            ModelRegistry.status.in_(["PRODUCTION", "STAGING"]),
+            ModelRegistry.trained_at.is_not(None),
+        )
+    )).scalar()
+    oldest_model_age_days = (
+        max(int((now_utc - oldest_model_dt).total_seconds() // 86400), 0)
+        if oldest_model_dt is not None
+        else None
+    )
+
+    kafka_lag = 0
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{settings.redpanda_admin_url.rstrip('/')}/v1/consumer_groups")
+        if resp.status_code == 200:
+            groups = resp.json()
+            if isinstance(groups, list) and groups:
+                kafka_lag = max(int(group.get("lag", 0) or 0) for group in groups)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ops_summary_kafka_lag_failed", error=str(exc))
+
+    alerts: list[OperationalAlertOut] = []
+    if kafka_lag > 1000:
+        alerts.append(OperationalAlertOut(
+            code="KAFKA_LAG_HIGH",
+            severity="warning",
+            message="Lag do consumer Kafka acima do threshold operacional.",
+            value=kafka_lag,
+            threshold=1000,
+        ))
+    if ingest_error_rate > 5.0:
+        alerts.append(OperationalAlertOut(
+            code="INGEST_ERROR_RATE_HIGH",
+            severity="warning",
+            message="Taxa de erros de ingestão nas últimas 24h acima do limite.",
+            value=ingest_error_rate,
+            threshold=5.0,
+        ))
+    if stale_models > 0:
+        alerts.append(OperationalAlertOut(
+            code="ML_MODEL_STALE",
+            severity="warning",
+            message="Há modelos de ML sem re-treino há mais de 30 dias.",
+            value=stale_models,
+            threshold=30,
+        ))
+    if unresolved_dlq > 0:
+        alerts.append(OperationalAlertOut(
+            code="DLQ_PENDING",
+            severity="warning",
+            message="Existem eventos pendentes na DLQ / quarentena.",
+            value=unresolved_dlq,
+            threshold=0,
+        ))
+
+    return OpsSummaryOut(
+        generated_at=now_utc,
+        maintenance_mode=maintenance_enabled,
+        kafka_consumer_lag=kafka_lag,
+        ingest_error_rate_24h_percent=ingest_error_rate,
+        unresolved_dlq_events=unresolved_dlq,
+        stale_models=stale_models,
+        oldest_model_age_days=oldest_model_age_days,
+        alerts=alerts,
+    )
 
 
 @router.get("/admin/kpis/aml", response_model=AMLKPIOut, tags=["admin"])
@@ -326,14 +552,17 @@ async def create_api_key(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_roles("ADMIN")),
 ):
-    raw_key = "btml_" + secrets.token_hex(32)
+    permissions = body.permissions or ["ingest"]
+    tenant_compact = str(current_user.tenant_id).replace("-", "").lower()
+    raw_key = f"btml_{tenant_compact}_{secrets.token_hex(24)}"
     hashed = hashlib.sha256(raw_key.encode()).hexdigest()
     key = ApiKey(
         tenant_id=current_user.tenant_id,
         name=body.name,
         key_hash=hashed,
         key_prefix=raw_key[:8],
-        permissions=body.permissions,  # ORM column: permissions
+        source_system=body.source_system,
+        permissions=permissions,  # ORM column: permissions
         active=True,              # ORM column: active
         expires_at=(
             datetime.now(UTC) + timedelta(days=body.expires_in_days)
@@ -343,7 +572,12 @@ async def create_api_key(
     db.add(key)
     await db.flush()
     await _write_audit(db, current_user.tenant_id, current_user.id,
-                       "CREATE_API_KEY", "ApiKey", key.id, {"name": body.name})
+                       "CREATE_API_KEY", "ApiKey", key.id, {
+                           "name": body.name,
+                           "source_system": body.source_system,
+                           "permissions": permissions,
+                           "expires_in_days": body.expires_in_days,
+                       })
     await db.commit()
     return {
         **{c.name: getattr(key, c.name) for c in key.__table__.columns if c.name != "key_hash"},
@@ -369,7 +603,7 @@ async def revoke_api_key(
     await db.commit()
 
 
-@router.get("/admin/api-keys/{key_id}/usage", tags=["admin"])
+@router.get("/admin/api-keys/{key_id}/usage", response_model=ApiKeyUsageOut, tags=["admin"])
 async def get_api_key_usage(
     key_id: str,
     db: AsyncSession = Depends(get_db),
@@ -402,13 +636,17 @@ async def get_api_key_usage(
         logger.warning("api_key_usage_redis_error", error=str(exc))
         usage = {}
 
-    return {
-        "key_id": key_id,
-        "key_prefix": row.key_prefix,
-        "name": row.name,
-        "last_used_at": row.last_used_at,
-        "days": usage,
-    }
+    return ApiKeyUsageOut(
+        key_id=key_id,
+        key_prefix=row.key_prefix,
+        name=row.name,
+        source_system=row.source_system,
+        permissions=list(row.permissions or []),
+        active=bool(row.active),
+        last_used_at=row.last_used_at,
+        total_requests_30d=sum(int(v or 0) for v in usage.values()),
+        days=usage,
+    )
 
 
 # ── System Flags ───────────────────────────────────────────────────────────────
@@ -598,7 +836,7 @@ DEFAULT_RULES_TEMPLATE = [
 async def create_tenant(
     body: TenantCreateIn,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("SUPER_ADMIN")),
+    current_user = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
 ):
     """
     Onboarding de novo tenant via API.
@@ -607,7 +845,6 @@ async def create_tenant(
     - Tenant com slug único
     - Usuário ADMIN inicial
     - ScoringConfig com thresholds padrão
-    - 5 regras DSL de partida
 
     Requer role ADMIN (multi-tenant hierarchy — ADMIN de qualquer tenant pode criar tenants em dev).
     Em produção, considere restringir para SUPER_ADMIN dedicado.
@@ -630,6 +867,10 @@ async def create_tenant(
     )
     db.add(tenant)
     await db.flush()
+    await db.execute(
+        text("SELECT set_config('app.current_tenant', :tid, false)"),
+        {"tid": tenant.id},
+    )
 
     # Criar usuário ADMIN inicial
     admin_user = User(
@@ -663,20 +904,12 @@ async def create_tenant(
         updated_by=admin_user.id,
     )
     db.add(scoring_cfg)
+    await db.flush()
 
-    # Regras DSL padrão
-    for rd in DEFAULT_RULES_TEMPLATE:
-        db.add(RuleDefinition(
-            tenant_id=tenant.id,
-            name=rd["name"],
-            status="ACTIVE",
-            severity=rd["severity"],
-            scope=rd["scope"],
-            condition_dsl=rd["condition_dsl"],
-            params=rd["params"],
-            created_by=admin_user.id,
-        ))
-
+    await db.execute(
+        text("SELECT set_config('app.current_tenant', :tid, false)"),
+        {"tid": current_user.tenant_id},
+    )
     await _write_audit(db, current_user.tenant_id, current_user.id,
                        "CREATE_TENANT", "Tenant", tenant.id,
                        {"slug": body.slug, "admin_username": body.admin_username})
@@ -693,9 +926,260 @@ async def create_tenant(
         message=(
             f"Tenant '{tenant.name}' criado com sucesso. "
             f"Login: {admin_user.username} / (senha fornecida). "
-            f"5 regras DSL padrão ativas. ScoringConfig provisionada."
+            f"ScoringConfig provisionada e tenant pronto para concluir o wizard."
         ),
     )
+
+
+@router.post("/admin/onboarding/{tenant_id}/mappings", status_code=201, tags=["admin"])
+async def create_onboarding_mapping(
+    tenant_id: str,
+    body: AdminOnboardingMappingIn,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
+):
+    """Creates the first mapping for a newly onboarded tenant without switching session context."""
+    from routers.mappings import _next_version_number, _parse_config_payload
+    from libs.mapping import validate_mapping_targets_against_canonical_schema
+    from sqlalchemy import update
+    from routers.ingest import ALLOWED_SOURCE_SYSTEMS
+
+    tenant = await _require_target_tenant(db, tenant_id=tenant_id)
+    await db.execute(
+        text("SELECT set_config('app.current_tenant', :tid, false)"),
+        {"tid": str(tenant.id)},
+    )
+    cfg = _parse_config_payload(
+        config_json=body.config_json,
+        config_text=body.config_text,
+        fmt=body.format,
+    )
+    canonical_validation = validate_mapping_targets_against_canonical_schema(cfg)
+    if not canonical_validation["valid"]:
+        raise HTTPException(
+            422,
+            {
+                "message": "Config incompatível com schema canônico de ingestão",
+                "canonical_validation": canonical_validation,
+            },
+        )
+
+    source_system = _normalize_source_system_alias(body.source_system, ALLOWED_SOURCE_SYSTEMS)
+    entity_type = body.entity_type.upper()
+    version_number = await _next_version_number(
+        db,
+        str(tenant.id),
+        source_system,
+        entity_type,
+    )
+
+    await db.execute(
+        update(MappingConfig)
+        .where(
+            MappingConfig.tenant_id == str(tenant.id),
+            MappingConfig.source_system == source_system,
+            MappingConfig.entity_type == entity_type,
+        )
+        .values(is_current=False)
+    )
+
+    mapping = MappingConfig(
+        tenant_id=str(tenant.id),
+        name=body.name,
+        source_system=source_system,
+        entity_type=entity_type,
+        config_json=cfg,
+        version=body.version,
+        version_number=version_number,
+        is_current=True,
+        change_notes=body.change_notes or "Criado via onboarding wizard",
+        created_by=current_user.id,
+    )
+    db.add(mapping)
+    await db.flush()
+    await _write_audit(
+        db,
+        str(tenant.id),
+        current_user.id,
+        "CREATE_MAPPING",
+        "MappingConfig",
+        mapping.id,
+        {
+            "name": mapping.name,
+            "source_system": mapping.source_system,
+            "entity_type": mapping.entity_type,
+            "version_number": mapping.version_number,
+            "via": "admin_onboarding",
+        },
+    )
+    await db.commit()
+    await db.refresh(mapping)
+    return {
+        "id": mapping.id,
+        "name": mapping.name,
+        "version_number": mapping.version_number,
+        "is_current": mapping.is_current,
+    }
+
+
+@router.post("/admin/onboarding/{tenant_id}/ingest-sample", response_model=AdminOnboardingImportOut, status_code=202, tags=["admin"])
+async def ingest_onboarding_sample(
+    tenant_id: str,
+    file: UploadFile = File(...),
+    source_system: str = Form(...),
+    mapping_config_id: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
+):
+    """Queues a sample ingest job for the newly created tenant."""
+    from routers.ingest import ALLOWED_SOURCE_SYSTEMS, _publish_with_retries, _upload_bronze_file
+    from utils import get_producer
+
+    tenant = await _require_target_tenant(db, tenant_id=tenant_id)
+    await db.execute(
+        text("SELECT set_config('app.current_tenant', :tid, false)"),
+        {"tid": str(tenant.id)},
+    )
+    source_system = _normalize_source_system_alias(source_system, ALLOWED_SOURCE_SYSTEMS)
+    if source_system not in ALLOWED_SOURCE_SYSTEMS:
+        raise HTTPException(400, f"source_system '{source_system}' não reconhecido. Permitidos: {sorted(ALLOWED_SOURCE_SYSTEMS)}")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "Arquivo de teste vazio")
+
+    mapping_version_id = None
+    if mapping_config_id:
+        mapping = await db.get(MappingConfig, mapping_config_id)
+        if not mapping or mapping.tenant_id != str(tenant.id):
+            raise HTTPException(404, "MappingConfig não encontrado para o tenant")
+        if not mapping.is_current:
+            mapping_version_id = mapping.id
+
+    job = IngestJob(
+        tenant_id=str(tenant.id),
+        source_system=source_system,
+        mapping_config_id=mapping_config_id,
+        mapping_version_id=mapping_version_id,
+        file_name=file.filename,
+        file_size_bytes=len(content),
+        file_path=None,
+        bytes_processed=0,
+        status="QUEUED",
+        created_by=current_user.id,
+    )
+    db.add(job)
+    await db.flush()
+
+    bronze_path = _upload_bronze_file(
+        tenant_id=str(tenant.id),
+        job_id=str(job.id),
+        file_name=file.filename or "sample.csv",
+        content=content,
+    )
+    if bronze_path:
+        job.file_path = bronze_path
+
+    producer = await get_producer()
+    if producer:
+        ok = await _publish_with_retries(
+            producer=producer,
+            topic="ingest.jobs",
+            payload={
+                "job_id": job.id,
+                "tenant_id": str(tenant.id),
+                "source_system": source_system,
+                "mapping_config_id": mapping_config_id,
+                "mapping_version_id": mapping_version_id,
+                "file_name": file.filename,
+                "file_path": job.file_path,
+            },
+            key=str(job.id),
+            tenant_id=str(tenant.id),
+            source_system=source_system,
+            context={"endpoint": "/admin/onboarding/ingest-sample", "job_id": str(job.id)},
+        )
+        if not ok:
+            raise HTTPException(503, "Falha ao enfileirar amostra de ingestão; enviado para DLQ")
+
+    await _write_audit(
+        db,
+        str(tenant.id),
+        current_user.id,
+        "CREATE_INGEST_SAMPLE_JOB",
+        "IngestJob",
+        job.id,
+        {
+            "source_system": source_system,
+            "file_name": file.filename,
+            "mapping_config_id": mapping_config_id,
+            "via": "admin_onboarding",
+        },
+    )
+    await db.commit()
+    return AdminOnboardingImportOut(
+        job_id=str(job.id),
+        status=str(job.status),
+        source_system=source_system,
+        file_name=file.filename,
+    )
+
+
+@router.post("/admin/onboarding/{tenant_id}/rules", status_code=201, tags=["admin"])
+async def create_onboarding_rule(
+    tenant_id: str,
+    body: AdminOnboardingRuleIn,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
+):
+    """Creates the first rule for a newly onboarded tenant without requiring a separate login."""
+    from libs.dsl_parser import validate_dsl
+
+    tenant = await _require_target_tenant(db, tenant_id=tenant_id)
+    await db.execute(
+        text("SELECT set_config('app.current_tenant', :tid, false)"),
+        {"tid": str(tenant.id)},
+    )
+    macros = {
+        row.name: row.expression
+        for row in (
+            await db.execute(
+                select(RuleMacro).where(RuleMacro.tenant_id == str(tenant.id))
+            )
+        ).scalars().all()
+    }
+    ok, msg = validate_dsl(body.condition_dsl, macros=macros)
+    if not ok:
+        raise HTTPException(400, detail=f"DSL inválido: {msg}")
+
+    rule = RuleDefinition(
+        tenant_id=str(tenant.id),
+        name=body.name,
+        description=body.description,
+        status=body.status,
+        severity=body.severity,
+        scope=body.scope,
+        condition_dsl=body.condition_dsl,
+        params=body.params,
+        weight=body.weight,
+        created_by=current_user.id,
+    )
+    db.add(rule)
+    await db.flush()
+    await _write_audit(
+        db,
+        str(tenant.id),
+        current_user.id,
+        "CREATE",
+        "RuleDefinition",
+        rule.id,
+        {
+            **body.model_dump(),
+            "via": "admin_onboarding",
+        },
+    )
+    await db.commit()
+    return {"id": rule.id, "name": rule.name, "status": rule.status}
 
 
 # ── Tenant management (SUPER_ADMIN) ────────────────────────────────────────

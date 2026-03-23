@@ -250,13 +250,15 @@ async def test_get_case_found_includes_required_keys():
     alerts_result.scalars.return_value.all.return_value = []
     events_result = MagicMock()
     events_result.scalars.return_value.all.return_value = []
-    db.execute = AsyncMock(side_effect=[alerts_result, events_result])
+    report_packages_result = MagicMock()
+    report_packages_result.scalars.return_value.all.return_value = []
+    db.execute = AsyncMock(side_effect=[alerts_result, events_result, report_packages_result])
 
     user = _make_user(tenant_id="t1")
 
     result = await get_case(case_id="c1", current_user=user, repo=repo, db=db)
 
-    for key in ("id", "title", "status", "severity", "alerts", "timeline"):
+    for key in ("id", "title", "status", "severity", "alerts", "timeline", "report_packages"):
         assert key in result, f"Missing key: {key}"
 
 
@@ -350,8 +352,9 @@ async def test_submit_report_package_no_rp_raises_400():
 
     user = _make_user(tenant_id="t1")
 
-    with pytest.raises(HTTPException) as exc_info:
-        await submit_report_package(case_id="c1", current_user=user, db=db)
+    with patch("routers.cases.redis_rate_limit", AsyncMock()):
+        with pytest.raises(HTTPException) as exc_info:
+            await submit_report_package(case_id="c1", current_user=user, db=db)
 
     assert exc_info.value.status_code == 400
 
@@ -375,8 +378,9 @@ async def test_submit_report_package_non_file_sar_raises_400():
 
     user = _make_user(tenant_id="t1")
 
-    with pytest.raises(HTTPException) as exc_info:
-        await submit_report_package(case_id="c1", current_user=user, db=db)
+    with patch("routers.cases.redis_rate_limit", AsyncMock()):
+        with pytest.raises(HTTPException) as exc_info:
+            await submit_report_package(case_id="c1", current_user=user, db=db)
 
     assert exc_info.value.status_code == 400
 
@@ -400,7 +404,8 @@ async def test_submit_report_package_already_filed_raises_409():
 
     user = _make_user(tenant_id="t1")
 
-    with pytest.raises(HTTPException) as exc_info:
-        await submit_report_package(case_id="c1", current_user=user, db=db)
+    with patch("routers.cases.redis_rate_limit", AsyncMock()):
+        with pytest.raises(HTTPException) as exc_info:
+            await submit_report_package(case_id="c1", current_user=user, db=db)
 
     assert exc_info.value.status_code == 409

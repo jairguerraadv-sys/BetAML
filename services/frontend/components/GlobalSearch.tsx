@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Search, X, FileText, AlertTriangle, Users } from 'lucide-react';
 import { api } from '@/lib/api';
+import { useLocale } from '@/lib/i18n';
 
 interface SearchResult {
   type: 'player' | 'case' | 'alert';
@@ -14,7 +15,7 @@ interface SearchResult {
 }
 
 interface SearchResponse {
-  players: Array<{ id: string; external_id: string; name: string; risk_band: string }>;
+  players: Array<{ id: string; external_id: string; name: string; cpf_masked?: string; risk_band: string }>;
   cases: Array<{ id: string; reference_number: string; title: string; status: string }>;
   alerts: Array<{ id: string; alert_type: string; severity: string; player_id: string }>;
 }
@@ -29,6 +30,7 @@ const TYPE_LABELS = { player: 'Jogador', case: 'Caso', alert: 'Alerta' };
 
 export default function GlobalSearch() {
   const router = useRouter();
+  const [locale] = useLocale();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -46,8 +48,15 @@ export default function GlobalSearch() {
       }
       if (e.key === 'Escape') setOpen(false);
     }
+    function onOpenRequest() {
+      setOpen(true);
+    }
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('betaml:open-global-search', onOpenRequest);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('betaml:open-global-search', onOpenRequest);
+    };
   }, []);
 
   useEffect(() => {
@@ -67,7 +76,7 @@ export default function GlobalSearch() {
           type: 'player' as const,
           id: p.id,
           label: p.name || p.external_id,
-          sublabel: `${p.risk_band} · ${p.external_id}`,
+          sublabel: `${p.risk_band} · ${p.external_id}${p.cpf_masked ? ` · ${p.cpf_masked}` : ''}`,
           href: `/players/${p.id}`,
         })),
         ...data.cases.map((c) => ({
@@ -130,6 +139,9 @@ export default function GlobalSearch() {
       <div
         className="w-full max-w-xl rounded-2xl bg-white shadow-2xl dark:bg-gray-900"
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Busca global"
       >
         {/* Input */}
         <div className="flex items-center gap-3 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
@@ -140,10 +152,14 @@ export default function GlobalSearch() {
             onChange={handleInput}
             onKeyDown={handleKeyDown}
             placeholder="Buscar CPF, jogador, caso, alerta…"
+            aria-label="Buscar CPF, nome, caso ou alerta"
             className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none dark:text-gray-100"
           />
           {query && (
-            <button onClick={() => { setQuery(''); setResults([]); }}>
+            <button
+              onClick={() => { setQuery(''); setResults([]); }}
+              aria-label="Limpar busca"
+            >
               <X size={15} className="text-gray-400 hover:text-gray-600" />
             </button>
           )}
@@ -153,7 +169,7 @@ export default function GlobalSearch() {
         </div>
 
         {/* Results */}
-        <div className="max-h-80 overflow-y-auto py-1">
+        <div className="max-h-80 overflow-y-auto py-1" role="listbox" aria-label="Resultados da busca global">
           {loading && (
             <p className="px-4 py-3 text-sm text-gray-400">Buscando…</p>
           )}
@@ -166,6 +182,8 @@ export default function GlobalSearch() {
               <button
                 key={r.id}
                 onClick={() => navigate(r)}
+                role="option"
+                aria-selected={i === cursor}
                 className={`flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors ${
                   i === cursor
                     ? 'bg-brand/10 dark:bg-brand/20'
@@ -189,7 +207,7 @@ export default function GlobalSearch() {
           })}
           {!loading && results.length > 0 && (
             <p className="px-4 py-1.5 text-[10px] text-gray-400">
-              ↑↓ navegar · Enter selecionar
+              {locale === 'en-US' ? 'Use ↑↓ to navigate · Enter to open' : '↑↓ navegar · Enter selecionar'}
             </p>
           )}
         </div>

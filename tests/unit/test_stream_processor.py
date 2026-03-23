@@ -111,6 +111,10 @@ REQUIRED_KEYS = {
     "cluster_id",
     "cluster_size",
     "chargeback_count_30d",
+    "snapshot_version",
+    "entity_type",
+    "snapshot_date",
+    "gold_object_path",
 }
 
 
@@ -122,6 +126,14 @@ def _run(coro):
     finally:
         loop.close()
         asyncio.set_event_loop(None)
+
+
+def _compute_features(*args, **kwargs):
+    async def _fake_to_thread(func, *thread_args, **thread_kwargs):
+        return None
+
+    with patch.object(sp.asyncio, "to_thread", side_effect=_fake_to_thread):
+        return _run(compute_features(*args, **kwargs))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -136,18 +148,18 @@ class TestEmptyHistory(unittest.TestCase):
         self.ch = _ch_mock()
 
     def test_returns_all_required_keys(self):
-        features = _run(compute_features("t1", "p1", self.redis, self.ch))
+        features = _compute_features("t1", "p1", self.redis, self.ch)
         missing = REQUIRED_KEYS - set(features.keys())
         self.assertFalse(missing, f"Chaves ausentes: {missing}")
 
     def test_numeric_features_are_zero(self):
-        features = _run(compute_features("t1", "p1", self.redis, self.ch))
+        features = _compute_features("t1", "p1", self.redis, self.ch)
         self.assertEqual(features["deposit_sum_24h"], 0.0)
         self.assertEqual(features["withdrawal_sum_24h"], 0.0)
         self.assertEqual(features["deposit_count_24h"], 0)
 
     def test_player_and_tenant_ids_preserved(self):
-        features = _run(compute_features("tenantX", "playerY", self.redis, self.ch))
+        features = _compute_features("tenantX", "playerY", self.redis, self.ch)
         self.assertEqual(features["player_id"], "playerY")
         self.assertEqual(features["tenant_id"], "tenantX")
 
@@ -167,20 +179,20 @@ class TestDepositFeatures(unittest.TestCase):
     def test_deposit_sum_24h(self):
         txns = self._make_txns(3, 1000.0, hours_ago=0.5)
         redis = _make_redis_mock(txn_entries=txns)
-        features = _run(compute_features("t1", "p1", redis, _ch_mock()))
+        features = _compute_features("t1", "p1", redis, _ch_mock())
         self.assertAlmostEqual(features["deposit_sum_24h"], 3000.0, places=1)
 
     def test_deposit_count_24h(self):
         txns = self._make_txns(5, 200.0, hours_ago=1.0)
         redis = _make_redis_mock(txn_entries=txns)
-        features = _run(compute_features("t1", "p1", redis, _ch_mock()))
+        features = _compute_features("t1", "p1", redis, _ch_mock())
         self.assertEqual(features["deposit_count_24h"], 5)
 
     def test_deposit_older_than_24h_excluded_from_24h_window(self):
         old_txns = self._make_txns(3, 500.0, hours_ago=30.0)  # >24h ago
         recent_txns = self._make_txns(2, 100.0, hours_ago=1.0)
         redis = _make_redis_mock(txn_entries=old_txns + recent_txns)
-        features = _run(compute_features("t1", "p1", redis, _ch_mock()))
+        features = _compute_features("t1", "p1", redis, _ch_mock())
         self.assertEqual(features["deposit_count_24h"], 2)
         self.assertAlmostEqual(features["deposit_sum_24h"], 200.0, places=1)
 
@@ -188,7 +200,7 @@ class TestDepositFeatures(unittest.TestCase):
         # 12 deposits in last hour → velocity = 12/24 = 0.5
         txns = self._make_txns(12, 100.0, hours_ago=0.5)
         redis = _make_redis_mock(txn_entries=txns)
-        features = _run(compute_features("t1", "p1", redis, _ch_mock()))
+        features = _compute_features("t1", "p1", redis, _ch_mock())
         self.assertAlmostEqual(features["deposit_velocity"], 12 / 24.0, places=4)
 
 
@@ -204,7 +216,7 @@ class TestWithdrawalFeatures(unittest.TestCase):
              "ts": (now - timedelta(hours=3)).isoformat(), "method": "TED", "currency": "BRL"},
         ]
         redis = _make_redis_mock(txn_entries=txns)
-        features = _run(compute_features("t1", "p1", redis, _ch_mock()))
+        features = _compute_features("t1", "p1", redis, _ch_mock())
         self.assertAlmostEqual(features["withdrawal_sum_24h"], 1400.0, places=1)
 
     def test_ratio_withdraw_to_deposit_7d(self):
@@ -216,7 +228,7 @@ class TestWithdrawalFeatures(unittest.TestCase):
              "ts": (now - timedelta(days=1)).isoformat(), "method": "TED", "currency": "BRL"},
         ]
         redis = _make_redis_mock(txn_entries=txns)
-        features = _run(compute_features("t1", "p1", redis, _ch_mock()))
+        features = _compute_features("t1", "p1", redis, _ch_mock())
         ratio = features["ratio_withdrawal_to_deposit_7d"]
         self.assertAlmostEqual(ratio, 9000.0 / 10000.0, places=3)
 
@@ -238,7 +250,7 @@ class TestZscoreFeature(unittest.TestCase):
              "ts": (now - timedelta(hours=1)).isoformat(), "method": "PIX", "currency": "BRL"}
         ]
         redis = _make_redis_mock(txn_entries=historical + spike)
-        features = _run(compute_features("t1", "p1", redis, _ch_mock()))
+        features = _compute_features("t1", "p1", redis, _ch_mock())
         self.assertGreater(features["zscore_current_deposit_vs_baseline"], 1.0)
 
     def test_zscore_normal_is_low(self):
@@ -250,7 +262,7 @@ class TestZscoreFeature(unittest.TestCase):
             for d in range(1, 20)
         ]
         redis = _make_redis_mock(txn_entries=txns)
-        features = _run(compute_features("t1", "p1", redis, _ch_mock()))
+        features = _compute_features("t1", "p1", redis, _ch_mock())
         # std=0 → zscore formulado como 0 (proteção divisão por zero)
         self.assertEqual(features["zscore_current_deposit_vs_baseline"], 0.0)
 
@@ -260,13 +272,13 @@ class TestSharedDeviceFeature(unittest.TestCase):
 
     def test_no_devices_means_zero(self):
         redis = _make_redis_mock(player_device_ids=[], device_member_count=1)
-        features = _run(compute_features("t1", "p1", redis, _ch_mock()))
+        features = _compute_features("t1", "p1", redis, _ch_mock())
         self.assertEqual(features["shared_device_count"], 0)
 
     def test_shared_by_4_counts_3(self):
         # scard retorna 4 (4 players usam o mesmo device), self = 1, shared = 3
         redis = _make_redis_mock(player_device_ids=["dev-001"], device_member_count=4)
-        features = _run(compute_features("t1", "p1", redis, _ch_mock()))
+        features = _compute_features("t1", "p1", redis, _ch_mock())
         self.assertEqual(features["shared_device_count"], 3)
 
 
@@ -283,7 +295,7 @@ class TestNightActivityRatio(unittest.TestCase):
             for d in range(5)
         ]
         redis = _make_redis_mock(txn_entries=txns)
-        features = _run(compute_features("t1", "p1", redis, _ch_mock()))
+        features = _compute_features("t1", "p1", redis, _ch_mock())
         self.assertAlmostEqual(features["night_activity_ratio"], 1.0, places=1)
 
     def test_no_night_transactions_ratio_is_0(self):
@@ -295,7 +307,7 @@ class TestNightActivityRatio(unittest.TestCase):
             for d in range(5)
         ]
         redis = _make_redis_mock(txn_entries=txns)
-        features = _run(compute_features("t1", "p1", redis, _ch_mock()))
+        features = _compute_features("t1", "p1", redis, _ch_mock())
         self.assertEqual(features["night_activity_ratio"], 0.0)
 
 
@@ -313,6 +325,27 @@ class TestFeatureSnapshotPersistence(unittest.TestCase):
 
         assert "_ch_insert_features" in calls
         assert calls.count("_persist_feature_snapshot") == 1
+
+
+class TestCashoutRatio(unittest.TestCase):
+    def test_cashout_ratio_uses_bet_cashout_signal(self):
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        bets = [
+            {"ts": (now - timedelta(days=1)).isoformat(), "amount": 100.0, "odds": 2.0, "outcome": "OPEN", "status": "CASHOUT", "cashout_amount": 90.0},
+            {"ts": (now - timedelta(days=2)).isoformat(), "amount": 120.0, "odds": 1.8, "outcome": "LOSS", "status": "SETTLED", "cashout_amount": None},
+        ]
+        redis = _make_redis_mock(bet_entries=bets)
+        features = _compute_features("t1", "p1", redis, _ch_mock())
+        self.assertAlmostEqual(features["cashout_ratio_7d"], 0.5, places=4)
+
+
+class TestFeatureMetadata(unittest.TestCase):
+    def test_compute_features_emits_gold_metadata(self):
+        redis = _make_redis_mock()
+        features = _compute_features("tenant-x", "player-y", redis, _ch_mock())
+        self.assertEqual(features["entity_type"], "PLAYER")
+        self.assertEqual(features["snapshot_version"], 2)
+        self.assertIn("gold/tenant_id=tenant-x/", features["gold_object_path"])
 
 
 if __name__ == "__main__":

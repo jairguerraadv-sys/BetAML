@@ -76,7 +76,10 @@ async def test_build_monthly_report_returns_expected_keys():
     assert "top_rules_by_fires" in result
     assert "top_players_by_risk" in result
     assert "total_ingested_events" in result
+    assert "total_communications_generated" in result
+    assert "quality_metrics" in result
     assert "false_positive_rate" in result
+    assert "true_positive_rate" in result
     assert "generated_at" in result
 
 
@@ -93,6 +96,7 @@ async def test_build_monthly_report_defaults_zero_counts():
 
     assert result["alerts_by_severity"]["CRITICAL"] == 0
     assert result["total_ingested_events"] == 0
+    assert result["total_communications_generated"] == 0
     assert result["false_positive_rate"] is None
 
 

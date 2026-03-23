@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS ingest_jobs (
     file_size_bytes BIGINT,
     file_path       TEXT,
     status          TEXT NOT NULL DEFAULT 'QUEUED'
-                        CHECK (status IN ('QUEUED','PROCESSING','DONE','FAILED')),
+                        CHECK (status IN ('QUEUED','PROCESSING','DONE','FAILED','PARTIAL')),
     total_records   INT,
     processed_records INT DEFAULT 0,
     failed_records  INT DEFAULT 0,
@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS cases (
     title           TEXT NOT NULL,
     description     TEXT,
     status          TEXT NOT NULL DEFAULT 'OPEN'
-                        CHECK (status IN ('OPEN','IN_REVIEW','PENDING_INFO','CLOSED_SAR','CLOSED_SAT','CLOSED')),
+                        CHECK (status IN ('OPEN','INVESTIGATING','PENDING_REVIEW','CLOSED','REPORTED')),
     severity        TEXT NOT NULL DEFAULT 'HIGH'
                         CHECK (severity IN ('LOW','MEDIUM','HIGH','CRITICAL')),
     assigned_to     UUID REFERENCES users(id),

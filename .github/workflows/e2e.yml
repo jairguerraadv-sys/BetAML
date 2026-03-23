@@ -3,6 +3,10 @@ name: E2E Tests
 "on":
   workflow_dispatch:          # manual trigger via GitHub UI
     inputs:
+      suite:
+        description: "Suite E2E a executar"
+        required: false
+        default: "smoke"
       e2e_username:
         description: "Usuario de teste E2E"
         required: false
@@ -33,7 +37,7 @@ jobs:
         run: |
           cp .env.example .env
           docker compose -f infra/docker-compose.yml up -d \
-            postgres redis redpanda topic-init api frontend
+            postgres redis minio clickhouse redpanda topic-init api frontend stream-processor rules-engine ml-service
         env:
           JWT_SECRET: ci-e2e-secret-at-least-32-characters-long
           PII_ENCRYPTION_KEY: ci-pii-key-32-characters-long!!
@@ -77,25 +81,74 @@ jobs:
           E2E_API_URL=${E2E_API_URL}
           E2E_USERNAME=${E2E_USERNAME}
           E2E_PASSWORD=${E2E_PASSWORD}
+          E2E_ADMIN_USERNAME=${E2E_ADMIN_USERNAME}
+          E2E_ADMIN_PASSWORD=${E2E_ADMIN_PASSWORD}
+          E2E_SECONDARY_ADMIN_USERNAME=${E2E_SECONDARY_ADMIN_USERNAME}
+          E2E_SECONDARY_ADMIN_PASSWORD=${E2E_SECONDARY_ADMIN_PASSWORD}
+          E2E_AUDITOR_USERNAME=${E2E_AUDITOR_USERNAME}
+          E2E_AUDITOR_PASSWORD=${E2E_AUDITOR_PASSWORD}
           EOF
         env:
           E2E_USERNAME: ${{ github.event.inputs.e2e_username || 'analyst_a' }}
           E2E_PASSWORD: ${{ github.event.inputs.e2e_password || 'analyst123' }}
+          E2E_ADMIN_USERNAME: admin_a
+          E2E_ADMIN_PASSWORD: admin123
+          E2E_SECONDARY_ADMIN_USERNAME: admin_b
+          E2E_SECONDARY_ADMIN_PASSWORD: admin123
+          E2E_AUDITOR_USERNAME: auditor_a
+          E2E_AUDITOR_PASSWORD: auditor123
 
       - name: Install Playwright browsers
         working-directory: e2e
         run: npx playwright install --with-deps chromium
 
-      - name: Run E2E smoke tests
+      - name: Run E2E suite
         working-directory: e2e
-        run: npx playwright test tests/auth.spec.ts tests/cases.spec.ts --reporter=html
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report
+          PLAYWRIGHT_JUNIT_OUTPUT_DIR: test-results
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: e2e-junit.xml
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            npm run test:nightly -- --reporter=html,junit
+          elif [ "${{ github.event.inputs.suite || 'smoke' }}" = "extended" ]; then
+            npm run test:extended -- --reporter=html,junit
+          elif [ "${{ github.event.inputs.suite || 'smoke' }}" = "security" ]; then
+            npm run test:security -- --reporter=html,junit
+          elif [ "${{ github.event.inputs.suite || 'smoke' }}" = "nightly" ]; then
+            npm run test:nightly -- --reporter=html,junit
+          else
+            npm run test:smoke -- --reporter=html,junit
+          fi
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: playwright-report
+          name: artifact-e2e-playwright-report
           path: e2e/playwright-report/
+          retention-days: 14
+
+      - name: Upload Playwright test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-e2e-playwright-results
+          path: e2e/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Dump docker logs on failure
+        if: failure()
+        run: docker compose -f infra/docker-compose.yml logs --no-color > /tmp/e2e-docker-logs.txt || true
+
+      - name: Upload docker logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-e2e-docker-logs
+          path: /tmp/e2e-docker-logs.txt
+          if-no-files-found: ignore
           retention-days: 14
 
       - name: Stop services

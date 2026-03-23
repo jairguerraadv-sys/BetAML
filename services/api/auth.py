@@ -183,13 +183,50 @@ async def validate_api_key(
     """
     key_hash = hashlib.sha256(x_api_key.encode()).hexdigest()
 
-    result = await db.execute(
-        select(ApiKey).where(
-            ApiKey.key_hash == key_hash,
-            ApiKey.active.is_(True),
+    def _tenant_from_raw_api_key(raw_key: str) -> str | None:
+        # v2 format: btml_<tenant_uuid_hex32>_<secret>
+        if not raw_key.startswith("btml_"):
+            return None
+        parts = raw_key.split("_", 2)
+        if len(parts) < 3:
+            return None
+        tenant_hex = parts[1].strip().lower()
+        if len(tenant_hex) != 32:
+            return None
+        try:
+            return str(uuid.UUID(hex=tenant_hex))
+        except ValueError:
+            return None
+
+    api_key: ApiKey | None = None
+    hinted_tenant = _tenant_from_raw_api_key(x_api_key)
+
+    # Fast path for v2 keys: set tenant context before querying api_keys (FORCE RLS).
+    if hinted_tenant:
+        await _set_db_tenant_context(db, hinted_tenant)
+        result = await db.execute(
+            select(ApiKey).where(
+                ApiKey.tenant_id == hinted_tenant,
+                ApiKey.key_hash == key_hash,
+                ApiKey.active.is_(True),
+            )
         )
-    )
-    api_key = result.scalar_one_or_none()
+        api_key = result.scalar_one_or_none()
+
+    # Backward-compatible path for legacy keys without tenant hint.
+    if api_key is None and not hinted_tenant:
+        tenant_ids = (await db.execute(select(Tenant.id))).scalars().all()
+        for tenant_id in tenant_ids:
+            await _set_db_tenant_context(db, str(tenant_id))
+            result = await db.execute(
+                select(ApiKey).where(
+                    ApiKey.key_hash == key_hash,
+                    ApiKey.active.is_(True),
+                )
+            )
+            api_key = result.scalar_one_or_none()
+            if api_key is not None:
+                break
 
     if api_key is None:
         raise HTTPException(

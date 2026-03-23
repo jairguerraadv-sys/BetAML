@@ -520,12 +520,19 @@ async def compute_feature_population_stats() -> None:
                             "p50":   round(_percentile(sorted_vals, 50), 4),
                             "p75":   round(_percentile(sorted_vals, 75), 4),
                             "p90":   round(_percentile(sorted_vals, 90), 4),
+                            "count": n,
                         }
 
                     redis_key = f"feature_stats:{tenant.id}"
                     await redis_client.set(
                         redis_key,
-                        json.dumps(stats_out, ensure_ascii=False),
+                        json.dumps(
+                            {
+                                "computed_at": datetime.now(UTC).isoformat(),
+                                "features": stats_out,
+                            },
+                            ensure_ascii=False,
+                        ),
                         ex=25 * 3600,   # 25h TTL — outlasts a missed daily run
                     )
 

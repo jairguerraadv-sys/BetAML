@@ -63,6 +63,42 @@ _maintenance_cache: dict[str, tuple[bool, float]] = {}
 _CACHE_TTL = 60.0  # seconds
 
 
+def _decode_auth_payload(token: str) -> dict | None:
+    try:
+        return _jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+        )
+    except JWTError:
+        if settings.environment in ("development", "test"):
+            try:
+                return _jwt.decode(
+                    token,
+                    "dev-secret-change-me",
+                    algorithms=[settings.jwt_algorithm],
+                )
+            except JWTError:
+                return None
+        return None
+
+
+def _is_safe_maintenance_disable_request(request: Request, payload: dict | None) -> bool:
+    """Allow admins to disable maintenance mode even while it is active.
+
+    Without this exception the tenant can be locked in maintenance until the
+    TTL cache expires, because the middleware blocks the same endpoint used to
+    turn maintenance off.
+    """
+    if request.url.path != "/admin/maintenance-mode":
+        return False
+    if request.method.upper() not in {"POST", "PUT"}:
+        return False
+    if str(request.query_params.get("enabled", "")).lower() != "false":
+        return False
+    return bool(payload and payload.get("role") == "ADMIN")
+
+
 async def _is_maintenance_enabled(tenant_id: str) -> bool:
     """Return True if maintenance mode is active for the tenant.
 
@@ -110,29 +146,12 @@ class MaintenanceModeMiddleware(BaseHTTPMiddleware):
         if not auth_header.startswith("Bearer "):
             return await call_next(request)
 
-        tenant_id: str | None = None
-        try:
-            payload = _jwt.decode(
-                auth_header[7:],
-                settings.jwt_secret,
-                algorithms=[settings.jwt_algorithm],
-            )
-            tenant_id = payload.get("tenant_id")
-        except JWTError:
-            # Best-effort fallback for unit tests/dev where the token may be
-            # signed with the default dev secret (see tests/unit/test_module7.py).
-            if settings.environment in ("development", "test"):
-                try:
-                    payload = _jwt.decode(
-                        auth_header[7:],
-                        "dev-secret-change-me",
-                        algorithms=[settings.jwt_algorithm],
-                    )
-                    tenant_id = payload.get("tenant_id")
-                except JWTError:
-                    pass
+        payload = _decode_auth_payload(auth_header[7:])
+        tenant_id: str | None = payload.get("tenant_id") if payload else None
 
         if tenant_id and await _is_maintenance_enabled(tenant_id):
+            if _is_safe_maintenance_disable_request(request, payload):
+                return await call_next(request)
             return JSONResponse(
                 {
                     "detail": (

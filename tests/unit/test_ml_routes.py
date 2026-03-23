@@ -6,11 +6,15 @@ Tests cover:
   - POST /model-registry/{id}/promote: archives champion, promotes challenger, 404 for unknown
   - POST /model-registry/{id}/challenger: sets is_challenger=True, 404 for unknown, 400 for champion
   - ModelRegistryOut schema: model_name Optional, algorithm Optional, version alias works
+  - ML performance summary helper aggregates TP/FP trends by rule and model
+  - A/B metrics helper compares champion vs challenger over time
 """
 from __future__ import annotations
 
 import os
 import sys
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -263,3 +267,89 @@ def test_model_registry_out_with_all_fields():
     )
     assert out.model_name == "IsolationForest"
     assert out.metrics["auc_roc"] == 0.90
+
+
+def test_build_performance_summary_aggregates_feedback_by_model_and_rule():
+    from routers.ml import _build_performance_summary
+
+    now = datetime.now(UTC)
+    model = SimpleNamespace(
+        id="model-1",
+        model_name="StructuringDetector",
+        algorithm="GradientBoosting",
+        status="champion",
+    )
+    alerts = [
+        SimpleNamespace(
+            id="a1",
+            title="Structuring Spike — p1",
+            rule_id="rule-1",
+            label="TRUE_POSITIVE",
+            created_at=now - timedelta(days=1),
+            evidence={"model_id": "model-1"},
+        ),
+        SimpleNamespace(
+            id="a2",
+            title="Structuring Spike — p2",
+            rule_id="rule-1",
+            label="FALSE_POSITIVE",
+            created_at=now - timedelta(days=1),
+            evidence={"model_id": "model-1"},
+        ),
+        SimpleNamespace(
+            id="a3",
+            title="Structuring Spike — p3",
+            rule_id="rule-1",
+            label=None,
+            created_at=now,
+            evidence={"model_id": "model-1"},
+        ),
+    ]
+
+    result = _build_performance_summary([model], alerts, days=30, challenger_split_pct=20)
+
+    assert result["days_window"] == 30
+    assert result["challenger_split_pct"] == 20
+    assert result["totals"]["total_alerts"] == 3
+    assert result["totals"]["labeled_alerts"] == 2
+    assert result["totals"]["precision_estimated"] == 0.5
+    assert result["by_rule"][0]["rule_name"] == "Structuring Spike"
+    assert result["by_model"][0]["model_id"] == "model-1"
+    assert result["by_model"][0]["false_positive_rate"] == 0.5
+
+
+def test_build_ab_metrics_compares_champion_and_challenger():
+    from routers.ml import _build_ab_metrics
+
+    now = datetime.now(UTC)
+    champion = SimpleNamespace(
+        id="champ-1",
+        model_name="IsolationForest",
+        status="champion",
+        is_challenger=False,
+    )
+    challenger = SimpleNamespace(
+        id="chal-1",
+        model_name="IsolationForest-v2",
+        status="challenger",
+        is_challenger=True,
+    )
+    logs = [
+        SimpleNamespace(model_id="champ-1", anomaly_score=0.32, created_at=now - timedelta(days=1)),
+        SimpleNamespace(model_id="chal-1", anomaly_score=0.61, created_at=now - timedelta(days=1)),
+        SimpleNamespace(model_id="chal-1", anomaly_score=0.82, created_at=now),
+    ]
+    alerts = [
+        SimpleNamespace(label="TRUE_POSITIVE", created_at=now - timedelta(days=1), evidence={"model_id": "champ-1"}),
+        SimpleNamespace(label="FALSE_POSITIVE", created_at=now, evidence={"model_id": "chal-1"}),
+        SimpleNamespace(label="TRUE_POSITIVE", created_at=now, evidence={"model_id": "chal-1"}),
+    ]
+
+    result = _build_ab_metrics(challenger, champion, logs, alerts, days=14)
+
+    assert result["role"] == "challenger"
+    assert result["champion_inferences"] == 1
+    assert result["challenger_inferences"] == 2
+    assert result["champion_precision_estimated"] == 1.0
+    assert result["challenger_precision_estimated"] == 0.5
+    assert len(result["timeline"]) == 2

@@ -16,6 +16,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from starlette.requests import Request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../services/api"))
 
@@ -47,6 +48,15 @@ def _make_db(scalar_one_result=None):
 
     db.execute = _execute
     return db
+
+
+class _FakeUploadFile:
+    def __init__(self, filename: str, content: bytes):
+        self.filename = filename
+        self._content = content
+
+    async def read(self) -> bytes:
+        return self._content
 
 
 # ---------------------------------------------------------------------------
@@ -343,3 +353,172 @@ def test_ingest_router_has_errors_endpoint():
     paths = [r.path for r in router.routes if hasattr(r, "path")]
     error_paths = [p for p in paths if "error" in p.lower()]
     assert error_paths, f"No error endpoints found. Paths: {paths}"
+
+
+def test_ingest_router_has_streaming_endpoints():
+    from routers.ingest import router
+    paths = [r.path for r in router.routes if hasattr(r, "path")]
+    assert "/ingest/stream" in paths
+    assert "/ingest/ws" in paths
+
+
+@pytest.mark.asyncio
+async def test_ingest_sse_stream_returns_heartbeat_chunk():
+    from routers.ingest import ingest_sse_stream
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/ingest/stream",
+            "headers": [],
+            "query_string": b"",
+            "client": ("127.0.0.1", 1234),
+        },
+        receive=receive,
+    )
+
+    with patch.object(request, "is_disconnected", AsyncMock(side_effect=[False, True])), \
+         patch("routers.ingest.asyncio.sleep", AsyncMock(return_value=None)):
+        response = await ingest_sse_stream(request=request, current_user=_make_user())
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk)
+
+    body = b"".join(c if isinstance(c, bytes) else c.encode("utf-8") for c in chunks).decode("utf-8")
+    assert "heartbeat" in body
+    assert "data:" in body
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_persists_bronze_path_without_refresh_after_second_commit():
+    from routers.ingest import ingest_file, IngestPrincipal
+
+    db = _make_db()
+    db.refresh = AsyncMock()
+    principal = IngestPrincipal(tenant_id="t1", id="u1", role="ADMIN")
+    upload = _FakeUploadFile(
+        "transactions.csv",
+        b"player_id,amount,currency,transaction_type,occurred_at,method,status\nPLY-1,100,BRL,DEPOSIT,2026-03-20T10:00:00Z,PIX,SETTLED\n",
+    )
+
+    with patch("routers.ingest.redis_rate_limit", new_callable=AsyncMock), \
+         patch("routers.ingest.get_producer", new_callable=AsyncMock, return_value=None), \
+         patch("routers.ingest._upload_bronze_file", return_value="bronze/t1/ingest_jobs/job-1/transactions.csv"):
+        response = await ingest_file(
+            background_tasks=MagicMock(),
+            file=upload,
+            source_system="BackofficeAlpha",
+            mapping_config_id=None,
+            principal=principal,
+            db=db,
+        )
+
+    assert response["status"] == "QUEUED"
+    assert db.refresh.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_keeps_flow_when_refresh_fails():
+    from routers.ingest import ingest_file, IngestPrincipal
+
+    db = _make_db()
+    db.refresh = AsyncMock(side_effect=RuntimeError("refresh failed"))
+    principal = IngestPrincipal(tenant_id="t1", id="u1", role="ADMIN")
+    upload = _FakeUploadFile(
+        "transactions.csv",
+        b"player_id,amount,currency,transaction_type,occurred_at,method,status\nPLY-1,100,BRL,DEPOSIT,2026-03-20T10:00:00Z,PIX,SETTLED\n",
+    )
+
+    with patch("routers.ingest.redis_rate_limit", new_callable=AsyncMock), \
+         patch("routers.ingest.get_producer", new_callable=AsyncMock, return_value=None), \
+         patch("routers.ingest._upload_bronze_file", return_value="bronze/t1/ingest_jobs/job-1/transactions.csv"):
+        response = await ingest_file(
+            background_tasks=MagicMock(),
+            file=upload,
+            source_system="BackofficeAlpha",
+            mapping_config_id=None,
+            principal=principal,
+            db=db,
+        )
+
+    assert response["status"] == "QUEUED"
+    assert db.refresh.await_count == 1
+    assert db.commit.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_parse_connector_payload_keeps_flow_when_refresh_fails():
+    from routers.ingest import parse_connector_payload
+
+    db = _make_db()
+    db.refresh = AsyncMock(side_effect=RuntimeError("refresh failed"))
+    current_user = _make_user(role="ADMIN")
+    upload = _FakeUploadFile(
+        "gamma.xml",
+        b"""<Events><Transaction><EventId>g-1</EventId><PlayerId>P-1</PlayerId><Type>DEPOSIT</Type><Amount currency='BRL'>100.0</Amount><Timestamp>2026-03-20T10:00:00Z</Timestamp><Instrument><Type>PIX</Type><Token>pix-1</Token></Instrument><DeviceId>d-1</DeviceId></Transaction></Events>""",
+    )
+
+    parse_result = MagicMock()
+    parse_result.total = 1
+    parse_result.failed = 0
+    parse_result.records = [{"event_id": "g-1", "external_player_id": "P-1", "transaction_type": "DEPOSIT", "amount": 100}]
+    parse_result.errors = []
+    connector = MagicMock()
+    connector.parse.return_value = parse_result
+
+    with patch("routers.ingest._ensure_db_tenant_context", new_callable=AsyncMock), \
+         patch("routers.ingest._tenant_ingest_rate_limit", new_callable=AsyncMock, return_value=300), \
+         patch("routers.ingest.redis_rate_limit", new_callable=AsyncMock), \
+         patch("routers.ingest.get_connector", return_value=connector), \
+         patch("routers.ingest.get_producer", new_callable=AsyncMock, return_value=None), \
+         patch("routers.ingest._upload_bronze_file", return_value="bronze/t1/ingest_jobs/job-1/gamma.xml"):
+        response = await parse_connector_payload(
+            connector_name="gamma",
+            file=upload,
+            entity_type="TRANSACTION",
+            current_user=current_user,
+            db=db,
+        )
+
+    assert response["status"] == "DONE"
+    assert response["summary"]["accepted"] == 1
+    assert response["summary"]["failed"] == 0
+    assert db.refresh.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_reprocess_job_queues_without_refresh_after_commit():
+    from routers.ingest import reprocess_job, ReprocessRequest
+
+    db = _make_db()
+    db.refresh = AsyncMock()
+    current_user = _make_user(role="ADMIN")
+    original_job = MagicMock()
+    original_job.id = "job-original"
+    original_job.tenant_id = "t1"
+    original_job.status = "DONE"
+    original_job.file_path = "bronze/t1/ingest_jobs/job-original/file.csv"
+    original_job.mapping_config_id = None
+    original_job.source_system = "BackofficeAlpha"
+    original_job.connector_type = "FILE"
+    original_job.file_name = "file.csv"
+    original_job.file_size_bytes = 128
+    db.get = AsyncMock(return_value=original_job)
+
+    producer = MagicMock()
+    producer.send = AsyncMock(return_value=None)
+
+    with patch("routers.ingest.get_producer", new_callable=AsyncMock, return_value=producer):
+        response = await reprocess_job(
+            job_id="job-original",
+            body=ReprocessRequest(reason="retry_e2e"),
+            current_user=current_user,
+            db=db,
+        )
+
+    assert response["status"] == "QUEUED"
+    assert db.refresh.await_count == 0

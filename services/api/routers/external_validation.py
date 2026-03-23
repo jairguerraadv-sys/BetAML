@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import require_roles
@@ -49,6 +49,17 @@ def _serialize_validation(req: ExternalValidationRequest) -> dict:
     }
 
 
+async def _set_tenant_context(db: AsyncSession, tenant_id: str) -> None:
+    """Best-effort tenant context for RLS-aware background sessions."""
+    try:
+        await db.execute(
+            text("SELECT set_config('app.current_tenant', :tid, false)"),
+            {"tid": str(tenant_id)},
+        )
+    except Exception:
+        return
+
+
 async def _mock_provider_call(provider: str, validation_type: str, request_id: str) -> dict:
     # Simula latência e resposta de provider externo.
     now = datetime.now(timezone.utc)
@@ -73,9 +84,11 @@ async def _mock_provider_call(provider: str, validation_type: str, request_id: s
     }
 
 
-async def _process_validation_request(request_id: str) -> None:
+async def _process_validation_request(request_id: str, tenant_id: str | None = None) -> None:
     """Processamento assíncrono mockado para provider externo."""
     async with AsyncSessionLocal() as db:
+        if tenant_id:
+            await _set_tenant_context(db, tenant_id)
         req = await db.get(ExternalValidationRequest, request_id)
         if not req:
             return
@@ -152,6 +165,12 @@ async def request_external_validation(
     )
     existing = (await db.execute(existing_q)).scalars().first()
     if existing:
+        if existing.status in {"PENDING", "IN_PROGRESS"}:
+            background_tasks.add_task(
+                _process_validation_request,
+                str(existing.id),
+                str(current_user.tenant_id),
+            )
         payload = _serialize_validation(existing)
         payload["idempotent_reuse"] = True
         return payload
@@ -173,7 +192,11 @@ async def request_external_validation(
     observe_external_validation_request(body.provider, body.validation_type)
     await write_audit(db, current_user.tenant_id, current_user.id, "EXTERNAL_VALIDATION_REQUEST", "Player", player_id, after=body.payload)
     await db.commit()
-    background_tasks.add_task(_process_validation_request, str(ext_req.id))
+    background_tasks.add_task(
+        _process_validation_request,
+        str(ext_req.id),
+        str(current_user.tenant_id),
+    )
     return _serialize_validation(ext_req)
 
 @router.get("/players/{player_id}/external-validation/latest")
@@ -241,7 +264,11 @@ async def retry_external_validation(
         after={"retry_request_id": str(retry_req.id)},
     )
     await db.commit()
-    background_tasks.add_task(_process_validation_request, str(retry_req.id))
+    background_tasks.add_task(
+        _process_validation_request,
+        str(retry_req.id),
+        str(current_user.tenant_id),
+    )
     return {
         "status": "QUEUED",
         "request_id": str(retry_req.id),

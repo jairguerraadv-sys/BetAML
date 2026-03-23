@@ -262,8 +262,9 @@ async def _process_alert_event(payload: dict, Session: async_sessionmaker) -> No
                 evt = CaseEvent(
                     case_id    = existing.id,
                     tenant_id  = tenant_id,
-                    event_type = "AUTO_ALERT_LINKED",
+                    event_type = "NOTE",
                     content    = {
+                        "kind":           "AUTO_ALERT_LINKED",
                         "alert_id":       str(alert.id),
                         "severity":       severity,
                         "composite_score": composite,

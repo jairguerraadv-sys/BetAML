@@ -33,6 +33,45 @@ jobs:
             exit 1
           fi
 
+  # ── Sanity: comandos documentados e scripts essenciais ─────────────────────
+  contributor-sanity:
+    name: Contributor Guide Sanity
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate batched runner script syntax
+        run: bash -n scripts/run_critical_unit_batches.sh
+
+      - name: Validate documented commands and E2E scripts
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          doc = Path("docs/contributing.md").read_text(encoding="utf-8")
+          required_doc_tokens = [
+              "scripts/run_critical_unit_batches.sh --include-remainder",
+              "npm run test:smoke -- --reporter=html,junit",
+              "npm run test:extended -- --reporter=html,junit",
+              "npm run test:security -- --reporter=html,junit",
+              "npm run test:nightly -- --reporter=html,junit",
+          ]
+          missing = [token for token in required_doc_tokens if token not in doc]
+          if missing:
+              raise SystemExit(f"Missing commands in docs/contributing.md: {missing}")
+
+          pkg = json.loads(Path("e2e/package.json").read_text(encoding="utf-8"))
+          scripts = pkg.get("scripts", {})
+          required_scripts = ["test:smoke", "test:extended", "test:security", "test:nightly"]
+          missing_scripts = [name for name in required_scripts if name not in scripts]
+          if missing_scripts:
+              raise SystemExit(f"Missing npm scripts in e2e/package.json: {missing_scripts}")
+
+          print("Contributor sanity checks passed")
+          PY
+
   # ── Backend: unit + security + integration (mock) tests ────────────────────
   backend-tests:
     name: Backend Tests (pytest)
@@ -56,7 +95,7 @@ jobs:
           pip install -r services/api/requirements.txt
           pip install -r requirements-dev.txt
 
-      - name: Run tests with coverage
+      - name: Run batched backend tests with coverage
         env:
           JWT_SECRET: ci-test-secret-at-least-32-characters-long
           PII_ENCRYPTION_KEY: ci-pii-test-key-32-characters-long!!
@@ -65,7 +104,7 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           KAFKA_BOOTSTRAP_SERVERS: localhost:9092
         run: |
-          python -m pytest tests/ -q --tb=short \
+          bash scripts/run_critical_unit_batches.sh --include-remainder -q --tb=short \
             --cov=services/api \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
@@ -75,7 +114,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-report
+          name: artifact-backend-coverage-ci
           path: coverage.xml
           retention-days: 7
 

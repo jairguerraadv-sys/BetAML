@@ -1,29 +1,45 @@
 'use client';
+
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchAlerts, fetchCases, fetchDashboardStats } from '@/lib/api';
-import { useUser } from '@/contexts/UserContext';
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
-} from 'recharts';
 import Link from 'next/link';
 import {
-  AlertTriangle, FolderOpen, Clock, TrendingDown,
-  Zap, CheckCircle2, ChevronRight,
+  BarChart as BarChartIcon,
+  AlertTriangle,
+  FolderOpen,
+  Clock,
+  ShieldAlert,
+  Activity,
+  ChevronRight,
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  PieChart,
+  Pie,
+  Cell,
+  BarChart,
+  Bar,
+  Legend,
+} from 'recharts';
+
+import { fetchDashboardStats } from '@/lib/api';
+import { useUser } from '@/contexts/UserContext';
+import { fmtDate, useLocale } from '@/lib/i18n';
 
 const SEV_COLOR: Record<string, string> = {
-  CRITICAL: '#ef4444',
-  HIGH:     '#f97316',
-  MEDIUM:   '#eab308',
-  LOW:      '#22c55e',
+  CRITICAL: '#dc2626',
+  HIGH: '#f97316',
+  MEDIUM: '#eab308',
+  LOW: '#22c55e',
 };
 
-const SEV_LABEL: Record<string, string> = {
-  CRITICAL: 'Crítico',
-  HIGH:     'Alto',
-  MEDIUM:   'Médio',
-  LOW:      'Baixo',
-};
+const WEEKDAY_LABELS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'];
 
 function greeting() {
   const h = new Date().getHours();
@@ -32,208 +48,329 @@ function greeting() {
   return 'Boa noite';
 }
 
+function formatCompactDate(iso: string, locale: string) {
+  return new Intl.DateTimeFormat(locale, { day: '2-digit', month: '2-digit' }).format(new Date(iso));
+}
+
 function KpiCard({
-  icon: Icon, title, value, sub, href, variant = 'default',
+  icon: Icon,
+  title,
+  value,
+  sub,
+  href,
+  tone = 'default',
 }: {
   icon: React.ElementType;
-  title: string; value: number | string; sub?: string; href?: string;
-  variant?: 'default' | 'red' | 'orange' | 'green';
+  title: string;
+  value: number | string;
+  sub?: string;
+  href?: string;
+  tone?: 'default' | 'warning' | 'danger' | 'success';
 }) {
-  const colors = {
-    default: 'border-gray-200 bg-white',
-    red:     'border-red-200 bg-red-50',
-    orange:  'border-orange-200 bg-orange-50',
-    green:   'border-green-200 bg-green-50',
+  const cls = {
+    default: 'border-slate-200 bg-white',
+    warning: 'border-amber-200 bg-amber-50',
+    danger: 'border-red-200 bg-red-50',
+    success: 'border-emerald-200 bg-emerald-50',
   };
-  const textColors = {
-    default: 'text-gray-900', red: 'text-red-700',
-    orange:  'text-orange-600', green: 'text-green-700',
+  const iconCls = {
+    default: 'text-sky-600',
+    warning: 'text-amber-600',
+    danger: 'text-red-600',
+    success: 'text-emerald-600',
   };
-  const iconColors = {
-    default: 'text-brand', red: 'text-red-500',
-    orange:  'text-orange-500', green: 'text-green-600',
-  };
-  const inner = (
-    <div className={`rounded-xl border p-5 shadow-sm transition-shadow hover:shadow-md ${colors[variant]}`}>
-      <div className="flex items-start justify-between">
-        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">{title}</p>
-        <Icon size={18} className={iconColors[variant]} />
+
+  const content = (
+    <div className={`rounded-2xl border p-5 shadow-sm transition-shadow hover:shadow-md ${cls[tone]}`}>
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">{title}</p>
+        <Icon size={18} className={iconCls[tone]} aria-hidden="true" />
       </div>
-      <p className={`mt-2 text-4xl font-bold ${textColors[variant]}`}>{value}</p>
-      {sub && <p className="mt-1 text-xs text-gray-400">{sub}</p>}
+      <p className="mt-3 text-4xl font-bold tracking-tight text-gray-950">{value}</p>
+      {sub && <p className="mt-1 text-xs text-gray-500">{sub}</p>}
       {href && (
-        <p className="mt-3 flex items-center gap-1 text-xs font-medium text-brand">
-          Ver todos <ChevronRight size={12} />
+        <p className="mt-4 flex items-center gap-1 text-xs font-semibold text-brand">
+          Abrir painel <ChevronRight size={12} aria-hidden="true" />
         </p>
       )}
     </div>
   );
-  return href ? <Link href={href}>{inner}</Link> : inner;
+
+  return href ? <Link href={href}>{content}</Link> : content;
+}
+
+function Heatmap({
+  points,
+}: {
+  points: Array<{ weekday: number; hour: number; count: number }>;
+}) {
+  const max = points.reduce((acc, point) => Math.max(acc, point.count), 1);
+  const map = new Map(points.map((point) => [`${point.weekday}-${point.hour}`, point.count]));
+
+  return (
+    <div className="overflow-x-auto" aria-label="Mapa de calor de alertas por hora e dia da semana">
+      <div className="grid min-w-[760px] grid-cols-[80px_repeat(24,minmax(20px,1fr))] gap-1 text-[10px]">
+        <div />
+        {Array.from({ length: 24 }).map((_, hour) => (
+          <div key={hour} className="text-center text-gray-400">
+            {hour.toString().padStart(2, '0')}
+          </div>
+        ))}
+        {WEEKDAY_LABELS.map((day, weekday) => (
+          <div key={day} className="contents">
+            <div className="flex items-center pr-2 text-xs font-medium text-gray-600">{day}</div>
+            {Array.from({ length: 24 }).map((_, hour) => {
+              const count = map.get(`${weekday}-${hour}`) ?? 0;
+              const opacity = count === 0 ? 0.08 : Math.max(count / max, 0.18);
+              return (
+                <div
+                  key={`${weekday}-${hour}`}
+                  className="h-6 rounded-md border border-white/40"
+                  style={{ backgroundColor: `rgba(14, 165, 233, ${opacity})` }}
+                  aria-label={`${day} às ${hour}h: ${count} alertas`}
+                  title={`${day} às ${hour}h: ${count} alertas`}
+                />
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function DashboardPage() {
   const { user } = useUser();
+  const [locale] = useLocale();
   const userName = user?.username ?? '';
 
-  // Pre-aggregated KPIs — single DB query, no 500-record pagination
-  const { data: stats } = useQuery({
+  const { data: stats, isLoading } = useQuery({
     queryKey: ['dashboard-stats'],
-    queryFn:  fetchDashboardStats,
+    queryFn: fetchDashboardStats,
     refetchInterval: 30_000,
   });
 
-  // Small targeted fetches for the detail list sections only
-  const { data: critAlertsData } = useQuery({
-    queryKey: ['alerts', 'dashboard-crit'],
-    queryFn:  () => fetchAlerts({ severity: 'CRITICAL', status: 'OPEN', per_page: '5' }),
-    refetchInterval: 30_000,
-  });
-  const { data: recentCasesData } = useQuery({
-    queryKey: ['cases', 'dashboard-sla'],
-    queryFn:  () => fetchCases({ per_page: '20' }),
-    refetchInterval: 30_000,
-  });
+  const severityTimeline = useMemo(
+    () =>
+      (stats?.alerts_by_severity_30d ?? []).map((row) => ({
+        ...row,
+        label: formatCompactDate(row.date, locale),
+      })),
+    [stats?.alerts_by_severity_30d, locale],
+  );
 
-  const alertsHoje  = stats?.alerts_today  ?? 0;
-  const critAbertos = stats?.critical_open ?? 0;
-  const casesAbertos  = stats?.cases_open  ?? 0;
-  const casesUrgentes = stats?.sla_expired ?? 0;
-  const autoCriados   = stats?.auto_detected ?? 0;
-
-  const bySev = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((s) => ({
-    name:  SEV_LABEL[s],
-    total: stats?.by_severity?.[s] ?? 0,
-    key:   s,
-  }));
-
-  const critRecentes = critAlertsData?.items?.slice(0, 5) ?? [];
-
-  const now = new Date();
-  const slaProximo = (recentCasesData ?? [])
-    .filter((c) => {
-      const due = c.sla_due_at;
-      if (!due) return false;
-      const diff = new Date(due).getTime() - now.getTime();
-      return diff > 0 && diff < 24 * 3600 * 1000 && !['CLOSED', 'REPORTED', 'ARCHIVED'].includes(c.status);
-    })
-    .slice(0, 4);
+  const topPlayers = stats?.top_players_by_risk ?? [];
+  const ruleTypeData = stats?.alerts_by_rule_type ?? [];
+  const heatmapPoints = stats?.alert_heatmap ?? [];
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">
-          {greeting()}{userName ? `, ${userName}` : ''}!
+      <div className="rounded-[28px] border border-slate-200 bg-gradient-to-br from-slate-950 via-sky-950 to-cyan-900 p-6 text-white shadow-sm">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-cyan-200/80">Cockpit AML</p>
+        <h1 className="mt-2 text-3xl font-bold tracking-tight">
+          {greeting()}{userName ? `, ${userName}` : ''}.
         </h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Aqui está o que precisa da sua atenção hoje.
+        <p className="mt-2 max-w-3xl text-sm text-cyan-50/80">
+          Visão diária de alertas, SLA, risco e ingestão do tenant com atualização automática a cada 30 segundos.
         </p>
+        {stats?.generated_at && (
+          <p className="mt-4 text-xs text-cyan-100/70">
+            Atualizado em {fmtDate(stats.generated_at, locale)}
+          </p>
+        )}
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-        <KpiCard icon={AlertTriangle} title="Alertas hoje"        value={alertsHoje}   sub="novos desde meia-noite" href="/alerts" />
-        <KpiCard icon={Zap}          title="Críticos abertos"    value={critAbertos}  sub="ação imediata"           href="/alerts" variant={critAbertos > 0 ? 'red' : 'default'} />
-        <KpiCard icon={FolderOpen}   title="Casos em andamento"  value={casesAbertos} sub="abertos ou em revisão"  href="/cases" />
-        <KpiCard icon={Clock}        title="SLA vencido"         value={casesUrgentes} sub="casos fora do prazo"   href="/cases" variant={casesUrgentes > 0 ? 'orange' : 'default'} />
-        <KpiCard icon={CheckCircle2} title="Auto-detectados"     value={autoCriados}  sub="criados pelo sistema"   href="/cases" variant="green" />
+      <div className="grid grid-cols-2 gap-4 xl:grid-cols-5">
+        <KpiCard
+          icon={AlertTriangle}
+          title="Alertas abertos"
+          value={stats?.alerts_open ?? 0}
+          sub="fila ativa de triagem"
+          href="/alerts"
+          tone={(stats?.alerts_open ?? 0) > 0 ? 'warning' : 'default'}
+        />
+        <KpiCard
+          icon={FolderOpen}
+          title="Em investigação"
+          value={stats?.cases_investigating ?? 0}
+          sub="casos aguardando ação"
+          href="/cases"
+        />
+        <KpiCard
+          icon={Clock}
+          title="Próximos do SLA"
+          value={stats?.cases_near_sla ?? 0}
+          sub="vencem nas próximas 24h"
+          href="/cases"
+          tone={(stats?.cases_near_sla ?? 0) > 0 ? 'danger' : 'success'}
+        />
+        <KpiCard
+          icon={ShieldAlert}
+          title="Jogadores alto risco"
+          value={stats?.high_risk_players ?? 0}
+          sub="risk band HIGH"
+          href="/players"
+          tone={(stats?.high_risk_players ?? 0) > 0 ? 'warning' : 'default'}
+        />
+        <KpiCard
+          icon={Activity}
+          title="Eventos ingeridos hoje"
+          value={(stats?.events_ingested_today ?? 0).toLocaleString(locale)}
+          sub="processados desde 00:00"
+          href="/ingest-jobs"
+          tone="success"
+        />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Distribuição por prioridade */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-gray-700">Alertas abertos por prioridade</h2>
-            <Link href="/alerts" className="text-xs text-brand hover:underline">Ver todos →</Link>
-          </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={bySev} barCategoryGap="35%">
-              <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
-              <Tooltip formatter={(v: unknown) => [`${v} alertas`, 'Total']} contentStyle={{ fontSize: 12 }} />
-              <Bar dataKey="total" radius={[4, 4, 0, 0]} label={{ position: 'top', fontSize: 11 }}>
-                {bySev.map((entry) => (
-                  <Cell key={entry.key} fill={SEV_COLOR[entry.key] ?? '#6b7280'} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Casos com prazo próximo */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-gray-700">Casos com prazo vencendo em 24h</h2>
-            <Link href="/cases" className="text-xs text-brand hover:underline">Ver todos →</Link>
-          </div>
-          {slaProximo.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-40 text-gray-400">
-              <CheckCircle2 size={32} className="mb-2 text-green-400" />
-              <p className="text-sm">Nenhum caso urgente no momento</p>
-            </div>
-          ) : (
-            <ul className="space-y-2">
-              {slaProximo.map((c) => {
-                const due  = new Date(c.sla_due_at!);
-                const mins = Math.round((due.getTime() - now.getTime()) / 60000);
-                const label = mins < 60 ? `${mins}min` : `${Math.round(mins / 60)}h`;
-                return (
-                  <li key={c.id}>
-                    <Link
-                      href={`/cases/${c.id}`}
-                      className="flex items-center justify-between rounded-lg border border-orange-100 bg-orange-50 px-4 py-2.5 hover:border-orange-200 transition-colors"
-                    >
-                      <div>
-                        <p className="text-xs font-semibold text-gray-800">{c.title}</p>
-                        <p className="text-[10px] text-gray-500 mt-0.5 font-mono">{c.reference_number}</p>
-                      </div>
-                      <span className="rounded bg-orange-100 px-2 py-0.5 text-xs font-bold text-orange-700">
-                        {label} restantes
-                      </span>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      </div>
-
-      {/* Alertas críticos recentes */}
-      {critRecentes.length > 0 && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-5 shadow-sm">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-red-800">
-              ⚠ Alertas Críticos abertos ({critAbertos})
-            </h2>
-            <Link href="/alerts" className="text-xs text-red-600 hover:underline">Ver todos →</Link>
-          </div>
-          <ul className="space-y-2">
-            {critRecentes.map((a) => (
-              <li key={a.id}>
-                <Link
-                  href={`/alerts/${a.id}`}
-                  className="flex items-center gap-3 rounded-lg border border-red-100 bg-white px-4 py-2.5 text-xs hover:bg-red-50 transition-colors"
-                >
-                  <TrendingDown size={14} className="shrink-0 text-red-500" />
-                  <span className="flex-1 font-medium text-red-900 truncate">{a.title}</span>
-                  <span className="shrink-0 text-gray-400">
-                    {new Date(a.created_at).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}
-                  </span>
-                  <ChevronRight size={12} className="text-gray-400" />
-                </Link>
-              </li>
-            ))}
-          </ul>
+      {isLoading && (
+        <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-5 py-10 text-center text-sm text-gray-400">
+          Carregando dashboard…
         </div>
       )}
 
-      {casesUrgentes > 0 && (
-        <div className="rounded-xl border border-orange-200 bg-orange-50 p-4 shadow-sm">
-          <p className="text-sm font-semibold text-orange-800">
-            ⏰ Você tem {casesUrgentes} caso{casesUrgentes > 1 ? 's' : ''} com SLA vencido.{' '}
-            <Link href="/cases" className="underline">Verificar agora →</Link>
-          </p>
-        </div>
+      {!isLoading && (
+        <>
+          <div className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-800">Alertas por severidade, últimos 30 dias</h2>
+                  <p className="mt-1 text-xs text-gray-500">Série temporal para calibragem operacional.</p>
+                </div>
+                <Link href="/alerts" className="text-xs font-semibold text-brand hover:underline">
+                  Abrir alertas
+                </Link>
+              </div>
+              <ResponsiveContainer width="100%" height={280}>
+                <LineChart data={severityTimeline}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="label" tick={{ fontSize: 12 }} minTickGap={18} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                  <Tooltip />
+                  <Legend />
+                  {(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const).map((sev) => (
+                    <Line
+                      key={sev}
+                      type="monotone"
+                      dataKey={sev}
+                      stroke={SEV_COLOR[sev]}
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 4 }}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-800">Distribuição por tipo de alerta</h2>
+                  <p className="mt-1 text-xs text-gray-500">Regras, anomalias e composições dominantes.</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={280}>
+                <PieChart>
+                  <Pie
+                    data={ruleTypeData}
+                    dataKey="value"
+                    nameKey="label"
+                    innerRadius={58}
+                    outerRadius={92}
+                    paddingAngle={3}
+                  >
+                    {ruleTypeData.map((entry, idx) => (
+                      <Cell
+                        key={`${entry.label}-${idx}`}
+                        fill={['#0f766e', '#0284c7', '#f97316', '#dc2626', '#7c3aed', '#16a34a'][idx % 6]}
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value: number) => value.toLocaleString(locale)} />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            </section>
+          </div>
+
+          <div className="grid gap-6 xl:grid-cols-[1.1fr_1.3fr]">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-800">Top 10 players por risk score</h2>
+                  <p className="mt-1 text-xs text-gray-500">Priorize revisão dos perfis mais críticos.</p>
+                </div>
+                <Link href="/players" className="text-xs font-semibold text-brand hover:underline">
+                  Ver jogadores
+                </Link>
+              </div>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={topPlayers}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis
+                    dataKey="external_player_id"
+                    tick={{ fontSize: 11 }}
+                    interval={0}
+                    angle={-25}
+                    textAnchor="end"
+                    height={72}
+                  />
+                  <YAxis tick={{ fontSize: 12 }} domain={[0, 1]} />
+                  <Tooltip formatter={(value: number) => `${(value * 100).toFixed(1)}%`} />
+                  <Bar dataKey="risk_score" radius={[6, 6, 0, 0]}>
+                    {topPlayers.map((row) => (
+                      <Cell
+                        key={row.player_id}
+                        fill={row.risk_band === 'HIGH' ? '#dc2626' : row.risk_band === 'MEDIUM' ? '#f59e0b' : '#16a34a'}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-800">Mapa de calor de alertas</h2>
+                  <p className="mt-1 text-xs text-gray-500">Concentração por hora e dia da semana.</p>
+                </div>
+                <span className="rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-semibold text-sky-700">
+                  janela 30d
+                </span>
+              </div>
+              <Heatmap points={heatmapPoints} />
+            </section>
+          </div>
+
+          {(stats?.cases_near_sla ?? 0) > 0 && (
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 shadow-sm">
+              <p className="text-sm font-semibold text-red-800">
+                Há {stats?.cases_near_sla} caso(s) prestes a vencer SLA nas próximas 24 horas.
+                <Link href="/cases" className="ml-1 underline">Abrir fila de casos</Link>
+              </p>
+            </div>
+          )}
+
+          <div className="grid gap-4 xl:grid-cols-3">
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Alertas hoje</p>
+              <p className="mt-2 text-3xl font-bold text-gray-950">{stats?.alerts_today ?? 0}</p>
+              <p className="mt-1 text-xs text-gray-500">novos desde meia-noite</p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Críticos abertos</p>
+              <p className="mt-2 text-3xl font-bold text-gray-950">{stats?.critical_open ?? 0}</p>
+              <p className="mt-1 text-xs text-gray-500">ação imediata</p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Auto-detectados</p>
+              <p className="mt-2 text-3xl font-bold text-gray-950">{stats?.auto_detected ?? 0}</p>
+              <p className="mt-1 text-xs text-gray-500">casos criados automaticamente</p>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

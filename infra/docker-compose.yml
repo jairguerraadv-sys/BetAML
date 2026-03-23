@@ -35,6 +35,9 @@ services:
       - ./migration_v15.sql:/docker-entrypoint-initdb.d/15-migration.sql
       - ./migration_v16.sql:/docker-entrypoint-initdb.d/16-migration.sql
       - ./migration_v17.sql:/docker-entrypoint-initdb.d/17-migration.sql
+      - ./migration_v18.sql:/docker-entrypoint-initdb.d/18-migration.sql
+      - ./migration_v19.sql:/docker-entrypoint-initdb.d/19-migration.sql
+      - ./migration_v20.sql:/docker-entrypoint-initdb.d/20-migration.sql
     ports:
       - "5432:5432"
     healthcheck:
@@ -185,6 +188,10 @@ services:
       CLICKHOUSE_HOST:         ${CLICKHOUSE_HOST:-clickhouse}
       CLICKHOUSE_PORT:         ${CLICKHOUSE_PORT:-9000}
       CLICKHOUSE_DB:           ${CLICKHOUSE_DB:-betaml}
+      ML_SERVICE_URL:          ${ML_SERVICE_URL:-http://ml-service:8001}
+      RULES_ENGINE_METRICS_URL: ${RULES_ENGINE_METRICS_URL:-http://rules-engine:8002/metrics}
+      STREAM_PROCESSOR_METRICS_URL: ${STREAM_PROCESSOR_METRICS_URL:-http://stream-processor:8003/metrics}
+      REDPANDA_ADMIN_URL:      ${REDPANDA_ADMIN_URL:-http://redpanda:9644}
       # ATENÇÃO: PII_ENCRYPTION_KEY DEVE ser substituído em staging/produção.
       # Se JWT_SECRET ou PII_ENCRYPTION_KEY mantiverem valor padrão fora de 'development',
       # o startup da API lançará RuntimeError e recusará subir.
@@ -219,6 +226,7 @@ services:
       redpanda: {condition: service_healthy}
       redis:    {condition: service_healthy}
       clickhouse: {condition: service_healthy}
+      postgres: {condition: service_healthy}
     environment:
       DATABASE_URL:            ${DATABASE_URL:-postgresql://betaml_app:app_devpass_change_me@postgres:5432/betaml_dev}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-redpanda:29092}
@@ -229,11 +237,13 @@ services:
       CLICKHOUSE_HOST:         ${CLICKHOUSE_HOST:-clickhouse}
       CLICKHOUSE_PORT:         ${CLICKHOUSE_PORT:-9000}
       CLICKHOUSE_DB:           ${CLICKHOUSE_DB:-betaml}
+      METRICS_PORT:            ${STREAM_PROCESSOR_METRICS_PORT:-8003}
       ENVIRONMENT:             ${ENVIRONMENT:-development}
     volumes:
       - ../services/stream_processor:/app
       - ../libs:/app/libs
     command: python main.py
+    restart: unless-stopped
     networks: [betaml-net]
 
   rules-engine:
@@ -250,6 +260,8 @@ services:
       DATABASE_URL:            ${DATABASE_URL:-postgresql://betaml_app:app_devpass_change_me@postgres:5432/betaml_dev}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-redpanda:29092}
       REDIS_URL:               ${REDIS_URL:-redis://:devpass@redis:6379/0}
+      ML_SERVICE_URL:          ${ML_SERVICE_URL:-http://ml-service:8001}
+      METRICS_PORT:            ${RULES_ENGINE_METRICS_PORT:-8002}
       ENVIRONMENT:             ${ENVIRONMENT:-development}
     volumes:
       - ../services/rules_engine:/app
@@ -273,6 +285,7 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minio123}
       ML_MODEL_BUCKET:  ${ML_MODEL_BUCKET:-betaml-models}
+      REDPANDA_ADMIN_URL: ${REDPANDA_ADMIN_URL:-http://redpanda:9644}
       ENVIRONMENT:      ${ENVIRONMENT:-development}
     ports:
       - "8001:8001"
@@ -339,6 +352,12 @@ services:
     container_name: betaml-alertmanager
     volumes:
       - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    environment:
+      ALERTMANAGER_FROM_EMAIL: ${ALERTMANAGER_FROM_EMAIL:-betaml-alerts@betaml.io}
+      SMTP_SMARTHOST: ${SMTP_SMARTHOST:-localhost:587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      ALERTMANAGER_WEBHOOK_URL: ${ALERTMANAGER_WEBHOOK_URL:-http://api:8000/internal/alerts/webhook}
     command:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
       - '--storage.path=/alertmanager'

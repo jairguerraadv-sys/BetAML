@@ -1,38 +1,8 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, fetchMonthlySummary, type MonthlyReport } from '@/lib/api';
 import { FileBarChart2, Download, RefreshCw, Send, AlertTriangle, Users } from 'lucide-react';
-
-interface AlertsBySeverity {
-  CRITICAL: number;
-  HIGH: number;
-  MEDIUM: number;
-  LOW: number;
-}
-
-interface TopRule {
-  rule_id: string;
-  rule_name: string;
-  fires: number;
-}
-
-interface TopPlayer {
-  player_id: string;
-  external_id: string;
-  avg_risk_score: number;
-}
-
-interface MonthlyReport {
-  period: { from: string; to: string };
-  alerts_by_severity: AlertsBySeverity;
-  cases_summary: Record<string, number>;
-  top_rules_by_fires: TopRule[];
-  top_players_by_risk: TopPlayer[];
-  total_ingested_events: number;
-  false_positive_rate: number | null;
-  generated_at: string;
-}
 
 const SEV_CLS: Record<string, string> = {
   CRITICAL: 'bg-red-100 text-red-700 border border-red-200',
@@ -67,10 +37,7 @@ export default function ReportsPage() {
     isFetched,
   } = useQuery({
     queryKey: ['report', dateFrom, dateTo],
-    queryFn: () =>
-      api.get<MonthlyReport>('/reports/monthly-summary', {
-        params: { date_from: dateFrom, date_to: dateTo },
-      }).then((r) => r.data),
+    queryFn: () => fetchMonthlySummary(dateFrom, dateTo),
     enabled: false,
     retry: false,
   });
@@ -102,6 +69,7 @@ export default function ReportsPage() {
             <label className="mb-1 block text-xs font-medium text-gray-600">De</label>
             <input
               type="date"
+              aria-label="Data inicial do relatório mensal"
               value={dateFrom}
               onChange={(e) => setDateFrom(e.target.value)}
               className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
@@ -111,6 +79,7 @@ export default function ReportsPage() {
             <label className="mb-1 block text-xs font-medium text-gray-600">Até</label>
             <input
               type="date"
+              aria-label="Data final do relatório mensal"
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
               className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
@@ -183,14 +152,52 @@ export default function ReportsPage() {
                 {report.total_ingested_events.toLocaleString('pt-BR')}
               </p>
             </div>
-            {report.false_positive_rate != null && (
-              <div className="rounded-xl border border-gray-200 bg-white p-4">
-                <p className="text-xs text-gray-500">Taxa falsos positivos</p>
-                <p className="mt-1 text-2xl font-bold text-gray-900">
-                  {(report.false_positive_rate * 100).toFixed(1)}%
-                </p>
-              </div>
-            )}
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <p className="text-xs text-gray-500">Comunicações geradas</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900">
+                {report.total_communications_generated.toLocaleString('pt-BR')}
+              </p>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <p className="text-xs text-gray-500">Comunicações COAF</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900">
+                {report.total_sar_reports.toLocaleString('pt-BR')}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <p className="text-xs text-gray-500">Casos totais</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900">{report.total_cases}</p>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <p className="text-xs text-gray-500">Casos fechados</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900">{report.total_cases_closed}</p>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <p className="text-xs text-gray-500">Casos reportados</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900">{report.total_cases_reported}</p>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <p className="text-xs text-gray-500">Alertas rotulados</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900">{report.quality_metrics.labeled_alerts}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <p className="text-xs text-gray-500">Taxa falsos positivos</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900">
+                {report.false_positive_rate != null ? `${(report.false_positive_rate * 100).toFixed(1)}%` : 'N/D'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <p className="text-xs text-gray-500">Taxa verdadeiros positivos</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900">
+                {report.true_positive_rate != null ? `${report.true_positive_rate.toFixed(1)}%` : 'N/D'}
+              </p>
+            </div>
             <div className="rounded-xl border border-gray-200 bg-white p-4">
               <p className="mb-2 text-xs text-gray-500">Casos por status</p>
               <div className="flex flex-wrap gap-1">
@@ -274,6 +281,7 @@ export default function ReportsPage() {
               type="number"
               min={2020}
               max={2030}
+              aria-label="Ano para geração do relatório mensal"
               value={genYear}
               onChange={(e) => setGenYear(e.target.value)}
               className="w-24 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
@@ -282,6 +290,7 @@ export default function ReportsPage() {
           <div>
             <label className="mb-1 block text-xs font-medium text-gray-600">Mês</label>
             <select
+              aria-label="Mês para geração do relatório mensal"
               value={genMonth}
               onChange={(e) => setGenMonth(e.target.value)}
               className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"

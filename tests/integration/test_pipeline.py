@@ -370,6 +370,7 @@ def test_ingest_webhook_epsilon_hmac_validation(headers_a):
         data=raw,
     )
     assert ok_resp.status_code == 202, ok_resp.text
+    assert ok_resp.json().get("job_id")
 
     bad_resp = api(
         "/ingest/webhook/epsilon",
@@ -453,9 +454,18 @@ transforms:
   - field: event_id
     type: copy
     source: event_id
+  - field: external_player_id
+    type: copy
+    source: external_player_id
+  - field: transaction_type
+    type: copy
+    source: transaction_type
   - field: amount
     type: coerceDecimal
     source: amount
+  - field: occurred_at
+    type: parseDate
+    source: occurred_at
   - field: currency
     type: copy
     source: currency
@@ -468,7 +478,9 @@ transforms:
         json={"config_text": mapping_yaml, "format": "yaml"},
     )
     assert valid_resp.status_code == 200
-    assert valid_resp.json().get("valid") is True
+    valid_body = valid_resp.json()
+    assert valid_body.get("valid") is True
+    assert valid_body.get("canonical_validation", {}).get("valid") is True
 
     preview_resp = api(
         "/mappings/preview",
@@ -477,12 +489,20 @@ transforms:
         json={
             "config_text": mapping_yaml,
             "format": "yaml",
-            "sample": {"event_id": "evt-1", "amount": "99.90", "currency": "BRL"},
+            "sample": {
+                "event_id": "evt-1",
+                "external_player_id": "CPF123",
+                "transaction_type": "DEPOSIT",
+                "amount": "99.90",
+                "occurred_at": "2026-03-20T12:00:00Z",
+                "currency": "BRL",
+            },
         },
     )
     assert preview_resp.status_code == 200
     body = preview_resp.json()
     assert body.get("valid") is True
+    assert body.get("canonical_validation", {}).get("valid") is True
     assert body.get("preview", {}).get("event_id") == "evt-1"
 
 
@@ -502,7 +522,10 @@ def test_mapping_versioning_and_rollback(headers_a):
                 "entity_type": "TRANSACTION",
                 "fields": [
                     {"target": "event_id", "source": "event_id", "transform": "copy"},
+                    {"target": "external_player_id", "source": "external_player_id", "transform": "copy"},
+                    {"target": "transaction_type", "source": "transaction_type", "transform": "copy"},
                     {"target": "amount", "source": "amount", "transform": "coerceDecimal"},
+                    {"target": "occurred_at", "source": "occurred_at", "transform": "parseDate"},
                 ],
             },
             "change_notes": "v1",
@@ -523,7 +546,10 @@ def test_mapping_versioning_and_rollback(headers_a):
                 "entity_type": "TRANSACTION",
                 "fields": [
                     {"target": "event_id", "source": "event_id", "transform": "copy"},
+                    {"target": "external_player_id", "source": "external_player_id", "transform": "copy"},
+                    {"target": "transaction_type", "source": "transaction_type", "transform": "copy"},
                     {"target": "amount", "source": "amount", "transform": "coerceDecimal"},
+                    {"target": "occurred_at", "source": "occurred_at", "transform": "parseDate"},
                     {"target": "currency", "source": "currency", "transform": "copy"},
                 ],
             },
@@ -1162,7 +1188,8 @@ def test_feature_store_current_endpoint(headers_a):
     if resp.status_code == 200:
         payload = resp.json()
         assert payload["player_id"] == player_id
-        assert payload["source"] == "redis"
+        assert payload["source"] == "redis-online"
+        assert payload["entity_type"] == "PLAYER"
         assert isinstance(payload.get("features"), dict)
 
 
@@ -1184,7 +1211,7 @@ def test_feature_store_current_legacy_matches_canonical(headers_a):
         legacy_body = legacy.json()
         assert canonical_body["player_id"] == legacy_body["player_id"] == player_id
         assert canonical_body["feature_version"] == legacy_body["feature_version"]
-        assert canonical_body["source"] == legacy_body["source"] == "redis"
+        assert canonical_body["source"] == legacy_body["source"] == "redis-online"
         assert canonical_body["features"] == legacy_body["features"]
 
 
@@ -1208,6 +1235,7 @@ def test_feature_store_history_endpoint_returns_contract(headers_a):
             item = payload["items"][0]
             assert "snapshot_date" in item
             assert isinstance(item.get("features"), dict)
+            assert item.get("entity_type") == "PLAYER"
 
 
 @skip_unless_stack
@@ -1291,6 +1319,7 @@ def test_feature_store_warm_cache_restores_current_from_snapshot(headers_a):
         assert payload["player_id"] == player_id
         assert payload["features"]["warmed_test_marker"] == "warm-e2e"
         assert payload["features"]["warmed_from"] == "feature_snapshot"
+        assert payload["source"] == "redis-online"
     finally:
         asyncio.run(_redis_delete(redis_key))
         asyncio.run(

@@ -9,7 +9,6 @@ Execução (sem Docker):
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -102,7 +101,8 @@ async def test_kafka_publish_failure_falls_back_gracefully():
 # 3. ClickHouse indisponível — feature history deve retornar 503
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_clickhouse_unavailable_raises_503(monkeypatch):
+@pytest.mark.asyncio
+async def test_clickhouse_unavailable_raises_503(monkeypatch):
     """Se ClickHouse cair, GET /players/{id}/feature-history deve retornar 503 (não 500)."""
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../services/api"))
@@ -122,34 +122,28 @@ def test_clickhouse_unavailable_raises_503(monkeypatch):
 
     monkeypatch.setattr(ch_clients, "ClickHouseClient", _BrokenCH)
 
-    # Simular a chamada no router
     from routers.players import get_player_feature_history
 
-    # Verificar que o router lança HTTPException 503
-    async def _run():
-        from unittest.mock import AsyncMock, MagicMock
-        mock_db = AsyncMock()
-        mock_player = MagicMock()
-        mock_player.tenant_id = "tenant-a"
-        mock_db.get = AsyncMock(return_value=mock_player)
+    mock_db = AsyncMock()
+    mock_player = MagicMock()
+    mock_player.tenant_id = "tenant-a"
+    mock_db.get = AsyncMock(return_value=mock_player)
 
-        mock_user = MagicMock()
-        mock_user.tenant_id = "tenant-a"
+    mock_user = MagicMock()
+    mock_user.tenant_id = "tenant-a"
 
-        try:
-            await get_player_feature_history(
-                player_id="player-1",
-                days=30,
-                current_user=mock_user,
-                db=mock_db,
-            )
-            assert False, "Deveria ter lançado HTTPException 503"
-        except HTTPException as exc:
-            assert exc.status_code == 503, f"Expected 503, got {exc.status_code}"
-        except Exception:
-            pass  # ClickHouseClient pode não ser importável sem deps
-
-    asyncio.run(_run())
+    try:
+        await get_player_feature_history(
+            player_id="player-1",
+            days=30,
+            current_user=mock_user,
+            db=mock_db,
+        )
+        assert False, "Deveria ter lançado HTTPException 503"
+    except HTTPException as exc:
+        assert exc.status_code == 503, f"Expected 503, got {exc.status_code}"
+    except Exception:
+        pass  # ClickHouseClient pode não ser importável sem deps
 
     if original is not None:
         monkeypatch.setattr(ch_clients, "ClickHouseClient", original)

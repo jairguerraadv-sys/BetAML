@@ -5,7 +5,7 @@ Covers:
   - create_case: SLA auto-set from ScoringConfig (CRITICAL=4h, HIGH=24h, defaults)
   - create_case: fallback SLA when no ScoringConfig exists
   - assign_case: CASE_ASSIGNED notification dispatched
-  - add_case_comment: creates COMMENT CaseEvent
+  - add_case_comment: creates NOTE CaseEvent
   - add_case_comment: @mentions dispatch CASE_MENTION notifications
   - add_case_comment: AUDITOR role is forbidden (403)
   - link_alert_to_case: sets alert.case_id and returns "linked"
@@ -17,12 +17,16 @@ Covers:
   - player payment-instruments endpoint registered
   - player network endpoint registered
   - player case-alert-history endpoint registered
+  - report payload helper emits final enterprise structure
+  - report package decisions are mapped to persisted DB values
+  - case mentions are filtered to valid users in the same tenant
 """
 from __future__ import annotations
 
 import sys
 import os
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -197,7 +201,7 @@ async def test_assign_case_dispatches_notification():
 
 @pytest.mark.asyncio
 async def test_add_case_comment_creates_event():
-    """POST /cases/{id}/comments creates a COMMENT CaseEvent."""
+    """POST /cases/{id}/comments creates a NOTE CaseEvent."""
     from routers.cases import add_case_comment
     from libs.schemas import CaseCommentIn
 
@@ -215,9 +219,52 @@ async def test_add_case_comment_creates_event():
     assert "id" in result
     assert "created_at" in result
 
-    evt = next((obj for obj in added_objects if getattr(obj, "event_type", None) == "COMMENT"), None)
-    assert evt is not None, "COMMENT CaseEvent not created"
+    evt = next((obj for obj in added_objects if getattr(obj, "event_type", None) == "NOTE"), None)
+    assert evt is not None, "NOTE CaseEvent not created"
     assert evt.content["comment"] == "Suspicious activity noted."
+
+
+@pytest.mark.asyncio
+async def test_generate_report_package_maps_decision_to_persisted_db_value():
+    from routers.cases import ReportPackageIn, generate_report_package
+
+    db = _make_db()
+    c = _make_case()
+    c.player_id = "player-1"
+    db.get = AsyncMock(return_value=c)
+
+    empty_scalars = MagicMock()
+    empty_scalars.scalars.return_value.all.return_value = []
+    db.execute = AsyncMock(return_value=empty_scalars)
+
+    added_objects = []
+    db.add = MagicMock(side_effect=added_objects.append)
+
+    payload = {
+        "reportId": "rp-1",
+        "tenantId": "t1",
+        "caseNumber": "CASE-1",
+        "decision": "NO_ACTION",
+        "decisionLegacy": "CLOSE",
+    }
+    loop = SimpleNamespace(run_in_executor=AsyncMock(return_value=b""))
+
+    with (
+        patch("routers.cases._build_report_payload", AsyncMock(return_value=payload)),
+        patch("routers.cases.write_audit", AsyncMock()),
+        patch("routers.cases.asyncio.get_event_loop", return_value=loop),
+    ):
+        result = await generate_report_package(
+            case_id="c1",
+            body=ReportPackageIn(decision="NO_ACTION", analyst_narrative="E2E unit narrative"),
+            current_user=_make_user(),
+            db=db,
+        )
+
+    report_package = next((obj for obj in added_objects if getattr(obj, "case_id", None) == "c1" and hasattr(obj, "decision")), None)
+    assert report_package is not None, "ReportPackage not created"
+    assert report_package.decision == "CLOSE"
+    assert result["decision"] == "NO_ACTION"
 
 
 @pytest.mark.asyncio
@@ -243,6 +290,32 @@ async def test_add_case_comment_with_mentions_dispatches_notifications():
     assert len(mention_notifs) == 2
     mentioned_users = {n.user_id for n in mention_notifs}
     assert mentioned_users == {"user_a", "user_b"}
+
+
+@pytest.mark.asyncio
+async def test_add_case_comment_filters_mentions_to_same_tenant_users():
+    from routers.cases import add_case_comment
+    from libs.schemas import CaseCommentIn
+
+    db = _make_db()
+    c = _make_case()
+    c.tenant_id = "t1"
+    db.get = AsyncMock(return_value=c)
+
+    execute_result = MagicMock()
+    execute_result.scalars.return_value.all.return_value = ["user_a"]
+    db.execute = AsyncMock(return_value=execute_result)
+
+    added_objects = []
+    db.add = MagicMock(side_effect=added_objects.append)
+
+    body = CaseCommentIn(content="Check with @user_a and @outsider", mentions=["user_a", "outsider"])
+    with patch("routers.cases.write_audit", AsyncMock()):
+        await add_case_comment(case_id="c1", body=body, current_user=_make_user(), db=db)
+
+    mention_notifs = [obj for obj in added_objects if getattr(obj, "type", None) == "CASE_MENTION"]
+    assert len(mention_notifs) == 1
+    assert mention_notifs[0].user_id == "user_a"
 
 
 @pytest.mark.asyncio
@@ -275,6 +348,8 @@ async def test_link_alert_to_case_success():
     alert_mock.title = "Spike"
     alert_mock.severity = "HIGH"
     alert_mock.case_id = None
+    added_objects: list[object] = []
+    db.add = MagicMock(side_effect=added_objects.append)
 
     async def _db_get(model, pk):
         from models import Case, Alert
@@ -290,6 +365,9 @@ async def test_link_alert_to_case_success():
 
     assert result["status"] == "linked"
     assert alert_mock.case_id == "c1"
+    case_event = next(obj for obj in added_objects if getattr(obj, "case_id", None) == "c1")
+    assert getattr(case_event, "event_type", None) == "NOTE"
+    assert getattr(case_event, "content", {}).get("kind") == "ALERT_LINKED"
 
 
 @pytest.mark.asyncio
@@ -317,6 +395,116 @@ async def test_link_alert_wrong_tenant_raises_404():
         with patch("routers.cases.write_audit", AsyncMock()):
             await link_alert_to_case(case_id="c1", body=body, current_user=_make_user(), db=db)
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_build_report_payload_matches_enterprise_shape():
+    from routers.cases import _build_report_payload
+
+    db = _make_db()
+    user = _make_user(role="AML_ANALYST", username="analyst")
+    case_obj = _make_case(case_id="case-1", tenant_id="t1", title="Case Title")
+    case_obj.reference_number = "CASE-0001"
+    case_obj.player_id = "player-1"
+
+    player = SimpleNamespace(
+        id="player-1",
+        external_player_id="ext-123",
+        cpf_encrypted=b"x",
+        name_encrypted=b"y",
+        birth_date=datetime(1990, 1, 1, tzinfo=UTC).date(),
+        pep_flag=True,
+        risk_band="HIGH",
+        profession="Trader",
+        declared_income_monthly=5000,
+        registered_since=datetime(2024, 1, 10, tzinfo=UTC).date(),
+    )
+    tenant = SimpleNamespace(id="t1", name="Tenant One")
+
+    async def _db_get(model, pk):
+        name = getattr(model, "__name__", "")
+        if name == "Player":
+            return player
+        if name == "Tenant":
+            return tenant
+        if name == "User":
+            return user
+        return None
+
+    db.get = AsyncMock(side_effect=_db_get)
+
+    tx1 = SimpleNamespace(
+        id="tx1", type="DEPOSIT", amount=1200, status="SETTLED",
+        occurred_at=datetime.now(UTC), payment_instrument="PIX-123", description="pix in",
+    )
+    tx2 = SimpleNamespace(
+        id="tx2", type="WITHDRAWAL", amount=500, status="SETTLED",
+        occurred_at=datetime.now(UTC), payment_instrument="PIX-123", description="pix out",
+    )
+    bet1 = SimpleNamespace(
+        id="bet1", stake_amount=300, actual_payout=0, status="LOST",
+        occurred_at=datetime.now(UTC),
+    )
+
+    exec_calls = []
+
+    async def _execute(_stmt):
+        idx = len(exec_calls)
+        exec_calls.append(idx)
+        result = MagicMock()
+        if idx == 0:
+            result.scalars.return_value.all.return_value = [tx1, tx2]
+        else:
+            result.scalars.return_value.all.return_value = [bet1]
+        return result
+
+    db.execute = AsyncMock(side_effect=_execute)
+
+    alerts = [
+        SimpleNamespace(
+            id="alert-1",
+            title="Spike Alert",
+            severity="CRITICAL",
+            alert_type="ANOMALY",
+            description="Suspicious spike",
+            rule_id=None,
+            compound_rule_id=None,
+            created_at=datetime.now(UTC),
+            evidence={"model_id": "model-1", "top_drivers": ["deposit_sum_24h"]},
+        ),
+    ]
+    events = [
+        SimpleNamespace(
+            id="evt-1",
+            event_type="EVIDENCE_UPLOAD",
+            content={"file_name": "proof.pdf", "description": "doc"},
+            created_at=datetime.now(UTC),
+        )
+    ]
+
+    with patch("routers.cases.decrypt_pii", side_effect=["12345678901", "Jane Roe"]):
+        payload = await _build_report_payload(
+            db=db,
+            case_obj=case_obj,
+            alerts=alerts,
+            events=events,
+            current_user=user,
+            analyst_narrative="Narrative",
+            decision_code="FILE_SAR",
+        )
+
+    assert payload["tenantId"] == "t1"
+    assert payload["caseNumber"] == "CASE-0001"
+    assert payload["decision"] == "REPORT"
+    assert payload["decisionLegacy"] == "FILE_SAR"
+    assert payload["subject"]["cpf"].endswith(".01")
+    assert payload["financialSummary"]["totalDeposits90d"] == 1200.0
+    assert payload["financialSummary"]["totalWithdrawals90d"] == 500.0
+    assert payload["financialSummary"]["totalBetStake90d"] == 300.0
+    assert payload["alertsSummary"][0]["alertId"] == "alert-1"
+    assert payload["keyTransactions"][0]["transactionId"] == "tx1"
+    assert payload["keyBets"][0]["betId"] == "bet1"
+    assert payload["attachments"][0]["fileName"] == "proof.pdf"
 
 
 # ---------------------------------------------------------------------------

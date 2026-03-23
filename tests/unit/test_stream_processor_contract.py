@@ -166,6 +166,10 @@ def _make_redis_mock():
     return redis
 
 
+async def _immediate_to_thread(func, /, *args, **kwargs):
+    return func(*args, **kwargs)
+
+
 # ─── _ch_insert_transaction ──────────────────────────────────────────────────
 
 class TestChInsertTransaction:
@@ -335,7 +339,9 @@ class TestProcessTransaction:
 
         with patch.object(_sp_mod, "_ch_insert_transaction") as mock_ch, \
              patch.object(_sp_mod, "compute_features", new_callable=AsyncMock) as mock_cf, \
-             patch.object(_sp_mod, "_persist_feature_snapshot"):
+             patch.object(_sp_mod, "_persist_feature_snapshot"), \
+             patch.object(_sp_mod, "_persist_transaction_oltp"), \
+             patch.object(_sp_mod.asyncio, "to_thread", new=_immediate_to_thread):
             mock_cf.return_value = _make_features()
             await process_transaction(envelope, redis, ch, producer)
             mock_ch.assert_called_once()
@@ -352,6 +358,8 @@ class TestProcessTransaction:
 
         with patch.object(_sp_mod, "_ch_insert_transaction", side_effect=Exception("CH unavailable")), \
              patch.object(_sp_mod, "compute_features", new_callable=AsyncMock, return_value=_make_features()), \
-             patch.object(_sp_mod, "_persist_feature_snapshot"):
+             patch.object(_sp_mod, "_persist_feature_snapshot"), \
+             patch.object(_sp_mod, "_persist_transaction_oltp"), \
+             patch.object(_sp_mod.asyncio, "to_thread", new=_immediate_to_thread):
             # Não deve levantar exceção
             await process_transaction(envelope, redis, ch, producer)

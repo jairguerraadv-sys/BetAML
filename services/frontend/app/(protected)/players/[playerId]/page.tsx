@@ -186,12 +186,7 @@ export default function PlayerDetailPage() {
     queryFn:  () => fetchPlayer(playerId),
     enabled:  !!playerId,
   });
-
-  if (isLoading) return <p className="text-sm text-gray-400">Carregando perfil…</p>;
-  if (error)     return <p className="text-sm text-red-600">Player não encontrado.</p>;
-  if (!data)     return null;
-
-  const p = data as PlayerDetail;
+  const p = (data as PlayerDetail | undefined) ?? null;
 
   const { data: extLatest } = useQuery({
     queryKey: ['player-external-validation-latest', playerId],
@@ -231,6 +226,10 @@ export default function PlayerDetailPage() {
       await queryClient.invalidateQueries({ queryKey: ['player-external-validation-history', playerId] });
     },
   });
+
+  if (isLoading) return <p className="text-sm text-gray-400">Carregando perfil…</p>;
+  if (error)     return <p className="text-sm text-red-600">Player não encontrado.</p>;
+  if (!p)        return null;
 
   return (
     <div className="max-w-2xl space-y-6">

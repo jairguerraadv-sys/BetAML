@@ -37,15 +37,28 @@ export default defineConfig({
 
   use: {
     baseURL: BASE_URL,
-    trace: 'on-first-retry',
-    screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    trace: 'off',
+    screenshot: 'off',
+    video: 'off',
+    chromiumSandbox: false,
+    launchOptions: {
+      args: [
+        '--disable-crash-reporter',
+        '--disable-crashpad',
+        '--disable-setuid-sandbox',
+        '--disable-gpu',
+        '--noerrdialogs',
+      ],
+    },
   },
 
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        channel: 'chromium',
+      },
     },
   ],
 });

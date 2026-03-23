@@ -1,33 +1,8 @@
 'use client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { fetchScoringConfig, updateScoringConfig, ScoringConfig } from '@/lib/api';
 import { Settings, Save } from 'lucide-react';
 import { useState, useEffect } from 'react';
-
-interface ScoringConfig {
-  id: string;
-  rule_weight: number;
-  ml_weight: number;
-  network_weight: number;
-  low_threshold: number;
-  medium_threshold: number;
-  high_threshold: number;
-  critical_threshold: number;
-  sla_low_hours: number;
-  sla_medium_hours: number;
-  sla_high_hours: number;
-  sla_critical_hours: number;
-  updated_at: string | null;
-  data_retention_days: number;
-  data_retention_raw_years: number;
-  data_retention_silver_years: number;
-  data_retention_gold_years: number;
-  auto_case_threshold: number;
-  ingest_rate_limit_tpm: number;
-}
-
-const fetchConfig = () =>
-  api.get<ScoringConfig>('/scoring-config').then((r) => r.data);
 
 const fields: { key: keyof ScoringConfig; label: string; step: string; min: number; max: number }[] = [
   { key: 'rule_weight',          label: 'Peso — Regras DSL',             step: '0.01', min: 0,   max: 1   },
@@ -47,6 +22,7 @@ const fields: { key: keyof ScoringConfig; label: string; step: string; min: numb
   { key: 'data_retention_gold_years',    label: 'Retenção features Gold (anos)',         step: '1', min: 1,   max: 10   },
   { key: 'auto_case_threshold',          label: 'Threshold auto-criação de caso (0–1)',  step: '0.01', min: 0, max: 1   },
   { key: 'ingest_rate_limit_tpm',        label: 'Rate limit de ingestão (req/min)',      step: '1',    min: 10, max: 10000 },
+  { key: 'ml_challenger_pct',            label: 'Tráfego challenger ML (%)',             step: '1',    min: 0,  max: 100 },
 ];
 
 export default function SettingsPage() {
@@ -54,7 +30,7 @@ export default function SettingsPage() {
 
   const { data: config, isLoading } = useQuery({
     queryKey: ['scoring-config'],
-    queryFn: fetchConfig,
+    queryFn: fetchScoringConfig,
   });
 
   const [form, setForm] = useState<Partial<ScoringConfig>>({});
@@ -65,7 +41,7 @@ export default function SettingsPage() {
   }, [config]);
 
   const save = useMutation({
-    mutationFn: () => api.put('/scoring-config', form),
+    mutationFn: () => updateScoringConfig(form),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['scoring-config'] });
       setSaved(true);
@@ -99,6 +75,7 @@ export default function SettingsPage() {
                     step={step}
                     min={min}
                     max={max}
+                    aria-label={label}
                     value={(form[key] as number) ?? 0}
                     onChange={(e) => setForm((f) => ({ ...f, [key]: parseFloat(e.target.value) }))}
                     className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"

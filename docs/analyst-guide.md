@@ -75,6 +75,21 @@ Clique em **Exportar PDF** na página do caso para baixar o pacote completo com:
 
 ## 6. DSL de Regras
 
+### 6.0 Como criar uma regra
+
+1. Acesse **Regras**.
+2. Clique em **Nova Regra**.
+3. Defina nome, descricao, severidade e peso.
+4. Escreva a expressao DSL ou reutilize macros do tenant.
+5. Valide a sintaxe.
+6. Salve e ative a regra.
+
+Boas praticas:
+
+- prefira regras pequenas e explicaveis
+- use `PlayerLists` para whitelist/blacklist em vez de hardcode
+- quando a logica depender de baseline, prefira `zscore(...)` ou `percentile_rank(...)`
+
 ### 6.1 Sintaxe Básica
 
 ```
@@ -151,6 +166,18 @@ Componentes:
 Score Mínimo: 3.0  →  Ação: BLOCK
 ```
 
+### 6.6 Como simular uma regra
+
+1. Abra a regra em **Regras**.
+2. Clique em **Simular**.
+3. Informe janela de datas e, opcionalmente, `player_ids`.
+4. Revise:
+   - quantidade de alertas gerados
+   - quais jogadores seriam impactados
+   - timeline temporal
+   - estimativa de precision, recall e false positive
+5. Ajuste severidade, peso ou expressao antes de ativar em producao.
+
 ---
 
 ## 7. Feature Store
@@ -222,6 +249,29 @@ curl -X POST http://localhost:8000/cases/{case_id}/report-package \
 Resposta inclui:
 - `report_id` — UUID único para protocolo COAF
 - `pdf_url` — link para download do PDF no MinIO
+
+### 8.4 Como investigar um caso
+
+1. Acesse **Casos** e abra um item `OPEN` ou `INVESTIGATING`.
+2. Revise a timeline do caso.
+3. Consulte o painel do jogador:
+   - volume de depositos/saques 90d
+   - stakes de apostas 90d
+   - instrumentos de pagamento e flags
+   - rede de relacionamento por device/instrumento
+   - historico anterior de alertas e casos
+4. Use a busca rapida para vincular outros alertas ou transacoes.
+5. Registre comentarios e use `@mencao` quando precisar de apoio de outro analista.
+6. Mude o status para `PENDING_REVIEW`, `CLOSED` ou `REPORTED` conforme a conclusao.
+
+### 8.5 Como gerar um ReportPackage
+
+1. No detalhe do caso, clique em **Gerar ReportPackage**.
+2. Preencha a narrativa do analista.
+3. Escolha a decisao: `REPORT`, `CLOSE` ou `MONITOR`.
+4. Revise o resumo financeiro, os alertas vinculados e anexos.
+5. Gere o pacote e exporte em JSON ou PDF.
+6. Se a decisao equivaler a comunicacao regulatoria, solicite a submissao maker-checker.
 
 ---
 
@@ -336,3 +386,23 @@ POST /model-registry/{model_id}/promote
 ```
 
 O sistema arquiva automaticamente o champion anterior do mesmo `model_type` e promove o challenger. A ação é registrada no audit log com ação `PROMOTE_MODEL`.
+
+---
+
+## 15. Como rotular alertas para o feedback loop
+
+1. Acesse **Alertas** ou abra o detalhe do alerta.
+2. Clique em **Etiquetar**.
+3. Escolha:
+   - `TRUE_POSITIVE`
+   - `FALSE_POSITIVE`
+   - `UNKNOWN`
+4. Registre uma nota curta explicando o racional.
+5. Salve.
+
+Esses rótulos alimentam:
+
+- metricas de qualidade por regra
+- metricas de qualidade por modelo
+- retreino supervisionado
+- estimativas de false positive nas simulacoes de regra

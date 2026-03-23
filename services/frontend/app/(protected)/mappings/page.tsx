@@ -76,10 +76,12 @@ function HighlightedEditor({
   value,
   onChange,
   format,
+  ariaLabel,
 }: {
   value: string;
   onChange: (next: string) => void;
   format: EditorFormat;
+  ariaLabel?: string;
 }) {
   const lines = value.split('\n');
   return (
@@ -92,6 +94,7 @@ function HighlightedEditor({
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        aria-label={ariaLabel ?? 'Editor do mapping'}
         className="relative z-10 h-full w-full resize-none bg-transparent p-3 font-mono text-xs leading-5 text-transparent caret-emerald-200 focus:outline-none"
         spellCheck={false}
       />
@@ -112,7 +115,10 @@ export default function MappingsPage() {
   const [sampleText, setSampleText] = useState(DEFAULT_SAMPLE);
   const [validationMsg, setValidationMsg] = useState('Validação pendente');
   const [validationOk, setValidationOk] = useState<boolean | null>(null);
+  const [validationDetail, setValidationDetail] = useState<Record<string, unknown> | null>(null);
   const [previewResult, setPreviewResult] = useState<Record<string, unknown> | null>(null);
+  const [previewValidation, setPreviewValidation] = useState<Record<string, unknown> | null>(null);
+  const [normalizedConfig, setNormalizedConfig] = useState<Record<string, unknown> | null>(null);
   const [mode, setMode] = useState<'create' | 'new-version'>('create');
 
   const { data: templates = [] } = useQuery({
@@ -140,12 +146,15 @@ export default function MappingsPage() {
     mutationFn: (payload: { config_text?: string; format: EditorFormat }) => validateMappingConfig(payload),
     onSuccess: (data) => {
       setValidationOk(data.valid);
-      setValidationMsg(data.valid ? 'Config válido' : data.error || 'Config inválido');
+      setValidationMsg(data.valid ? 'Config válido e compatível com schema canônico' : data.error || 'Config inválido');
+      setValidationDetail((data.canonical_validation as Record<string, unknown>) || null);
+      setNormalizedConfig((data.normalized_config as Record<string, unknown>) || null);
     },
     onError: (e: unknown) => {
       const err = e as { response?: { data?: { detail?: string } } };
       setValidationOk(false);
       setValidationMsg(err?.response?.data?.detail || 'Erro ao validar');
+      setValidationDetail(null);
     },
   });
 
@@ -158,13 +167,17 @@ export default function MappingsPage() {
     onSuccess: (data) => {
       if (!data.valid) {
         setPreviewResult({ error: data.error || 'Falha no preview' });
+        setPreviewValidation((data.canonical_validation as Record<string, unknown>) || null);
         return;
       }
       setPreviewResult(data.preview || {});
+      setPreviewValidation((data.canonical_validation as Record<string, unknown>) || null);
+      setNormalizedConfig((data.normalized_config as Record<string, unknown>) || null);
     },
     onError: (e: unknown) => {
       const err = e as { response?: { data?: { detail?: string } } };
       setPreviewResult({ error: err?.response?.data?.detail || 'Erro ao gerar preview' });
+      setPreviewValidation(null);
     },
   });
 
@@ -266,6 +279,8 @@ export default function MappingsPage() {
     const detail = await fetchMapping(row.id);
     setEditorFormat('json');
     setEditorText(prettyJson(detail.config_json));
+    setValidationDetail((detail.canonical_validation as Record<string, unknown>) || null);
+    setNormalizedConfig(detail.config_json);
     setPreviewResult(null);
   }
 
@@ -342,24 +357,30 @@ export default function MappingsPage() {
         <div className="space-y-3 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm lg:col-span-2">
           <div className="grid gap-3 md:grid-cols-3">
             <div>
-              <label className="mb-1 block text-xs font-medium text-gray-600">Nome</label>
+              <label htmlFor="mapping-name" className="mb-1 block text-xs font-medium text-gray-600">Nome</label>
               <input
+                id="mapping-name"
+                aria-label="Nome do mapping"
                 value={mappingName}
                 onChange={(e) => setMappingName(e.target.value)}
                 className="w-full rounded-lg border px-3 py-2 text-sm"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-gray-600">Source System</label>
+              <label htmlFor="mapping-source-system" className="mb-1 block text-xs font-medium text-gray-600">Source System</label>
               <input
+                id="mapping-source-system"
+                aria-label="Source system do mapping"
                 value={sourceSystem}
                 onChange={(e) => setSourceSystem(e.target.value)}
                 className="w-full rounded-lg border px-3 py-2 text-sm"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-gray-600">Entity Type</label>
+              <label htmlFor="mapping-entity-type" className="mb-1 block text-xs font-medium text-gray-600">Entity Type</label>
               <input
+                id="mapping-entity-type"
+                aria-label="Entity type do mapping"
                 value={entityType}
                 onChange={(e) => setEntityType(e.target.value.toUpperCase())}
                 className="w-full rounded-lg border px-3 py-2 text-sm"
@@ -385,7 +406,7 @@ export default function MappingsPage() {
             </div>
           </div>
 
-          <HighlightedEditor value={editorText} onChange={setEditorText} format={editorFormat} />
+          <HighlightedEditor value={editorText} onChange={setEditorText} format={editorFormat} ariaLabel="Editor do mapping" />
 
           <div className="rounded-lg border px-3 py-2 text-sm">
             <span className={`font-semibold ${validationOk === true ? 'text-emerald-600' : validationOk === false ? 'text-red-600' : 'text-gray-500'}`}>
@@ -394,9 +415,15 @@ export default function MappingsPage() {
             {validationMsg}
           </div>
 
+          <pre className="max-h-40 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-200">
+            {prettyJson(validationDetail || { canonical_validation: 'pendente' })}
+          </pre>
+
           <div>
-            <label className="mb-1 block text-xs font-medium text-gray-600">Change notes</label>
+            <label htmlFor="mapping-change-notes" className="mb-1 block text-xs font-medium text-gray-600">Change notes</label>
             <input
+              id="mapping-change-notes"
+              aria-label="Change notes do mapping"
               value={changeNotes}
               onChange={(e) => setChangeNotes(e.target.value)}
               placeholder="Ex.: ajuste de enum para transaction_type"
@@ -408,6 +435,7 @@ export default function MappingsPage() {
             <button
               onClick={saveMapping}
               disabled={createMutation.isPending || versionMutation.isPending || !mappingName || !editorText}
+              aria-label={mode === 'create' ? 'Criar mapping' : 'Salvar nova versão do mapping'}
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
             >
               {mode === 'create' ? 'Criar Mapping' : 'Salvar Nova Versão'}
@@ -418,6 +446,7 @@ export default function MappingsPage() {
                 setSelected(null);
                 setChangeNotes('');
               }}
+              aria-label="Novo mapping"
               className="rounded-lg border px-4 py-2 text-sm"
             >
               Novo
@@ -464,6 +493,7 @@ export default function MappingsPage() {
 
           <p className="text-sm font-semibold text-gray-800">Preview do Mapping</p>
           <textarea
+            aria-label="Payload de exemplo para preview do mapping"
             value={sampleText}
             onChange={(e) => setSampleText(e.target.value)}
             className="h-36 w-full rounded-lg border p-2 font-mono text-xs"
@@ -472,13 +502,31 @@ export default function MappingsPage() {
           <button
             onClick={runPreview}
             disabled={previewMutation.isPending}
+            aria-label="Gerar preview"
             className="w-full rounded-lg bg-emerald-600 px-3 py-2 text-sm text-white disabled:opacity-50"
           >
             {previewMutation.isPending ? 'Gerando preview...' : 'Gerar Preview'}
           </button>
 
-          <pre className="max-h-56 overflow-auto rounded-lg bg-gray-900 p-3 text-xs text-emerald-200">
+          <pre
+            aria-label="Resultado do preview do mapping"
+            className="max-h-56 overflow-auto rounded-lg bg-gray-900 p-3 text-xs text-emerald-200"
+          >
             {prettyJson(previewResult || { message: 'Sem preview' })}
+          </pre>
+
+          <pre
+            aria-label="Validação canônica do preview do mapping"
+            className="max-h-44 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-sky-200"
+          >
+            {prettyJson(previewValidation || { canonical_preview_validation: 'pendente' })}
+          </pre>
+
+          <pre
+            aria-label="Config normalizada do mapping"
+            className="max-h-44 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-amber-200"
+          >
+            {prettyJson(normalizedConfig || { normalized_config: 'pendente' })}
           </pre>
 
           {selected && (
@@ -494,6 +542,7 @@ export default function MappingsPage() {
                     {!v.is_current && (
                       <button
                         onClick={() => rollbackMutation.mutate({ id: selected.id, version: v.version_number })}
+                        aria-label={`Rollback versão ${v.version_number} do mapping`}
                         className="rounded bg-amber-100 px-2 py-1 text-amber-700"
                       >
                         Rollback
