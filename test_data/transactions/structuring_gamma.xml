@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SCENARIO: STRUCTURING DETECTION
+Padrão: 4 depósitos pequenos (R$ 600-800) em janela de 3 horas
+Player: PLY-STRUCT-001 (Jose da Silva)
+Expected: STRUCTURING_DETECTED alert (HIGH severity)
+Compliance: COAF Res. 36/2021 Art. 6º (fracionamento)
+-->
+<transactions>
+  <transaction>
+    <EventId>TXG-STRUCT-001-001</EventId>
+    <PlayerId>PLY-STRUCT-001</PlayerId>
+    <Type>DEPOSIT</Type>
+    <Amount currency="BRL">650.00</Amount>
+    <Timestamp>2026-03-24T14:00:00Z</Timestamp>
+    <DeviceId>device-struct-001</DeviceId>
+    <Instrument>
+      <Type>PIX</Type>
+      <Token>pix-token-struct-001</Token>
+    </Instrument>
+  </transaction>
+
+  <transaction>
+    <EventId>TXG-STRUCT-001-002</EventId>
+    <PlayerId>PLY-STRUCT-001</PlayerId>
+    <Type>DEPOSIT</Type>
+    <Amount currency="BRL">700.00</Amount>
+    <Timestamp>2026-03-24T14:35:00Z</Timestamp>
+    <DeviceId>device-struct-001</DeviceId>
+    <Instrument>
+      <Type>PIX</Type>
+      <Token>pix-token-struct-002</Token>
+    </Instrument>
+  </transaction>
+
+  <transaction>
+    <EventId>TXG-STRUCT-001-003</EventId>
+    <PlayerId>PLY-STRUCT-001</PlayerId>
+    <Type>DEPOSIT</Type>
+    <Amount currency="BRL">750.00</Amount>
+    <Timestamp>2026-03-24T15:10:00Z</Timestamp>
+    <DeviceId>device-struct-001</DeviceId>
+    <Instrument>
+      <Type>TED</Type>
+      <Token>ted-token-struct-001</Token>
+    </Instrument>
+  </transaction>
+
+  <transaction>
+    <EventId>TXG-STRUCT-001-004</EventId>
+    <PlayerId>PLY-STRUCT-001</PlayerId>
+    <Type>DEPOSIT</Type>
+    <Amount currency="BRL">800.00</Amount>
+    <Timestamp>2026-03-24T15:55:00Z</Timestamp>
+    <DeviceId>device-struct-001</DeviceId>
+    <Instrument>
+      <Type>PIX</Type>
+      <Token>pix-token-struct-003</Token>
+    </Instrument>
+  </transaction>
+</transactions>

@@ -1,0 +1,10 @@
+{"id":"TXN-NET-001-001","uid":"PLY-NETWORK-001","evt_type":"DEPOSIT","val":1200.00,"ts":"2026-03-24T08:00:00Z","ccy":"BRL","device":"shared-device-net-001","ip":"192.168.1.50","pay_method":"PIX"}
+{"id":"TXN-NET-001-002","uid":"PLY-NETWORK-001","evt_type":"BET","val":500.00,"stake":"200.00","ts":"2026-03-24T08:30:00Z","ccy":"BRL","odds":"3.00","sport":"SOCCER","device":"shared-device-net-001","ip":"192.168.1.50"}
+{"id":"TXN-NET-001-003","uid":"PLY-NETWORK-001","evt_type":"WITHDRAWAL","val":300.00,"ts":"2026-03-24T09:00:00Z","ccy":"BRL","device":"shared-device-net-001","ip":"192.168.1.50","pay_method":"PIX"}
+{"id":"TXN-NET-002-001","uid":"PLY-NETWORK-002","evt_type":"DEPOSIT","val":1500.00,"ts":"2026-03-24T08:10:00Z","ccy":"BRL","device":"shared-device-net-001","ip":"192.168.1.50","pay_method":"CARD"}
+{"id":"TXN-NET-002-002","uid":"PLY-NETWORK-002","evt_type":"BET","val":600.00,"stake":"250.00","ts":"2026-03-24T08:45:00Z","ccy":"BRL","odds":"2.50","sport":"LIVE_SOCCER","device":"shared-device-net-001","ip":"192.168.1.50"}
+{"id":"TXN-NET-002-003","uid":"PLY-NETWORK-002","evt_type":"WITHDRAWAL","val":400.00,"ts":"2026-03-24T09:15:00Z","ccy":"BRL","device":"shared-device-net-001","ip":"192.168.1.50","pay_method":"PIX"}
+{"id":"TXN-NET-003-001","uid":"PLY-NETWORK-003","evt_type":"DEPOSIT","val":2000.00,"ts":"2026-03-24T08:20:00Z","ccy":"BRL","device":"shared-device-net-001","ip":"192.168.1.50","pay_method":"TED"}
+{"id":"TXN-NET-003-002","uid":"PLY-NETWORK-003","evt_type":"BET","val":800.00,"stake":"350.00","ts":"2026-03-24T09:00:00Z","ccy":"BRL","odds":"2.75","sport":"BASKETBALL","device":"shared-device-net-001","ip":"192.168.1.50"}
+{"id":"TXN-NET-003-003","uid":"PLY-NETWORK-003","evt_type":"BET","val":700.00","stake":"300.00","ts":"2026-03-24T09:30:00Z","ccy":"BRL","odds":"3.25","sport":"TENNIS","device":"shared-device-net-001","ip":"192.168.1.50"}
+{"id":"TXN-NET-003-004","uid":"PLY-NETWORK-003","evt_type":"WITHDRAWAL","val":1000.00,"ts":"2026-03-24T10:00:00Z","ccy":"BRL","device":"shared-device-net-001","ip":"192.168.1.50","pay_method":"CARD"}
