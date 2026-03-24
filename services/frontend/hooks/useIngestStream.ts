@@ -6,6 +6,34 @@ export interface IngestStreamEvent {
   type: string;
   count: number;
   ts: string;
+  summary?: {
+    active_jobs: number;
+    failed_jobs_24h: number;
+    unresolved_errors: number;
+    quarantine_breakdown?: Array<{
+      source_system: string;
+      entity_type: string | null;
+      count: number;
+    }>;
+    configured_rate_limit_per_min: number;
+    ws_active_connections: number;
+    ws_queued_messages: number;
+    ws_peak_queue_depth: number;
+    ws_backpressure_events: number;
+    ws_max_queue_size: number;
+    ws_last_backpressure_at: string | null;
+    latest_job_id: string | null;
+    latest_job_status: string | null;
+    latest_source_system: string | null;
+    latest_job_updated_at: string | null;
+    recent_failed_jobs?: Array<{
+      id: string;
+      source_system: string;
+      status: string;
+      failed_records: number | null;
+      updated_at: string | null;
+    }>;
+  };
 }
 
 export interface IngestStreamState {

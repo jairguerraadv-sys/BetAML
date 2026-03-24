@@ -364,6 +364,7 @@ async def test_business_metrics_update_executes_queries():
 async def test_admin_ops_summary_returns_operational_alerts():
     """Admin ops summary should surface lag / DLQ / stale-model alerts when thresholds are crossed."""
     from routers.admin import get_ops_summary
+    from routers import ingest as ingest_module
 
     db = AsyncMock()
     current_user = MagicMock()
@@ -376,6 +377,7 @@ async def test_admin_ops_summary_returns_operational_alerts():
 
     responses = [
         5,          # unresolved_dlq
+        [("ConnectorGamma", "TRANSACTION", 4)],
         (95, 10),   # processed_24h, failed_24h
         2,          # stale_models
         None,       # oldest_model_dt
@@ -386,11 +388,23 @@ async def test_admin_ops_summary_returns_operational_alerts():
         result = MagicMock()
         result.scalar.return_value = value
         result.one.return_value = value
+        result.all.return_value = value
         return result
 
     db.execute = AsyncMock(side_effect=_execute)
+    ingest_module._INGEST_WS_RUNTIME["t1"] = {
+        "active_connections": 1,
+        "queued_messages": 4,
+        "peak_queue_depth": 12,
+        "backpressure_events": 3,
+        "last_backpressure_at": "2026-03-23T22:00:00+00:00",
+        "messages_queued_total": 20,
+        "messages_acked_total": 16,
+        "max_queue_size": 500,
+    }
 
-    with patch("httpx.AsyncClient") as mock_httpx:
+    with patch("httpx.AsyncClient") as mock_httpx, \
+         patch("routers.ingest._tenant_ingest_rate_limit", AsyncMock(return_value=900)):
         httpx_instance = AsyncMock()
         httpx_instance.__aenter__ = AsyncMock(return_value=httpx_instance)
         httpx_instance.__aexit__ = AsyncMock(return_value=False)
@@ -401,5 +415,10 @@ async def test_admin_ops_summary_returns_operational_alerts():
 
     assert result.kafka_consumer_lag == 2500
     assert result.unresolved_dlq_events == 5
+    assert result.dlq_breakdown[0].source_system == "ConnectorGamma"
+    assert result.dlq_breakdown[0].count == 4
+    assert result.ingest_rate_limit_per_min == 900
+    assert result.ws_active_connections == 1
+    assert result.ws_backpressure_events == 3
     assert result.stale_models == 2
-    assert len(result.alerts) >= 3
+    assert len(result.alerts) >= 4

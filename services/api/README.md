@@ -59,8 +59,8 @@ python seeds.py
 | `POST` | `/auth/login` | Public | JWT login |
 | `POST` | `/auth/logout` | Authenticated | Revoke current token (Redis blacklist) |
 | `GET` | `/me` / `/auth/me` | Authenticated | Current user info |
-| `POST` | `/ingest/event` | ADMIN / API Key | Ingest a single canonical event |
-| `POST` | `/ingest/batch` | ADMIN / API Key | Ingest multiple events in one request |
+| `POST` | `/ingest/event` | ADMIN / API Key | Ingest a single event, optionally applying a specific MappingConfig version |
+| `POST` | `/ingest/batch` | ADMIN / API Key | Ingest multiple events, each optionally with explicit MappingConfig version |
 | `POST` | `/ingest/file` | ADMIN / API Key | Upload a CSV/JSON file for batch ingest |
 | `POST` | `/ingest/connectors/gamma/parse` | ADMIN / AML_ANALYST | Parse XML payloads from ConnectorGamma |
 | `POST` | `/ingest/connectors/delta/parse` | ADMIN / AML_ANALYST | Parse NDJSON payloads from ConnectorDelta |
@@ -72,7 +72,7 @@ python seeds.py
 | `POST` | `/ingest/errors/{id}/resolve` | ADMIN / AML_ANALYST | Mark quarantined item as resolved |
 | `POST` | `/ingest/errors/{id}/replay` | ADMIN / AML_ANALYST | Replay corrected payload back to Kafka |
 | `GET` | `/ingest/stream` | Authenticated | SSE ingest heartbeat / near-real-time operational stream |
-| `WS` | `/ingest/ws` | ADMIN / AML_ANALYST | Continuous near-real-time ingest channel with backpressure |
+| `WS` | `/ingest/ws` | ADMIN / AML_ANALYST | Continuous near-real-time ingest channel with backpressure and per-message MappingConfig |
 | `GET` | `/mappings/templates` | Authenticated | Built-in YAML templates for Gamma/Delta/Epsilon |
 | `POST` | `/mappings/validate` | ADMIN / AML_ANALYST | Validate mapping config against schema and canonical contract |
 | `POST` | `/mappings/preview` | ADMIN / AML_ANALYST | Preview mapped result for sample payload |

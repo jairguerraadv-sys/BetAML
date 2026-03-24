@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncGenerator, Optional, cast
 
 import structlog
@@ -36,7 +36,8 @@ from libs.connectors import (
     ConnectorEpsilon,
     get_connector,
 )
-from models import IngestError, IngestJob, MappingConfig, SystemFlag, User
+from libs.mapping import MappingEngine, get_default_mapping
+from models import IngestError, IngestJob, MappingConfig, ScoringConfig, SystemFlag, User
 from utils import get_producer, redis_rate_limit
 
 try:
@@ -59,6 +60,59 @@ ALLOWED_SOURCE_SYSTEMS = frozenset(
 )
 
 router = APIRouter(tags=["ingest"])
+
+_INGEST_WS_RUNTIME: dict[str, dict[str, Any]] = {}
+
+
+def _ensure_ws_runtime(tenant_id: str) -> dict[str, Any]:
+    state = _INGEST_WS_RUNTIME.get(tenant_id)
+    if state is None:
+        state = {
+            "active_connections": 0,
+            "queued_messages": 0,
+            "peak_queue_depth": 0,
+            "backpressure_events": 0,
+            "last_backpressure_at": None,
+            "messages_queued_total": 0,
+            "messages_acked_total": 0,
+            "max_queue_size": 500,
+        }
+        _INGEST_WS_RUNTIME[tenant_id] = state
+    return state
+
+
+def _ws_runtime_connected(tenant_id: str, *, max_queue_size: int) -> None:
+    state = _ensure_ws_runtime(tenant_id)
+    state["active_connections"] += 1
+    state["max_queue_size"] = max_queue_size
+
+
+def _ws_runtime_disconnected(tenant_id: str) -> None:
+    state = _ensure_ws_runtime(tenant_id)
+    state["active_connections"] = max(0, int(state["active_connections"]) - 1)
+    if state["active_connections"] == 0:
+        state["queued_messages"] = 0
+
+
+def _ws_runtime_enqueued(tenant_id: str, *, queue_size: int) -> None:
+    state = _ensure_ws_runtime(tenant_id)
+    state["queued_messages"] = queue_size
+    state["messages_queued_total"] += 1
+    state["peak_queue_depth"] = max(int(state["peak_queue_depth"]), queue_size)
+
+
+def _ws_runtime_acked(tenant_id: str, *, queue_size: int) -> None:
+    state = _ensure_ws_runtime(tenant_id)
+    state["queued_messages"] = max(0, queue_size)
+    state["messages_acked_total"] += 1
+
+
+def _ws_runtime_backpressure(tenant_id: str, *, queue_size: int) -> None:
+    state = _ensure_ws_runtime(tenant_id)
+    state["queued_messages"] = queue_size
+    state["peak_queue_depth"] = max(int(state["peak_queue_depth"]), queue_size)
+    state["backpressure_events"] += 1
+    state["last_backpressure_at"] = datetime.now(timezone.utc).isoformat()
 
 
 def _optional_current_user() -> Any | None:
@@ -125,6 +179,7 @@ class WebsocketIngestRequest(BaseModel):
     entity_type: str
     payload: dict[str, Any]
     source_event_id: Optional[str] = None
+    mapping_config_id: Optional[str] = None
 
 
 class ResolveIngestErrorRequest(BaseModel):
@@ -135,6 +190,7 @@ class ReplayIngestErrorRequest(BaseModel):
     corrected_payload: dict[str, Any]
     entity_type: Optional[str] = None
     mapping_config_id: Optional[str] = None
+    apply_mapping: bool = True
     resolve_original: bool = True
     note: Optional[str] = None
 
@@ -254,6 +310,16 @@ def _upload_bronze_file(*, tenant_id: str, job_id: str, file_name: str, content:
 
 
 async def _tenant_ingest_rate_limit(db: AsyncSession, tenant_id: str, default_limit: int) -> int:
+    try:
+        scoring_stmt = select(ScoringConfig.ingest_rate_limit_tpm).where(
+            ScoringConfig.tenant_id == tenant_id
+        )
+        scoring_limit = (await db.execute(scoring_stmt)).scalar_one_or_none()
+        if scoring_limit is not None:
+            return max(1, int(cast(Any, scoring_limit)))
+    except Exception:
+        pass
+
     # Compatibility: support both schemas below.
     # New schema: tenant_id + flag_name + flag_value
     # Legacy schema: key + value (global)
@@ -326,6 +392,170 @@ def _build_envelope(
     }
 
 
+async def _resolve_effective_mapping_config(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    source_system: str,
+    entity_type: str,
+    mapping_config_id: str | None = None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    normalized_entity = entity_type.upper()
+
+    if mapping_config_id:
+        mapping_row = await db.get(MappingConfig, mapping_config_id)
+        if not mapping_row or mapping_row.tenant_id != tenant_id:
+            raise HTTPException(404, "MappingConfig não encontrado para o tenant")
+        cfg = mapping_row.config_json if isinstance(mapping_row.config_json, dict) else None
+        return str(mapping_row.id), cfg
+
+    stmt = (
+        select(MappingConfig)
+        .where(
+            MappingConfig.tenant_id == tenant_id,
+            MappingConfig.source_system == source_system,
+            MappingConfig.entity_type == normalized_entity,
+            MappingConfig.is_current.is_(True),
+            MappingConfig.active.is_(True),
+        )
+        .order_by(desc(MappingConfig.version_number))
+        .limit(1)
+    )
+    mapping_row = (await db.execute(stmt)).scalar_one_or_none()
+    if asyncio.iscoroutine(mapping_row):
+        mapping_row = await mapping_row
+    if mapping_row:
+        cfg = mapping_row.config_json if isinstance(mapping_row.config_json, dict) else None
+        return str(mapping_row.id), cfg
+
+    default_cfg = get_default_mapping(source_system, normalized_entity)
+    return None, dict(default_cfg) if isinstance(default_cfg, dict) else None
+
+
+def _apply_mapping_config(config_json: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str, Any]:
+    if not config_json:
+        return payload
+    engine = MappingEngine(config_json)
+    return engine.apply(payload)
+
+
+async def _build_ingest_stream_snapshot(db: AsyncSession, tenant_id: str) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    since_24h = now - timedelta(hours=24)
+
+    active_jobs = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(IngestJob)
+                .where(
+                    IngestJob.tenant_id == tenant_id,
+                    IngestJob.status.in_(("QUEUED", "PROCESSING")),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    failed_jobs_24h = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(IngestJob)
+                .where(
+                    IngestJob.tenant_id == tenant_id,
+                    IngestJob.created_at >= since_24h,
+                    IngestJob.status.in_(("FAILED", "PARTIAL")),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    unresolved_errors = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(IngestError)
+                .where(
+                    IngestError.tenant_id == tenant_id,
+                    IngestError.resolved.is_(False),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    quarantine_breakdown_rows = (
+        await db.execute(
+            select(
+                IngestError.source_system,
+                IngestError.entity_type,
+                func.count().label("error_count"),
+            )
+            .where(
+                IngestError.tenant_id == tenant_id,
+                IngestError.resolved.is_(False),
+            )
+            .group_by(IngestError.source_system, IngestError.entity_type)
+            .order_by(desc(func.count()))
+            .limit(5)
+        )
+    ).all()
+    latest_job = (
+        await db.execute(
+            select(IngestJob)
+            .where(IngestJob.tenant_id == tenant_id)
+            .order_by(desc(IngestJob.created_at))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    recent_failed_jobs_stmt = (
+        select(IngestJob)
+        .where(
+            IngestJob.tenant_id == tenant_id,
+            IngestJob.status.in_(("FAILED", "PARTIAL")),
+        )
+        .order_by(desc(IngestJob.updated_at), desc(IngestJob.created_at))
+        .limit(3)
+    )
+    recent_failed_jobs = (await db.execute(recent_failed_jobs_stmt)).scalars().all()
+    configured_rate_limit = await _tenant_ingest_rate_limit(db, tenant_id, default_limit=300)
+    ws_runtime = _ensure_ws_runtime(tenant_id)
+
+    return {
+        "active_jobs": active_jobs,
+        "failed_jobs_24h": failed_jobs_24h,
+        "unresolved_errors": unresolved_errors,
+        "quarantine_breakdown": [
+            {
+                "source_system": str(source_system),
+                "entity_type": str(entity_type) if entity_type is not None else None,
+                "count": int(error_count or 0),
+            }
+            for source_system, entity_type, error_count in quarantine_breakdown_rows
+        ],
+        "configured_rate_limit_per_min": configured_rate_limit,
+        "ws_active_connections": int(ws_runtime["active_connections"]),
+        "ws_queued_messages": int(ws_runtime["queued_messages"]),
+        "ws_peak_queue_depth": int(ws_runtime["peak_queue_depth"]),
+        "ws_backpressure_events": int(ws_runtime["backpressure_events"]),
+        "ws_max_queue_size": int(ws_runtime["max_queue_size"]),
+        "ws_last_backpressure_at": ws_runtime["last_backpressure_at"],
+        "latest_job_id": str(latest_job.id) if latest_job else None,
+        "latest_job_status": latest_job.status if latest_job else None,
+        "latest_source_system": latest_job.source_system if latest_job else None,
+        "latest_job_updated_at": latest_job.updated_at.isoformat() if latest_job and latest_job.updated_at else None,
+        "recent_failed_jobs": [
+            {
+                "id": str(job.id),
+                "source_system": job.source_system,
+                "status": job.status,
+                "failed_records": job.failed_records,
+                "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+            }
+            for job in recent_failed_jobs
+        ],
+    }
+
+
 @router.post("/ingest/event", status_code=202)
 async def ingest_event(
     body: IngestEventRequest,
@@ -348,15 +578,36 @@ async def ingest_event(
     max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=300)
     await redis_rate_limit(principal.tenant_id, "ingest.event", max_requests=max_requests)
 
-    source_event_id = body.source_event_id or str(uuid.uuid4())
+    mapped_payload = body.payload
+    effective_mapping_id = body.mapping_config_id
+    if body.mapping_config_id:
+        effective_mapping_id, mapping_cfg = await _resolve_effective_mapping_config(
+            db,
+            tenant_id=principal.tenant_id,
+            source_system=body.source_system,
+            entity_type=body.entity_type,
+            mapping_config_id=body.mapping_config_id,
+        )
+        try:
+            mapped_payload = _apply_mapping_config(mapping_cfg, body.payload)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"Falha ao aplicar mapping no evento: {exc}") from exc
+
+    source_event_id = str(
+        mapped_payload.get("event_id")
+        or body.source_event_id
+        or body.payload.get("event_id")
+        or uuid.uuid4()
+    )
     envelope = _build_envelope(
         tenant_id=principal.tenant_id,
         source_system=body.source_system,
         entity_type=body.entity_type,
-        payload=body.payload,
+        payload=mapped_payload,
         source_event_id=source_event_id,
-        mapping_config_id=body.mapping_config_id,
+        mapping_config_id=effective_mapping_id,
     )
+    envelope["raw_payload"] = body.payload
     producer = await get_producer()
     if producer:
         topic = f"raw.{body.entity_type.lower()}s"
@@ -404,15 +655,40 @@ async def ingest_batch(
             })
             continue
 
-        source_event_id = body.source_event_id or str(uuid.uuid4())
+        mapped_payload = body.payload
+        effective_mapping_id = body.mapping_config_id
+        if body.mapping_config_id:
+            effective_mapping_id, mapping_cfg = await _resolve_effective_mapping_config(
+                db,
+                tenant_id=principal.tenant_id,
+                source_system=body.source_system,
+                entity_type=body.entity_type,
+                mapping_config_id=body.mapping_config_id,
+            )
+            try:
+                mapped_payload = _apply_mapping_config(mapping_cfg, body.payload)
+            except Exception as exc:  # noqa: BLE001
+                results.append({
+                    "status": "rejected",
+                    "reason": f"mapping inválido: {exc}",
+                })
+                continue
+
+        source_event_id = str(
+            mapped_payload.get("event_id")
+            or body.source_event_id
+            or body.payload.get("event_id")
+            or uuid.uuid4()
+        )
         envelope = _build_envelope(
             tenant_id=principal.tenant_id,
             source_system=body.source_system,
             entity_type=body.entity_type,
-            payload=body.payload,
+            payload=mapped_payload,
             source_event_id=source_event_id,
-            mapping_config_id=body.mapping_config_id,
+            mapping_config_id=effective_mapping_id,
         )
+        envelope["raw_payload"] = body.payload
         if producer:
             topic = f"raw.{body.entity_type.lower()}s"
             ok = await _publish_with_retries(
@@ -455,18 +731,19 @@ async def ingest_file(
     if len(lines) < 2:
         raise HTTPException(400, "CSV inválido: arquivo deve conter ao menos uma linha de dados além do cabeçalho")
 
-    mapping_version_id = None
-    if mapping_config_id:
-        mc = await db.get(MappingConfig, mapping_config_id)
-        if not mc or mc.tenant_id != principal.tenant_id:
-            raise HTTPException(404, "MappingConfig não encontrado para o tenant")
-        if not mc.is_current:
-            mapping_version_id = mc.id
+    effective_mapping_id, _ = await _resolve_effective_mapping_config(
+        db,
+        tenant_id=principal.tenant_id,
+        source_system=source_system,
+        entity_type="TRANSACTION",
+        mapping_config_id=mapping_config_id,
+    )
+    mapping_version_id = effective_mapping_id
 
     job = IngestJob(
         tenant_id=principal.tenant_id,
         source_system=source_system,
-        mapping_config_id=mapping_config_id,
+        mapping_config_id=effective_mapping_id,
         mapping_version_id=mapping_version_id,
         file_name=file.filename,
         file_size_bytes=len(content),
@@ -504,7 +781,7 @@ async def ingest_file(
             "job_id": job_pk,
             "tenant_id": principal.tenant_id,
             "source_system": source_system,
-            "mapping_config_id": mapping_config_id,
+            "mapping_config_id": effective_mapping_id,
             "mapping_version_id": mapping_version_id,
             "file_name": file.filename,
             "file_path": job.file_path,
@@ -521,7 +798,13 @@ async def ingest_file(
         if not ok:
             raise HTTPException(503, "Falha ao enfileirar job de ingestão após retries; enviado para DLQ")
 
-    return {"job_id": job_pk, "status": "QUEUED", "file_name": file.filename}
+    return {
+        "job_id": job_pk,
+        "status": "QUEUED",
+        "file_name": file.filename,
+        "mapping_config_id": effective_mapping_id,
+        "mapping_version_id": mapping_version_id,
+    }
 
 
 @router.post("/ingest/webhook/epsilon", status_code=202)
@@ -535,11 +818,19 @@ async def ingest_epsilon_webhook(
     await redis_rate_limit(principal.tenant_id, "ingest.webhook.epsilon", max_requests=max_requests)
 
     body = await request.body()
+    mapping_config_id, mapping_cfg = await _resolve_effective_mapping_config(
+        db,
+        tenant_id=principal.tenant_id,
+        source_system="ConnectorEpsilon",
+        entity_type="TRANSACTION",
+    )
     started_at = datetime.now(timezone.utc)
     job_file_name = f"epsilon-webhook-{started_at.strftime('%Y%m%dT%H%M%S%fZ')}.json"
     job = IngestJob(
         tenant_id=principal.tenant_id,
         source_system="ConnectorEpsilon",
+        mapping_config_id=mapping_config_id,
+        mapping_version_id=mapping_config_id,
         connector_type="WEBHOOK",
         file_name=job_file_name,
         file_size_bytes=len(body),
@@ -615,15 +906,42 @@ async def ingest_epsilon_webhook(
     failed = 0
     error_rows: list[dict[str, Any]] = []
     for rec in result.records:
-        source_event_id = rec.get("event_id") or str(uuid.uuid4())
+        try:
+            mapped_rec = _apply_mapping_config(mapping_cfg, rec)
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            reason = f"mapping_failed: {exc}"
+            error_rows.append({"line": None, "reason": reason, "raw": rec})
+            db.add(
+                IngestError(
+                    tenant_id=principal.tenant_id,
+                    ingest_job_id=job_pk,
+                    source_system="ConnectorEpsilon",
+                    entity_type="TRANSACTION",
+                    raw_payload=json.dumps(rec, ensure_ascii=False),
+                    error_reason=reason,
+                    error_detail={
+                        "channel": "webhook",
+                        "connector": "epsilon",
+                        "stage": "mapping",
+                        "mapping_config_id": mapping_config_id,
+                    },
+                    resolved=False,
+                )
+            )
+            continue
+
+        source_event_id = mapped_rec.get("event_id") or rec.get("event_id") or str(uuid.uuid4())
         envelope = _build_envelope(
             tenant_id=principal.tenant_id,
             source_system="ConnectorEpsilon",
             entity_type="TRANSACTION",
-            payload=rec,
+            payload=mapped_rec,
             source_event_id=source_event_id,
+            mapping_config_id=mapping_config_id,
             ingest_metadata={"channel": "webhook", "webhook": "epsilon", "job_id": job_pk},
         )
+        envelope["raw_payload"] = rec
         if producer:
             ok = await _publish_with_retries(
                 producer=producer,
@@ -661,7 +979,13 @@ async def ingest_epsilon_webhook(
     await _ensure_db_tenant_context(db, principal.tenant_id)
     await db.commit()
 
-    return {"status": "accepted", "count": queued, "job_id": job_pk}
+    return {
+        "status": "accepted",
+        "count": queued,
+        "job_id": job_pk,
+        "mapping_config_id": mapping_config_id,
+        "mapping_version_id": mapping_config_id,
+    }
 
 
 @router.get("/ingest/jobs")
@@ -864,14 +1188,32 @@ async def replay_ingest_error(
     if err.source_system not in ALLOWED_SOURCE_SYSTEMS:
         raise HTTPException(400, f"source_system '{err.source_system}' não suportado para replay")
 
-    mapping_config_id = body.mapping_config_id
-    if mapping_config_id:
-        mc = await db.get(MappingConfig, mapping_config_id)
+    entity_type = (body.entity_type or err.entity_type or "TRANSACTION").upper()
+    effective_mapping_id: str | None = None
+    mapped_payload = dict(body.corrected_payload)
+    if body.apply_mapping:
+        effective_mapping_id, mapping_cfg = await _resolve_effective_mapping_config(
+            db,
+            tenant_id=str(current_user.tenant_id),
+            source_system=str(err.source_system),
+            entity_type=entity_type,
+            mapping_config_id=body.mapping_config_id,
+        )
+        try:
+            mapped_payload = _apply_mapping_config(mapping_cfg, body.corrected_payload)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"Falha ao aplicar mapping no replay manual: {exc}") from exc
+    elif body.mapping_config_id:
+        mc = await db.get(MappingConfig, body.mapping_config_id)
         if not mc or mc.tenant_id != current_user.tenant_id:
             raise HTTPException(404, "MappingConfig não encontrado para o tenant")
+        effective_mapping_id = str(mc.id)
 
-    entity_type = (body.entity_type or err.entity_type or "TRANSACTION").upper()
-    source_event_id = str(body.corrected_payload.get("event_id") or uuid.uuid4())
+    source_event_id = str(
+        mapped_payload.get("event_id")
+        or body.corrected_payload.get("event_id")
+        or uuid.uuid4()
+    )
 
     producer = await get_producer()
     if not producer:
@@ -881,9 +1223,9 @@ async def replay_ingest_error(
         tenant_id=str(current_user.tenant_id),
         source_system=str(err.source_system),
         entity_type=entity_type,
-        payload=body.corrected_payload,
+        payload=mapped_payload,
         source_event_id=source_event_id,
-        mapping_config_id=mapping_config_id,
+        mapping_config_id=effective_mapping_id,
         ingest_metadata={
             "channel": "quarantine_replay",
             "ingest_error_id": err.id,
@@ -891,6 +1233,7 @@ async def replay_ingest_error(
             "original_line_number": err.line_number,
         },
     )
+    envelope["raw_payload"] = body.corrected_payload
     topic = f"raw.{entity_type.lower()}s"
     ok = await _publish_with_retries(
         producer=producer,
@@ -912,7 +1255,9 @@ async def replay_ingest_error(
             "event_id": envelope["event_id"],
             "source_event_id": source_event_id,
             "entity_type": entity_type,
-            "mapping_config_id": mapping_config_id,
+            "mapping_config_id": effective_mapping_id,
+            "apply_mapping": body.apply_mapping,
+            "status": "QUEUED",
             "note": body.note,
         },
     }
@@ -927,6 +1272,8 @@ async def replay_ingest_error(
         "event_id": envelope["event_id"],
         "source_event_id": source_event_id,
         "ingest_error_id": err.id,
+        "mapping_config_id": effective_mapping_id,
+        "mapping_applied": body.apply_mapping,
         "resolved": err.resolved,
     }
 
@@ -946,6 +1293,13 @@ async def reprocess_job(
         raise HTTPException(409, f"Status {job.status} não permite reprocessamento")
 
     mapping_version_id = body.mapping_version_id or job.mapping_version_id or job.mapping_config_id
+    if not mapping_version_id:
+        mapping_version_id, _ = await _resolve_effective_mapping_config(
+            db,
+            tenant_id=current_user.tenant_id,
+            source_system=job.source_system,
+            entity_type="TRANSACTION",
+        )
     if mapping_version_id:
         mc = await db.get(MappingConfig, mapping_version_id)
         if not mc or mc.tenant_id != current_user.tenant_id:
@@ -960,7 +1314,7 @@ async def reprocess_job(
     new_job = IngestJob(
         tenant_id=job.tenant_id,
         source_system=job.source_system,
-        mapping_config_id=job.mapping_config_id,
+        mapping_config_id=job.mapping_config_id or mapping_version_id,
         mapping_version_id=mapping_version_id,
         connector_type=job.connector_type,
         file_name=job.file_name,
@@ -985,7 +1339,7 @@ async def reprocess_job(
     }
     ok = await _publish_with_retries(
         producer=producer,
-        topic="ingest.jobs",
+        topic="ingest.jobs.reprocess",
         payload=msg,
         key=str(new_job.id),
         tenant_id=str(current_user.tenant_id),
@@ -1056,21 +1410,43 @@ async def ingest_websocket(websocket: WebSocket):
         await websocket.close(code=1011)
         return
 
-    queue: asyncio.Queue[WebsocketIngestRequest] = asyncio.Queue(maxsize=500)
+    queue_maxsize = 500
+    queue: asyncio.Queue[WebsocketIngestRequest] = asyncio.Queue(maxsize=queue_maxsize)
+    _ws_runtime_connected(tenant_id, max_queue_size=queue_maxsize)
 
     async def worker() -> None:
         while True:
             item = await queue.get()
             try:
-                source_event_id = item.source_event_id or str(uuid.uuid4())
+                mapped_payload = item.payload
+                effective_mapping_id = item.mapping_config_id
+                if item.mapping_config_id:
+                    async with AsyncSessionLocal() as mapping_db:
+                        effective_mapping_id, mapping_cfg = await _resolve_effective_mapping_config(
+                            mapping_db,
+                            tenant_id=tenant_id,
+                            source_system=item.source_system,
+                            entity_type=item.entity_type,
+                            mapping_config_id=item.mapping_config_id,
+                        )
+                    mapped_payload = _apply_mapping_config(mapping_cfg, item.payload)
+
+                source_event_id = str(
+                    mapped_payload.get("event_id")
+                    or item.source_event_id
+                    or item.payload.get("event_id")
+                    or uuid.uuid4()
+                )
                 envelope = _build_envelope(
                     tenant_id=tenant_id,
                     source_system=item.source_system,
                     entity_type=item.entity_type,
-                    payload=item.payload,
+                    payload=mapped_payload,
                     source_event_id=source_event_id,
+                    mapping_config_id=effective_mapping_id,
                     ingest_metadata={"channel": "websocket"},
                 )
+                envelope["raw_payload"] = item.payload
                 topic = f"raw.{item.entity_type.lower()}s"
                 ok = await _publish_with_retries(
                     producer=producer,
@@ -1088,6 +1464,7 @@ async def ingest_websocket(websocket: WebSocket):
             except Exception as exc:  # noqa: BLE001
                 await websocket.send_json({"status": "failed", "error": str(exc)})
             finally:
+                _ws_runtime_acked(tenant_id, queue_size=queue.qsize())
                 queue.task_done()
 
     worker_task = asyncio.create_task(worker())
@@ -1108,7 +1485,9 @@ async def ingest_websocket(websocket: WebSocket):
 
             try:
                 queue.put_nowait(msg)
+                _ws_runtime_enqueued(tenant_id, queue_size=queue.qsize())
             except asyncio.QueueFull:
+                _ws_runtime_backpressure(tenant_id, queue_size=queue.qsize())
                 await websocket.send_json({
                     "status": "backpressure",
                     "detail": "fila temporariamente cheia",
@@ -1118,9 +1497,12 @@ async def ingest_websocket(websocket: WebSocket):
     except WebSocketDisconnect:
         logger.info("ingest_ws_disconnected", tenant_id=tenant_id)
     finally:
+        _ws_runtime_disconnected(tenant_id)
         worker_task.cancel()
         try:
             await worker_task
+        except asyncio.CancelledError:
+            pass
         except Exception:
             pass
 
@@ -1130,6 +1512,7 @@ async def parse_connector_payload(
     connector_name: str,
     file: UploadFile = File(...),
     entity_type: str = Form("TRANSACTION"),
+    mapping_config_id: Optional[str] = Form(None),
     current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1141,6 +1524,9 @@ async def parse_connector_payload(
     if name not in {"gamma", "delta"}:
         raise HTTPException(400, "connector_name deve ser 'gamma' ou 'delta' para este endpoint")
 
+    if not isinstance(mapping_config_id, str):
+        mapping_config_id = None
+
     await _ensure_db_tenant_context(db, str(current_user.tenant_id))
     max_requests = await _tenant_ingest_rate_limit(db, str(current_user.tenant_id), default_limit=120)
     await redis_rate_limit(str(current_user.tenant_id), f"ingest.connector.{name}", max_requests=max_requests)
@@ -1150,11 +1536,20 @@ async def parse_connector_payload(
     connector_kwargs = {"root_tag": "transaction"} if name == "gamma" else {}
     connector = get_connector(name, **connector_kwargs)
     parse_result = connector.parse(content, entity_type=entity_type)
+    effective_mapping_id, mapping_cfg = await _resolve_effective_mapping_config(
+        db,
+        tenant_id=str(current_user.tenant_id),
+        source_system=source_system,
+        entity_type=entity_type,
+        mapping_config_id=mapping_config_id,
+    )
 
     # Register an ingest job for observability and reprocessing trail
     job = IngestJob(
         tenant_id=current_user.tenant_id,
         source_system=source_system,
+        mapping_config_id=effective_mapping_id,
+        mapping_version_id=effective_mapping_id,
         connector_type="FILE",
         file_name=file.filename,
         file_size_bytes=len(content),
@@ -1194,15 +1589,37 @@ async def parse_connector_payload(
     error_rows: list[dict[str, Any]] = []
 
     for rec in parse_result.records:
-        source_event_id = str(rec.get("event_id") or uuid.uuid4())
+        try:
+            mapped_rec = _apply_mapping_config(mapping_cfg, rec)
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            reason = f"mapping_failed: {exc}"
+            error_rows.append({"line": None, "reason": reason, "raw": rec})
+            db.add(
+                IngestError(
+                    tenant_id=current_user.tenant_id,
+                    ingest_job_id=job_pk,
+                    source_system=source_system,
+                    entity_type=entity_type,
+                    raw_payload=json.dumps(rec, ensure_ascii=False),
+                    error_reason=reason,
+                    error_detail={"connector": name, "stage": "mapping", "mapping_config_id": effective_mapping_id},
+                    resolved=False,
+                )
+            )
+            continue
+
+        source_event_id = str(mapped_rec.get("event_id") or rec.get("event_id") or uuid.uuid4())
         envelope = _build_envelope(
             tenant_id=str(current_user.tenant_id),
             source_system=source_system,
             entity_type=entity_type,
-            payload=rec,
+            payload=mapped_rec,
             source_event_id=source_event_id,
+            mapping_config_id=effective_mapping_id,
             ingest_metadata={"channel": "connector-parse", "job_id": job_pk},
         )
+        envelope["raw_payload"] = rec
         topic = f"raw.{entity_type.lower()}s"
         if producer:
             ok = await _publish_with_retries(
@@ -1251,6 +1668,8 @@ async def parse_connector_payload(
     return {
         "job_id": job_pk,
         "source_system": source_system,
+        "mapping_config_id": effective_mapping_id,
+        "mapping_version_id": effective_mapping_id,
         "status": job.status,
         "summary": ConnectorParseSummary(
             accepted=accepted,
@@ -1272,6 +1691,7 @@ UTC_TZ = timezone.utc
 async def ingest_sse_stream(
     request: Request,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Server-Sent Events — streams real-time ingest heartbeat / status updates.
 
@@ -1284,10 +1704,12 @@ async def ingest_sse_stream(
             if await request.is_disconnected():
                 break
             ping_count += 1
+            snapshot = await _build_ingest_stream_snapshot(db, str(current_user.tenant_id))
             payload = json.dumps({
-                "type": "heartbeat",
+                "type": "ingest_snapshot",
                 "count": ping_count,
                 "ts": datetime.now(UTC_TZ).isoformat(),
+                "summary": snapshot,
             })
             yield f"data: {payload}\n\n"
             await asyncio.sleep(5)

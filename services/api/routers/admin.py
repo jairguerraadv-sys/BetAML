@@ -190,12 +190,25 @@ class OperationalAlertOut(BaseModel):
     threshold: float | int | None = None
 
 
+class DLQBreakdownOut(BaseModel):
+    source_system: str
+    entity_type: str | None = None
+    count: int
+
+
 class OpsSummaryOut(BaseModel):
     generated_at: datetime
     maintenance_mode: bool
     kafka_consumer_lag: int
     ingest_error_rate_24h_percent: float
     unresolved_dlq_events: int
+    dlq_breakdown: list[DLQBreakdownOut]
+    ingest_rate_limit_per_min: int
+    ws_active_connections: int
+    ws_queued_messages: int
+    ws_peak_queue_depth: int
+    ws_backpressure_events: int
+    ws_last_backpressure_at: datetime | None = None
     stale_models: int
     oldest_model_age_days: int | None = None
     alerts: list[OperationalAlertOut]
@@ -253,6 +266,7 @@ async def get_ops_summary(
 ):
     """Operational summary for infra dashboards and admin triage."""
     import httpx
+    from routers.ingest import _ensure_ws_runtime, _tenant_ingest_rate_limit
 
     now_utc = datetime.now(UTC)
     since_24h = now_utc - timedelta(hours=24)
@@ -267,6 +281,21 @@ async def get_ops_summary(
             IngestError.resolved.is_(False),
         )
     )).scalar() or 0)
+    dlq_breakdown_rows = (await db.execute(
+        select(
+            IngestError.source_system,
+            IngestError.entity_type,
+            sqlfunc.count(IngestError.id),
+        ).where(
+            IngestError.tenant_id == tenant_id,
+            IngestError.resolved.is_(False),
+        ).group_by(
+            IngestError.source_system,
+            IngestError.entity_type,
+        ).order_by(
+            sqlfunc.count(IngestError.id).desc()
+        ).limit(5)
+    )).all()
 
     ingest_rows = (await db.execute(
         select(
@@ -316,6 +345,16 @@ async def get_ops_summary(
     except Exception as exc:  # noqa: BLE001
         logger.warning("ops_summary_kafka_lag_failed", error=str(exc))
 
+    ingest_rate_limit = await _tenant_ingest_rate_limit(db, str(tenant_id), default_limit=300)
+    ws_runtime = _ensure_ws_runtime(str(tenant_id))
+    ws_last_backpressure_at = None
+    raw_last_backpressure = ws_runtime.get("last_backpressure_at")
+    if isinstance(raw_last_backpressure, str):
+        try:
+            ws_last_backpressure_at = datetime.fromisoformat(raw_last_backpressure)
+        except ValueError:
+            ws_last_backpressure_at = None
+
     alerts: list[OperationalAlertOut] = []
     if kafka_lag > 1000:
         alerts.append(OperationalAlertOut(
@@ -349,6 +388,14 @@ async def get_ops_summary(
             value=unresolved_dlq,
             threshold=0,
         ))
+    if int(ws_runtime.get("backpressure_events", 0) or 0) > 0:
+        alerts.append(OperationalAlertOut(
+            code="INGEST_WS_BACKPRESSURE",
+            severity="warning",
+            message="Canal WebSocket de ingestão registrou eventos de backpressure.",
+            value=int(ws_runtime.get("backpressure_events", 0) or 0),
+            threshold=0,
+        ))
 
     return OpsSummaryOut(
         generated_at=now_utc,
@@ -356,6 +403,20 @@ async def get_ops_summary(
         kafka_consumer_lag=kafka_lag,
         ingest_error_rate_24h_percent=ingest_error_rate,
         unresolved_dlq_events=unresolved_dlq,
+        dlq_breakdown=[
+            DLQBreakdownOut(
+                source_system=str(source_system),
+                entity_type=str(entity_type) if entity_type is not None else None,
+                count=int(count or 0),
+            )
+            for source_system, entity_type, count in dlq_breakdown_rows
+        ],
+        ingest_rate_limit_per_min=ingest_rate_limit,
+        ws_active_connections=int(ws_runtime.get("active_connections", 0) or 0),
+        ws_queued_messages=int(ws_runtime.get("queued_messages", 0) or 0),
+        ws_peak_queue_depth=int(ws_runtime.get("peak_queue_depth", 0) or 0),
+        ws_backpressure_events=int(ws_runtime.get("backpressure_events", 0) or 0),
+        ws_last_backpressure_at=ws_last_backpressure_at,
         stale_models=stale_models,
         oldest_model_age_days=oldest_model_age_days,
         alerts=alerts,

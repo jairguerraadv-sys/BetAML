@@ -296,10 +296,51 @@ export default function IngestErrorsPage() {
         <span className="text-gray-500 dark:text-gray-400">
           Reconexoes: {ingestStream.reconnectCount}
         </span>
+        {ingestStream.lastEvent?.summary && (
+          <>
+            <span className="text-gray-500 dark:text-gray-400">
+              Ativos: {ingestStream.lastEvent.summary.active_jobs}
+            </span>
+            <span className="text-gray-500 dark:text-gray-400">
+              Falhas 24h: {ingestStream.lastEvent.summary.failed_jobs_24h}
+            </span>
+            <span className="text-gray-500 dark:text-gray-400">
+              Quarentena aberta: {ingestStream.lastEvent.summary.unresolved_errors}
+            </span>
+            <span className="text-gray-500 dark:text-gray-400">
+              Rate limit: {ingestStream.lastEvent.summary.configured_rate_limit_per_min}/min
+            </span>
+            <span className="text-gray-500 dark:text-gray-400">
+              WS ativos: {ingestStream.lastEvent.summary.ws_active_connections}
+            </span>
+            <span className="text-gray-500 dark:text-gray-400">
+              Fila WS: {ingestStream.lastEvent.summary.ws_queued_messages}/{ingestStream.lastEvent.summary.ws_max_queue_size}
+            </span>
+            <span className="text-gray-500 dark:text-gray-400">
+              Backpressure: {ingestStream.lastEvent.summary.ws_backpressure_events}
+            </span>
+          </>
+        )}
         {ingestStream.error && (
           <span className="text-amber-600">{ingestStream.error}</span>
         )}
       </section>
+
+      {ingestStream.lastEvent?.summary?.quarantine_breakdown?.length ? (
+        <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm dark:border-red-800 dark:bg-red-950/30">
+          <p className="font-semibold text-red-800 dark:text-red-200">Concentração atual da quarentena</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {ingestStream.lastEvent.summary.quarantine_breakdown.map((item) => (
+              <span
+                key={`${item.source_system}-${item.entity_type ?? 'unknown'}`}
+                className="rounded-full border border-red-300 px-2.5 py-1 text-xs text-red-800 dark:border-red-700 dark:text-red-200"
+              >
+                {item.source_system} · {item.entity_type ?? '—'} · {item.count}
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {/* Pagination */}
       <div className="flex items-center justify-between pt-1">
@@ -440,7 +481,7 @@ export default function IngestErrorsPage() {
             </div>
 
             <p className="mb-2 text-xs text-gray-500">
-              Edite o payload abaixo e envie para reprocessamento. O erro original será marcado como resolvido.
+              Edite o payload bruto abaixo e envie para reprocessamento. O erro original será marcado como resolvido e o payload será remapeado com a versão selecionada ou com a versão atual ativa.
             </p>
 
             <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user, require_roles
 from database import get_db
-from libs.connectors import CONNECTOR_TEMPLATE_REGISTRY
+from libs.connectors import CONNECTOR_TEMPLATE_REGISTRY, get_connector
 from libs.mapping import (
     MappingConfigSchema,
     MappingEngine,
@@ -58,11 +58,51 @@ class MappingValidateIn(BaseModel):
 
 
 class MappingPreviewIn(MappingValidateIn):
-    sample: dict[str, Any]
+    sample: dict[str, Any] | None = None
+    sample_text: str | None = None
 
 
 class MappingTestIn(BaseModel):
     sample: dict[str, Any]
+
+
+def _resolve_preview_sample(
+    cfg: dict[str, Any],
+    *,
+    sample: dict[str, Any] | None,
+    sample_text: str | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    if sample is not None:
+        return sample, None
+
+    if not sample_text:
+        raise ValueError("Informe sample ou sample_text")
+
+    source_system = str(cfg.get("source_system") or "")
+    entity_type = str(cfg.get("entity_type") or "TRANSACTION").upper()
+
+    if source_system in CONNECTOR_TEMPLATE_REGISTRY:
+        connector_kwargs = {"root_tag": "transaction"} if source_system == "ConnectorGamma" else {}
+        connector = get_connector(source_system, **connector_kwargs)
+        parse_result = connector.parse(sample_text.encode("utf-8"), entity_type=entity_type)
+        if not parse_result.records:
+            raise ValueError(
+                f"A amostra do conector não gerou registros válidos. Errors: {parse_result.errors[:3]}"
+            )
+        return (
+            parse_result.records[0],
+            {
+                "accepted": len(parse_result.records),
+                "failed": parse_result.failed,
+                "total": parse_result.total,
+                "errors": parse_result.errors[:10],
+            },
+        )
+
+    parsed = json.loads(sample_text)
+    if not isinstance(parsed, dict):
+        raise ValueError("sample_text deve representar um objeto JSON")
+    return parsed, None
 
 
 def _normalize_raw_config(raw: dict[str, Any]) -> dict[str, Any]:
@@ -198,18 +238,24 @@ async def preview_mapping_config(
             config_text=body.config_text,
             fmt=body.format,
         )
+        sample_obj, sample_parse = _resolve_preview_sample(
+            cfg,
+            sample=body.sample,
+            sample_text=body.sample_text,
+        )
         engine = MappingEngine(cfg)
-        preview = engine.apply(body.sample)
+        preview = engine.apply(sample_obj)
         canonical_validation = validate_mapped_payload_against_canonical_schema(cfg["entity_type"], preview)
         return {
             "valid": canonical_validation["valid"],
             "preview": preview,
             "normalized_config": cfg,
             "canonical_validation": canonical_validation,
+            "sample_parse": sample_parse,
             "error": None if canonical_validation["valid"] else "Preview incompatível com schema canônico de ingestão",
         }
     except Exception as exc:  # noqa: BLE001
-        return {"valid": False, "error": str(exc), "preview": {}}
+        return {"valid": False, "error": str(exc), "preview": {}, "sample_parse": None}
 
 
 @router.get("/mappings")
@@ -379,6 +425,13 @@ async def rollback_mapping_version(
     if not target:
         raise HTTPException(404, "Versão não encontrada")
 
+    next_version_number = await _next_version_number(
+        db,
+        current_user.tenant_id,
+        ref.source_system,
+        ref.entity_type,
+    )
+
     await db.execute(
         update(MappingConfig)
         .where(
@@ -388,16 +441,42 @@ async def rollback_mapping_version(
         )
         .values(is_current=False)
     )
-    target.is_current = True
-    target.active = True
+
+    rollback_row = MappingConfig(
+        tenant_id=current_user.tenant_id,
+        name=target.name,
+        source_system=target.source_system,
+        entity_type=target.entity_type,
+        version=f"{next_version_number}.0",
+        version_number=next_version_number,
+        parent_id=target.id,
+        is_current=True,
+        active=True,
+        change_notes=f"Rollback para v{target.version_number}",
+        config_json=target.config_json,
+        created_by=current_user.id,
+    )
+    db.add(rollback_row)
     await db.commit()
+    await db.refresh(rollback_row)
     await write_audit(
         db, current_user.tenant_id, current_user.id,
         "ROLLBACK_MAPPING", "MappingConfig", str(mapping_id),
-        before={"version_number": ref.version_number},
-        after={"version_number": target.version_number},
+        before={"version_number": ref.version_number, "mapping_id": ref.id},
+        after={
+            "version_number": rollback_row.version_number,
+            "mapping_id": rollback_row.id,
+            "rolled_back_from_version_number": target.version_number,
+            "rolled_back_from_mapping_id": target.id,
+        },
     )
-    return {"status": "activated", "id": target.id, "version_number": target.version_number}
+    return {
+        "status": "activated",
+        "id": rollback_row.id,
+        "version_number": rollback_row.version_number,
+        "rollback_source_version_number": target.version_number,
+        "rollback_source_mapping_id": target.id,
+    }
 
 
 @router.put("/mappings/{mapping_id}")

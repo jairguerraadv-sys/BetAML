@@ -142,4 +142,79 @@ test.describe('Ingest Connectors', () => {
     expect(job.failed_records).toBeGreaterThanOrEqual(2);
     expect(job.error_count).toBeGreaterThanOrEqual(2);
   });
+
+  test('admin can parse ConnectorGamma with explicit MappingConfig version tracking', async ({ request }) => {
+    const session = await apiLoginAsAdmin(request);
+    const headers = authHeaders(session.access_token);
+
+    const mappingResponse = await request.post(`${API_URL}/mappings`, {
+      headers,
+      data: {
+        name: `Gamma explicit ${Date.now()}`,
+        source_system: 'ConnectorGamma',
+        entity_type: 'TRANSACTION',
+        format: 'json',
+        config_json: {
+          source_system: 'ConnectorGamma',
+          entity_type: 'TRANSACTION',
+          fields: [
+            { target: 'external_transaction_id', source: 'event_id', transform: 'copy' },
+            { target: 'player_cpf', source: 'external_player_id', transform: 'copy' },
+            { target: 'type', source: 'transaction_type', transform: 'copy' },
+            { target: 'amount', source: 'amount', transform: 'coerceDecimal' },
+            { target: 'occurred_at', source: 'occurred_at', transform: 'parseDate' },
+          ],
+        },
+        change_notes: 'Explicit gamma mapping for e2e',
+      },
+    });
+    expect(mappingResponse.ok()).toBeTruthy();
+    const mapping = await mappingResponse.json() as { id: string };
+
+    const xmlPayload = [
+      '<transactions>',
+      '  <transaction>',
+      '    <id>gamma-map-1</id>',
+      '    <player_id>CPF-GAMMA-MAP-1</player_id>',
+      '    <type>DEPOSIT</type>',
+      '    <amount>321.00</amount>',
+      '    <currency>BRL</currency>',
+      '    <timestamp>2026-03-20T10:00:00Z</timestamp>',
+      '  </transaction>',
+      '</transactions>',
+    ].join('\n');
+
+    const parseResponse = await request.post(`${API_URL}/ingest/connectors/gamma/parse`, {
+      headers,
+      multipart: {
+        entity_type: 'TRANSACTION',
+        mapping_config_id: mapping.id,
+        file: {
+          name: `gamma-explicit-${Date.now()}.xml`,
+          mimeType: 'application/xml',
+          buffer: Buffer.from(xmlPayload, 'utf-8'),
+        },
+      },
+    });
+
+    expect(parseResponse.status()).toBe(202);
+    const parseBody = await parseResponse.json() as {
+      job_id: string;
+      mapping_config_id: string | null;
+      mapping_version_id: string | null;
+    };
+    expect(parseBody.mapping_config_id).toBe(mapping.id);
+    expect(parseBody.mapping_version_id).toBe(mapping.id);
+
+    const jobResponse = await request.get(`${API_URL}/ingest/jobs/${parseBody.job_id}`, {
+      headers,
+    });
+    expect(jobResponse.ok()).toBeTruthy();
+    const job = await jobResponse.json() as {
+      mapping_config_id: string | null;
+      mapping_version_id: string | null;
+    };
+    expect(job.mapping_config_id).toBe(mapping.id);
+    expect(job.mapping_version_id).toBe(mapping.id);
+  });
 });

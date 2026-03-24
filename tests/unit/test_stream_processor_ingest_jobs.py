@@ -151,3 +151,62 @@ async def test_process_ingest_job_connector_delta_uses_native_parser_with_line_e
     assert final_args[3] == 2
     assert isinstance(final_kwargs.get("error_sample"), list)
     assert len(ingest_errors) == 2
+
+
+@pytest.mark.asyncio
+async def test_process_ingest_job_connector_uses_mapping_before_publish():
+    xml_payload = b"""<Events>
+  <Transaction>
+    <EventId>G-MAP-1</EventId>
+    <PlayerId>PLY-MAP-1</PlayerId>
+    <Type>DEPOSIT</Type>
+    <Amount currency=\"BRL\">100.00</Amount>
+    <Timestamp>2026-03-21T10:00:00Z</Timestamp>
+  </Transaction>
+</Events>"""
+
+    async def _fake_to_thread(func, /, *args, **kwargs):
+        return None
+
+    producer = MagicMock()
+    producer.send = AsyncMock(return_value=None)
+
+    with patch("minio.Minio", _minio_factory(xml_payload)), patch.object(
+        _sp_mod.asyncio, "to_thread", side_effect=_fake_to_thread
+    ):
+        await _sp_mod.process_ingest_job(_msg(source_system="ConnectorGamma", file_name="gamma.xml"), MagicMock(), MagicMock(), producer)
+
+    payload = producer.send.await_args_list[0].args[1]["payload"]
+    assert payload["player_cpf"] == "PLY-MAP-1"
+    assert payload["type"] == "DEPOSIT"
+    assert "external_player_id" not in payload
+
+
+@pytest.mark.asyncio
+async def test_process_ingest_job_derives_dlq_topic_from_failed_entity_type():
+    ndjson_payload = b'{"entity_type":"BET","player_id":"PLY-1","stake_amount":15,"placed_at":"2026-03-21T11:00:00Z"}\n'
+
+    async def _fake_to_thread(func, /, *args, **kwargs):
+        return None
+
+    producer = MagicMock()
+
+    async def _send(topic, payload, key=None):
+        if topic == "raw.bets.dlq":
+            return None
+        raise RuntimeError("publish boom")
+
+    producer.send = AsyncMock(side_effect=_send)
+
+    mapping_engine = MagicMock()
+    mapping_engine.apply.side_effect = RuntimeError("mapping explosion")
+
+    with patch("minio.Minio", _minio_factory(ndjson_payload)), \
+         patch.object(_sp_mod.asyncio, "to_thread", side_effect=_fake_to_thread), \
+         patch("libs.mapping.get_default_mapping", return_value={"source_system": "BackofficeAlpha", "entity_type": "TRANSACTION", "fields": []}), \
+         patch("libs.mapping.MappingEngine", return_value=mapping_engine):
+        await _sp_mod.process_ingest_job(_msg(source_system="BackofficeAlpha", file_name="bets.ndjson"), MagicMock(), MagicMock(), producer)
+
+    topics = [call.args[0] for call in producer.send.await_args_list]
+    assert "raw.bets.dlq" in topics
+    assert "raw.transactions.dlq" not in topics

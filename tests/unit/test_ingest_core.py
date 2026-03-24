@@ -14,6 +14,7 @@ Tests cover:
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 import os
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from fastapi import WebSocketDisconnect
 from starlette.requests import Request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../services/api"))
@@ -60,6 +62,50 @@ def _make_db(execute_result=None, get_result=None):
     db.execute = _execute
     db.get = AsyncMock(return_value=get_result)
     return db
+
+
+class _FakeWebSocket:
+    def __init__(self, *, token: str = "token", messages: list[object] | None = None):
+        self.headers = {"authorization": f"Bearer {token}"}
+        self._messages = list(messages or [])
+        self.sent: list[dict] = []
+        self.accepted = False
+        self.close_code: int | None = None
+
+    async def accept(self) -> None:
+        self.accepted = True
+
+    async def send_json(self, payload: dict) -> None:
+        self.sent.append(payload)
+
+    async def close(self, code: int) -> None:
+        self.close_code = code
+
+    async def receive_json(self) -> dict:
+        await asyncio.sleep(0)
+        if self._messages:
+            item = self._messages.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+        raise WebSocketDisconnect()
+
+
+class _BackpressureQueue:
+    def __init__(self, maxsize: int = 500):
+        self.maxsize = maxsize
+
+    async def get(self):
+        await asyncio.Future()
+
+    def put_nowait(self, _item) -> None:
+        raise asyncio.QueueFull()
+
+    def qsize(self) -> int:
+        return self.maxsize
+
+    def task_done(self) -> None:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +237,56 @@ async def test_ingest_event_valid_request_returns_event_id():
     assert "event_id" in result
 
 
+@pytest.mark.asyncio
+async def test_ingest_event_applies_explicit_mapping_before_publish():
+    from routers.ingest import ingest_event, IngestEventRequest
+
+    body = IngestEventRequest(
+        source_system="BackofficeAlpha",
+        entity_type="TRANSACTION",
+        mapping_config_id="map-explicit-1",
+        payload={"customer_id": "P-1", "amount": "100.50", "event_id": "evt-map-1"},
+    )
+
+    db = _make_db()
+    user = _make_user()
+    sent_messages: list[tuple[str, dict, str]] = []
+
+    async def _send(topic, payload, key, headers=None):
+        sent_messages.append((topic, payload, key))
+
+    mock_producer = AsyncMock()
+    mock_producer.send = AsyncMock(side_effect=_send)
+
+    with patch("routers.ingest._tenant_ingest_rate_limit", AsyncMock(return_value=300)), \
+         patch("routers.ingest.redis_rate_limit", AsyncMock()), \
+         patch("routers.ingest.get_producer", return_value=mock_producer), \
+         patch("routers.ingest._resolve_effective_mapping_config", AsyncMock(return_value=(
+             "map-explicit-1",
+             {
+                 "version": "1.0",
+                 "source_system": "BackofficeAlpha",
+                 "entity_type": "TRANSACTION",
+                 "fields": [
+                     {"target": "external_player_id", "source": "customer_id", "transform": "copy"},
+                     {"target": "amount", "source": "amount", "transform": "coerceDecimal"},
+                     {"target": "event_id", "source": "event_id", "transform": "copy"},
+                 ],
+             },
+         ))):
+        result = await ingest_event(body=body, current_user=user, db=db)
+
+    assert "event_id" in result
+    assert sent_messages
+    topic, payload, key = sent_messages[0]
+    assert topic == "raw.transactions"
+    assert key == "evt-map-1"
+    assert payload["mapping_config_id"] == "map-explicit-1"
+    assert payload["payload"]["external_player_id"] == "P-1"
+    assert payload["payload"]["amount"] == 100.5
+    assert payload["raw_payload"]["customer_id"] == "P-1"
+
+
 # ---------------------------------------------------------------------------
 # ConnectorParseSummary
 # ---------------------------------------------------------------------------
@@ -261,6 +357,224 @@ async def test_replay_ingest_error_404_when_not_found():
             )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_ingest_websocket_rejects_revoked_token():
+    from routers.ingest import ingest_websocket
+
+    websocket = _FakeWebSocket()
+    fake_redis = AsyncMock()
+    fake_redis.exists = AsyncMock(return_value=True)
+
+    with patch("routers.ingest.jwt.decode", return_value={"sub": "u1", "tenant_id": "t1", "jti": "revoked-1"}), \
+         patch("auth._get_auth_redis", AsyncMock(return_value=fake_redis)):
+        await ingest_websocket(websocket)
+
+    assert websocket.accepted is True
+    assert websocket.sent == [{"error": "token_revoked"}]
+    assert websocket.close_code == 1008
+
+
+@pytest.mark.asyncio
+async def test_ingest_websocket_backpressure_updates_runtime_state():
+    from routers import ingest as ingest_module
+    from routers.ingest import ingest_websocket
+
+    ingest_module._INGEST_WS_RUNTIME.pop("t1", None)
+
+    websocket = _FakeWebSocket(messages=[
+        {
+            "source_system": "BackofficeAlpha",
+            "entity_type": "TRANSACTION",
+            "payload": {"amount": 100, "player_id": "p1"},
+        },
+        WebSocketDisconnect(),
+    ])
+
+    user = MagicMock()
+    user.active = True
+    user.role = "AML_ANALYST"
+
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=user)
+
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=db)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+
+    producer = AsyncMock()
+
+    with patch("routers.ingest.jwt.decode", return_value={"sub": "u1", "tenant_id": "t1"}), \
+         patch("routers.ingest.AsyncSessionLocal", return_value=session_cm), \
+         patch("routers.ingest._tenant_ingest_rate_limit", AsyncMock(return_value=600)), \
+         patch("routers.ingest.get_producer", AsyncMock(return_value=producer)), \
+         patch("routers.ingest.redis_rate_limit", AsyncMock()), \
+         patch("routers.ingest.asyncio.Queue", _BackpressureQueue):
+        await ingest_websocket(websocket)
+
+    runtime_state = ingest_module._INGEST_WS_RUNTIME["t1"]
+    assert websocket.accepted is True
+    assert any(msg.get("status") == "backpressure" for msg in websocket.sent)
+    assert runtime_state["active_connections"] == 0
+    assert runtime_state["backpressure_events"] == 1
+    assert runtime_state["peak_queue_depth"] == 500
+    assert runtime_state["queued_messages"] == 0
+    assert runtime_state["last_backpressure_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_ingest_websocket_applies_explicit_mapping_before_publish():
+    from routers import ingest as ingest_module
+    from routers.ingest import ingest_websocket
+
+    ingest_module._INGEST_WS_RUNTIME.pop("t1", None)
+
+    websocket = _FakeWebSocket(messages=[
+        {
+            "source_system": "BackofficeAlpha",
+            "entity_type": "TRANSACTION",
+            "mapping_config_id": "map-ws-1",
+            "payload": {"customer_id": "P-900", "amount": "77.10", "event_id": "evt-ws-1"},
+        },
+    ])
+
+    user = MagicMock()
+    user.active = True
+    user.role = "AML_ANALYST"
+
+    auth_db = AsyncMock()
+    auth_db.get = AsyncMock(return_value=user)
+    mapping_db = AsyncMock()
+
+    auth_cm = MagicMock()
+    auth_cm.__aenter__ = AsyncMock(return_value=auth_db)
+    auth_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mapping_cm = MagicMock()
+    mapping_cm.__aenter__ = AsyncMock(return_value=mapping_db)
+    mapping_cm.__aexit__ = AsyncMock(return_value=False)
+
+    sent_messages: list[tuple[str, dict, str]] = []
+
+    async def _send(topic, payload, key, headers=None):
+        sent_messages.append((topic, payload, key))
+
+    producer = AsyncMock()
+    producer.send = AsyncMock(side_effect=_send)
+
+    with patch("routers.ingest.jwt.decode", return_value={"sub": "u1", "tenant_id": "t1"}), \
+         patch("routers.ingest.AsyncSessionLocal", side_effect=[auth_cm, mapping_cm]), \
+         patch("routers.ingest._tenant_ingest_rate_limit", AsyncMock(return_value=600)), \
+         patch("routers.ingest.get_producer", AsyncMock(return_value=producer)), \
+         patch("routers.ingest.redis_rate_limit", AsyncMock()), \
+         patch("routers.ingest._resolve_effective_mapping_config", AsyncMock(return_value=(
+             "map-ws-1",
+             {
+                 "version": "1.0",
+                 "source_system": "BackofficeAlpha",
+                 "entity_type": "TRANSACTION",
+                 "fields": [
+                     {"target": "external_player_id", "source": "customer_id", "transform": "copy"},
+                     {"target": "amount", "source": "amount", "transform": "coerceDecimal"},
+                     {"target": "event_id", "source": "event_id", "transform": "copy"},
+                 ],
+             },
+         ))):
+        await ingest_websocket(websocket)
+
+    assert sent_messages
+    topic, payload, key = sent_messages[0]
+    assert topic == "raw.transactions"
+    assert key == "evt-ws-1"
+    assert payload["mapping_config_id"] == "map-ws-1"
+    assert payload["payload"]["external_player_id"] == "P-900"
+    assert payload["payload"]["amount"] == 77.1
+    assert payload["raw_payload"]["customer_id"] == "P-900"
+    assert any(msg.get("status") == "queued" for msg in websocket.sent)
+
+
+@pytest.mark.asyncio
+async def test_replay_ingest_error_applies_resolved_mapping_before_publish():
+    from routers.ingest import replay_ingest_error, ReplayIngestErrorRequest
+
+    err = MagicMock()
+    err.id = "err-1"
+    err.tenant_id = "t1"
+    err.source_system = "ConnectorGamma"
+    err.entity_type = "TRANSACTION"
+    err.line_number = 7
+    err.error_detail = {}
+    err.resolved = False
+    err.resolved_by = None
+    err.resolved_at = None
+
+    mapping = MagicMock()
+    mapping.id = "map-v3"
+    mapping.tenant_id = "t1"
+    mapping.config_json = {
+        "version": "1.0",
+        "source_system": "ConnectorGamma",
+        "entity_type": "TRANSACTION",
+        "fields": [
+            {"source": "customer_id", "target": "external_player_id", "transform": "copy"},
+            {"source": "amount", "target": "amount", "transform": "coerceDecimal"},
+            {"source": "event_id", "target": "event_id", "transform": "copy"},
+        ],
+    }
+
+    async def _db_get(model, ident):
+        if ident == "err-1":
+            return err
+        if ident == "map-v3":
+            return mapping
+        return None
+
+    db = _make_db(execute_result=mapping, get_result=None)
+    db.get = AsyncMock(side_effect=_db_get)
+
+    sent_messages: list[tuple[str, dict, str]] = []
+
+    async def _send(topic, payload, key, headers=None):
+        sent_messages.append((topic, payload, key))
+
+    producer = AsyncMock()
+    producer.send = AsyncMock(side_effect=_send)
+
+    body = ReplayIngestErrorRequest(
+        corrected_payload={
+            "event_id": "evt-replay-1",
+            "customer_id": "CPF-001",
+            "amount": 321.5,
+        },
+        entity_type="TRANSACTION",
+        mapping_config_id="map-v3",
+        note="corrigido manualmente",
+    )
+
+    with patch("routers.ingest.get_producer", return_value=producer):
+        result = await replay_ingest_error(
+            error_id="err-1",
+            body=body,
+            current_user=_make_user(),
+            db=db,
+        )
+
+    assert result["status"] == "queued"
+    assert result["mapping_config_id"] == "map-v3"
+    assert result["mapping_applied"] is True
+    assert err.resolved is True
+    assert isinstance(err.error_detail.get("replay"), dict)
+    assert err.error_detail["replay"]["mapping_config_id"] == "map-v3"
+    assert err.error_detail["replay"]["apply_mapping"] is True
+    assert sent_messages
+    topic, payload, key = sent_messages[0]
+    assert topic == "raw.transactions"
+    assert key == "evt-replay-1"
+    assert payload["mapping_config_id"] == "map-v3"
+    assert payload["payload"]["external_player_id"] == "CPF-001"
+    assert payload["payload"]["amount"] == 321.5
+    assert payload["raw_payload"]["customer_id"] == "CPF-001"
 
 
 @pytest.mark.asyncio
@@ -376,6 +690,89 @@ async def test_ingest_epsilon_webhook_invalid_signature_creates_failed_job():
 
     assert exc_info.value.status_code == 400
     assert db.add.call_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_ingest_epsilon_webhook_applies_resolved_mapping_before_publish():
+    from routers.ingest import ingest_epsilon_webhook
+
+    principal = MagicMock()
+    principal.tenant_id = "t1"
+    principal.id = "u1"
+
+    body = b'{"events":[{"event_id":"evt-1","player_id":"p1","event_type":"DEPOSIT","gross_amount":10.0,"event_time":"2026-03-20T10:00:00Z","currency_code":"BRL"}]}'
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/ingest/webhook/epsilon",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"x-epsilon-signature", b"sha256=dummy"),
+            ],
+        },
+        receive=receive,
+    )
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock(side_effect=lambda obj: setattr(obj, "id", "job-1"))
+
+    producer = AsyncMock()
+    producer.send = AsyncMock(return_value=None)
+
+    with patch("routers.ingest._tenant_ingest_rate_limit", AsyncMock(return_value=300)), \
+         patch("routers.ingest.redis_rate_limit", AsyncMock()), \
+         patch("routers.ingest._upload_bronze_file", return_value="bronze/t1/job-1/epsilon.json"), \
+         patch("routers.ingest.get_producer", AsyncMock(return_value=producer)), \
+         patch("routers.ingest._resolve_effective_mapping_config", AsyncMock(return_value=(
+             "map-v2",
+             {
+                 "source_system": "ConnectorEpsilon",
+                 "entity_type": "TRANSACTION",
+                 "fields": [
+                     {"target": "external_transaction_id", "source": "event_id", "transform": "copy"},
+                     {"target": "player_cpf", "source": "external_player_id", "transform": "copy"},
+                     {"target": "type", "source": "transaction_type", "transform": "copy"},
+                     {"target": "amount", "source": "amount", "transform": "coerceDecimal"},
+                     {"target": "occurred_at", "source": "occurred_at", "transform": "parseDate"},
+                 ],
+             },
+         ))), \
+         patch("routers.ingest.ConnectorEpsilon") as connector_cls:
+        connector = MagicMock()
+        connector.parse.return_value = MagicMock(
+            success=True,
+            records=[
+                {
+                    "event_id": "evt-1",
+                    "external_player_id": "p1",
+                    "transaction_type": "DEPOSIT",
+                    "amount": 10.0,
+                    "occurred_at": "2026-03-20T10:00:00Z",
+                    "currency": "BRL",
+                }
+            ],
+            total=1,
+            failed=0,
+            errors=[],
+        )
+        connector_cls.return_value = connector
+
+        result = await ingest_epsilon_webhook(request=request, principal=principal, db=db)
+
+    assert result["status"] == "accepted"
+    call = producer.send.await_args_list[0]
+    assert call.args[0] == "raw.transactions"
+    payload = call.args[1]
+    assert payload["mapping_config_id"] == "map-v2"
+    assert payload["payload"]["player_cpf"] == "p1"
+    assert payload["payload"]["type"] == "DEPOSIT"
 
 
 # ---------------------------------------------------------------------------

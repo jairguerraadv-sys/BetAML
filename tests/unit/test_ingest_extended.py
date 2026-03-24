@@ -204,11 +204,30 @@ async def test_tenant_rate_limit_reads_flag_value():
     flag = MagicMock()
     flag.flag_value = "150"
     flag.value = "150"
-    db = _make_db(scalar_one_result=flag)
+    db = _make_db()
+    scoring_result = MagicMock()
+    scoring_result.scalar_one_or_none.return_value = None
+    flag_result = MagicMock()
+    flag_result.scalar_one_or_none.return_value = flag
+    db.execute = AsyncMock(side_effect=[scoring_result, flag_result])
 
     result = await _tenant_ingest_rate_limit(db, "t1", default_limit=300)
 
     assert result == 150
+
+
+@pytest.mark.asyncio
+async def test_tenant_rate_limit_prefers_scoring_config_value():
+    from routers.ingest import _tenant_ingest_rate_limit
+
+    scoring_result = MagicMock()
+    scoring_result.scalar_one_or_none.return_value = 777
+    db = _make_db()
+    db.execute = AsyncMock(return_value=scoring_result)
+
+    result = await _tenant_ingest_rate_limit(db, "t1", default_limit=300)
+
+    assert result == 777
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +321,49 @@ async def test_ingest_batch_with_producer_enqueues_and_returns_event_ids():
     assert "event_id" in result["results"][0]
 
 
+@pytest.mark.asyncio
+async def test_ingest_batch_applies_explicit_mapping_before_publish():
+    from routers.ingest import ingest_batch, IngestEventRequest
+
+    events = [
+        IngestEventRequest(
+            source_system="ConnectorGamma",
+            entity_type="TRANSACTION",
+            mapping_config_id="map-batch-1",
+            payload={"customer_id": "P-77", "amount": "55.25", "event_id": "evt-batch-map-1"},
+        ),
+    ]
+    db = _make_db()
+    user = _make_user()
+
+    mock_producer = AsyncMock()
+    mock_producer.send = AsyncMock(return_value=None)
+
+    with patch("routers.ingest.redis_rate_limit", new_callable=AsyncMock), \
+         patch("routers.ingest.get_producer", new_callable=AsyncMock, return_value=mock_producer), \
+         patch("routers.ingest._resolve_effective_mapping_config", new_callable=AsyncMock, return_value=(
+             "map-batch-1",
+             {
+                 "version": "1.0",
+                 "source_system": "ConnectorGamma",
+                 "entity_type": "TRANSACTION",
+                 "fields": [
+                     {"target": "external_player_id", "source": "customer_id", "transform": "copy"},
+                     {"target": "amount", "source": "amount", "transform": "coerceDecimal"},
+                     {"target": "event_id", "source": "event_id", "transform": "copy"},
+                 ],
+             },
+         )):
+        result = await ingest_batch(events=events, current_user=user, db=db)
+
+    assert result["results"][0]["status"] == "queued"
+    sent_payload = mock_producer.send.await_args_list[0].args[1]
+    assert sent_payload["mapping_config_id"] == "map-batch-1"
+    assert sent_payload["payload"]["external_player_id"] == "P-77"
+    assert sent_payload["payload"]["amount"] == 55.25
+    assert sent_payload["raw_payload"]["customer_id"] == "P-77"
+
+
 # ---------------------------------------------------------------------------
 # Schema tests
 # ---------------------------------------------------------------------------
@@ -313,14 +375,17 @@ def test_websocket_ingest_request_schema():
         entity_type="BET",
         payload={"bet_id": "B-1"},
         source_event_id="ext-999",
+        mapping_config_id="map-1",
     )
     assert req.source_system == "BackofficeAlpha"
     assert req.source_event_id == "ext-999"
+    assert req.mapping_config_id == "map-1"
 
 
 def test_replay_ingest_error_request_defaults():
     from routers.ingest import ReplayIngestErrorRequest
     req = ReplayIngestErrorRequest(corrected_payload={"amount": 100})
+    assert req.apply_mapping is True
     assert req.resolve_original is True
     assert req.note is None
     assert req.entity_type is None
@@ -363,7 +428,7 @@ def test_ingest_router_has_streaming_endpoints():
 
 
 @pytest.mark.asyncio
-async def test_ingest_sse_stream_returns_heartbeat_chunk():
+async def test_ingest_sse_stream_returns_operational_snapshot_chunk():
     from routers.ingest import ingest_sse_stream
 
     async def receive():
@@ -381,15 +446,63 @@ async def test_ingest_sse_stream_returns_heartbeat_chunk():
         receive=receive,
     )
 
+    db = AsyncMock()
+    latest_job = MagicMock()
+    latest_job.id = "job-1"
+    latest_job.status = "PROCESSING"
+    latest_job.source_system = "ConnectorGamma"
+    latest_job.updated_at = None
+    failed_job = MagicMock()
+    failed_job.id = "job-failed-1"
+    failed_job.source_system = "ConnectorDelta"
+    failed_job.status = "FAILED"
+    failed_job.failed_records = 2
+    failed_job.updated_at = None
+
+    exec_results = []
+    for scalar_value in (2, 1, 3):
+        result = MagicMock()
+        result.scalar_one.return_value = scalar_value
+        exec_results.append(result)
+    quarantine_result = MagicMock()
+    quarantine_result.all.return_value = [("ConnectorGamma", "TRANSACTION", 3)]
+    exec_results.append(quarantine_result)
+    latest_result = MagicMock()
+    latest_result.scalar_one_or_none.return_value = latest_job
+    exec_results.append(latest_result)
+    failed_jobs_result = MagicMock()
+    failed_jobs_result.scalars.return_value.all.return_value = [failed_job]
+    exec_results.append(failed_jobs_result)
+    db.execute = AsyncMock(side_effect=exec_results)
+
+    from routers import ingest as ingest_module
+    ingest_module._INGEST_WS_RUNTIME["t1"] = {
+        "active_connections": 2,
+        "queued_messages": 4,
+        "peak_queue_depth": 9,
+        "backpressure_events": 1,
+        "last_backpressure_at": "2026-03-23T22:00:00+00:00",
+        "messages_queued_total": 12,
+        "messages_acked_total": 8,
+        "max_queue_size": 500,
+    }
+
     with patch.object(request, "is_disconnected", AsyncMock(side_effect=[False, True])), \
-         patch("routers.ingest.asyncio.sleep", AsyncMock(return_value=None)):
-        response = await ingest_sse_stream(request=request, current_user=_make_user())
+         patch("routers.ingest.asyncio.sleep", AsyncMock(return_value=None)), \
+         patch("routers.ingest._tenant_ingest_rate_limit", AsyncMock(return_value=900)):
+        response = await ingest_sse_stream(request=request, current_user=_make_user(), db=db)
         chunks = []
         async for chunk in response.body_iterator:
             chunks.append(chunk)
 
     body = b"".join(c if isinstance(c, bytes) else c.encode("utf-8") for c in chunks).decode("utf-8")
-    assert "heartbeat" in body
+    assert "ingest_snapshot" in body
+    assert "active_jobs" in body
+    assert "unresolved_errors" in body
+    assert "quarantine_breakdown" in body
+    assert "configured_rate_limit_per_min" in body
+    assert "ws_active_connections" in body
+    assert "recent_failed_jobs" in body
     assert "data:" in body
 
 
@@ -491,6 +604,65 @@ async def test_parse_connector_payload_keeps_flow_when_refresh_fails():
 
 
 @pytest.mark.asyncio
+async def test_parse_connector_payload_applies_resolved_mapping_before_publish():
+    from routers.ingest import parse_connector_payload
+
+    db = _make_db()
+    db.refresh = AsyncMock(side_effect=RuntimeError("refresh failed"))
+    current_user = _make_user(role="ADMIN")
+    upload = _FakeUploadFile(
+        "gamma.xml",
+        b"""<Events><Transaction><EventId>g-1</EventId><PlayerId>P-1</PlayerId><Type>DEPOSIT</Type><Amount currency='BRL'>100.0</Amount><Timestamp>2026-03-20T10:00:00Z</Timestamp></Transaction></Events>""",
+    )
+
+    parse_result = MagicMock()
+    parse_result.total = 1
+    parse_result.failed = 0
+    parse_result.records = [{"event_id": "g-1", "external_player_id": "P-1", "transaction_type": "DEPOSIT", "amount": 100, "occurred_at": "2026-03-20T10:00:00Z"}]
+    parse_result.errors = []
+    connector = MagicMock()
+    connector.parse.return_value = parse_result
+
+    producer = MagicMock()
+    producer.send = AsyncMock(return_value=None)
+
+    with patch("routers.ingest._ensure_db_tenant_context", new_callable=AsyncMock), \
+         patch("routers.ingest._tenant_ingest_rate_limit", new_callable=AsyncMock, return_value=300), \
+         patch("routers.ingest.redis_rate_limit", new_callable=AsyncMock), \
+         patch("routers.ingest.get_connector", return_value=connector), \
+         patch("routers.ingest.get_producer", new_callable=AsyncMock, return_value=producer), \
+         patch("routers.ingest._resolve_effective_mapping_config", new_callable=AsyncMock, return_value=(
+             "map-gamma-v2",
+             {
+                 "source_system": "ConnectorGamma",
+                 "entity_type": "TRANSACTION",
+                 "fields": [
+                     {"target": "player_cpf", "source": "external_player_id", "transform": "copy"},
+                     {"target": "type", "source": "transaction_type", "transform": "copy"},
+                     {"target": "amount", "source": "amount", "transform": "coerceDecimal"},
+                     {"target": "occurred_at", "source": "occurred_at", "transform": "parseDate"},
+                     {"target": "external_transaction_id", "source": "event_id", "transform": "copy"},
+                 ],
+             },
+         )), \
+         patch("routers.ingest._upload_bronze_file", return_value="bronze/t1/ingest_jobs/job-1/gamma.xml"):
+        response = await parse_connector_payload(
+            connector_name="gamma",
+            file=upload,
+            entity_type="TRANSACTION",
+            current_user=current_user,
+            db=db,
+        )
+
+    assert response["mapping_config_id"] == "map-gamma-v2"
+    assert response["mapping_version_id"] == "map-gamma-v2"
+    sent_payload = producer.send.await_args_list[0].args[1]
+    assert sent_payload["mapping_config_id"] == "map-gamma-v2"
+    assert sent_payload["payload"]["player_cpf"] == "P-1"
+    assert sent_payload["payload"]["type"] == "DEPOSIT"
+
+
+@pytest.mark.asyncio
 async def test_reprocess_job_queues_without_refresh_after_commit():
     from routers.ingest import reprocess_job, ReprocessRequest
 
@@ -522,3 +694,4 @@ async def test_reprocess_job_queues_without_refresh_after_commit():
 
     assert response["status"] == "QUEUED"
     assert db.refresh.await_count == 0
+    assert producer.send.await_args_list[0].args[0] == "ingest.jobs.reprocess"

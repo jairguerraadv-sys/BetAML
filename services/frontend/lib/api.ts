@@ -598,6 +598,12 @@ export interface MappingValidateResponse {
 
 export interface MappingPreviewResponse extends MappingValidateResponse {
   preview?: Record<string, unknown>;
+  sample_parse?: {
+    accepted: number;
+    failed: number;
+    total: number;
+    errors: Array<Record<string, unknown>>;
+  } | null;
 }
 
 export interface MappingCreatePayload {
@@ -631,7 +637,8 @@ export const validateMappingConfig = (body: {
 export const previewMappingConfig = (body: {
   config_text?: string;
   config_json?: Record<string, unknown>;
-  sample: Record<string, unknown>;
+  sample?: Record<string, unknown>;
+  sample_text?: string;
   format: 'json' | 'yaml';
 }) => api.post<MappingPreviewResponse>('/mappings/preview', body).then((r) => r.data);
 
@@ -1281,6 +1288,17 @@ export interface OpsSummary {
   kafka_consumer_lag: number;
   ingest_error_rate_24h_percent: number;
   unresolved_dlq_events: number;
+  dlq_breakdown: Array<{
+    source_system: string;
+    entity_type: string | null;
+    count: number;
+  }>;
+  ingest_rate_limit_per_min: number;
+  ws_active_connections: number;
+  ws_queued_messages: number;
+  ws_peak_queue_depth: number;
+  ws_backpressure_events: number;
+  ws_last_backpressure_at?: string | null;
   stale_models: number;
   oldest_model_age_days?: number | null;
   alerts: OperationalAlert[];

@@ -309,6 +309,66 @@ def test_ingest_connector_gamma_xml_parse(headers_a):
 
 
 @skip_unless_stack
+def test_ingest_connector_gamma_parse_with_explicit_mapping_version(headers_a):
+    create_mapping_resp = api(
+        "/mappings",
+        "POST",
+        headers=headers_a,
+        json={
+            "name": f"Gamma explicit map {uuid.uuid4().hex[:6]}",
+            "source_system": "ConnectorGamma",
+            "entity_type": "TRANSACTION",
+            "format": "json",
+            "config_json": {
+                "source_system": "ConnectorGamma",
+                "entity_type": "TRANSACTION",
+                "fields": [
+                    {"target": "external_transaction_id", "source": "event_id", "transform": "copy"},
+                    {"target": "player_cpf", "source": "external_player_id", "transform": "copy"},
+                    {"target": "type", "source": "transaction_type", "transform": "copy"},
+                    {"target": "amount", "source": "amount", "transform": "coerceDecimal"},
+                    {"target": "occurred_at", "source": "occurred_at", "transform": "parseDate"},
+                ],
+            },
+            "change_notes": "gamma explicit mapping",
+        },
+    )
+    assert create_mapping_resp.status_code == 201, create_mapping_resp.text
+    mapping_id = create_mapping_resp.json()["id"]
+
+    xml_payload = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<transactions>
+  <transaction>
+    <id>TXG-EX-1</id>
+    <player_id>PLY-G-EX-1</player_id>
+    <type>DEPOSIT</type>
+    <amount>777.0</amount>
+    <currency>BRL</currency>
+    <timestamp>2026-03-09T10:00:00Z</timestamp>
+  </transaction>
+</transactions>
+""".encode("utf-8")
+
+    resp = api(
+        "/ingest/connectors/gamma/parse",
+        "POST",
+        headers=headers_a,
+        files={"file": ("gamma-explicit.xml", xml_payload, "application/xml")},
+        data={"entity_type": "transaction", "mapping_config_id": mapping_id},
+    )
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body.get("mapping_config_id") == mapping_id
+    assert body.get("mapping_version_id") == mapping_id
+
+    job_resp = api(f"/ingest/jobs/{body['job_id']}", headers=headers_a)
+    assert job_resp.status_code == 200, job_resp.text
+    job_body = job_resp.json()
+    assert job_body.get("mapping_config_id") == mapping_id
+    assert job_body.get("mapping_version_id") == mapping_id
+
+
+@skip_unless_stack
 def test_ingest_connector_delta_ndjson_parse(headers_a):
     ndjson_payload = (
         '{"id":"TXD-1","player_id":"PLY-D-1","evt_type":"DEPOSIT","amount":500.0,"ts":"2026-03-09T10:01:00Z"}\n'
@@ -565,7 +625,15 @@ def test_mapping_versioning_and_rollback(headers_a):
 
     rollback_resp = api(f"/mappings/{mapping_id}/rollback?version_number=1", "POST", headers=headers_a)
     assert rollback_resp.status_code == 200
-    assert rollback_resp.json().get("version_number") == 1
+    rollback_body = rollback_resp.json()
+    assert rollback_body.get("rollback_source_version_number") == 1
+    assert rollback_body.get("version_number", 0) >= 3
+
+    versions_after_resp = api(f"/mappings/{mapping_id}/versions", headers=headers_a)
+    assert versions_after_resp.status_code == 200
+    versions_after = versions_after_resp.json()
+    assert any(v.get("version_number") == rollback_body.get("version_number") and v.get("is_current") for v in versions_after)
+    assert any(v.get("version_number") == 1 for v in versions_after)
 
 
 @skip_unless_stack

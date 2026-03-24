@@ -118,6 +118,7 @@ export default function MappingsPage() {
   const [validationDetail, setValidationDetail] = useState<Record<string, unknown> | null>(null);
   const [previewResult, setPreviewResult] = useState<Record<string, unknown> | null>(null);
   const [previewValidation, setPreviewValidation] = useState<Record<string, unknown> | null>(null);
+  const [previewSampleParse, setPreviewSampleParse] = useState<Record<string, unknown> | null>(null);
   const [normalizedConfig, setNormalizedConfig] = useState<Record<string, unknown> | null>(null);
   const [mode, setMode] = useState<'create' | 'new-version'>('create');
 
@@ -162,22 +163,26 @@ export default function MappingsPage() {
     mutationFn: (payload: {
       config_text?: string;
       format: EditorFormat;
-      sample: Record<string, unknown>;
+      sample?: Record<string, unknown>;
+      sample_text?: string;
     }) => previewMappingConfig(payload),
     onSuccess: (data) => {
       if (!data.valid) {
         setPreviewResult({ error: data.error || 'Falha no preview' });
         setPreviewValidation((data.canonical_validation as Record<string, unknown>) || null);
+        setPreviewSampleParse((data.sample_parse as Record<string, unknown>) || null);
         return;
       }
       setPreviewResult(data.preview || {});
       setPreviewValidation((data.canonical_validation as Record<string, unknown>) || null);
+      setPreviewSampleParse((data.sample_parse as Record<string, unknown>) || null);
       setNormalizedConfig((data.normalized_config as Record<string, unknown>) || null);
     },
     onError: (e: unknown) => {
       const err = e as { response?: { data?: { detail?: string } } };
       setPreviewResult({ error: err?.response?.data?.detail || 'Erro ao gerar preview' });
       setPreviewValidation(null);
+      setPreviewSampleParse(null);
     },
   });
 
@@ -267,6 +272,8 @@ export default function MappingsPage() {
     setMode('create');
     setMappingName(`${tpl.source_system} TRANSACTION`);
     setPreviewResult(null);
+    setPreviewSampleParse(null);
+    setSampleText(tpl.sample_payload);
   }
 
   async function selectMapping(row: MappingListItem) {
@@ -282,21 +289,32 @@ export default function MappingsPage() {
     setValidationDetail((detail.canonical_validation as Record<string, unknown>) || null);
     setNormalizedConfig(detail.config_json);
     setPreviewResult(null);
+    setPreviewSampleParse(null);
   }
 
   async function runPreview() {
-    let sampleObj: Record<string, unknown>;
-    try {
-      sampleObj = JSON.parse(sampleText) as Record<string, unknown>;
-    } catch {
-      setPreviewResult({ error: 'JSON de amostra inválido' });
+    const payloadFormat = String(activeTemplate?.payload_format || '').toLowerCase();
+    const expectsStructuredSample = !['xml', 'ndjson'].includes(payloadFormat);
+
+    if (expectsStructuredSample) {
+      try {
+        const sampleObj = JSON.parse(sampleText) as Record<string, unknown>;
+        previewMutation.mutate({
+          config_text: editorText,
+          format: editorFormat,
+          sample: sampleObj,
+        });
+      } catch {
+        setPreviewResult({ error: 'JSON de amostra inválido' });
+        setPreviewSampleParse(null);
+      }
       return;
     }
 
     previewMutation.mutate({
       config_text: editorText,
       format: editorFormat,
-      sample: sampleObj,
+      sample_text: sampleText,
     });
   }
 
@@ -499,6 +517,11 @@ export default function MappingsPage() {
             className="h-36 w-full rounded-lg border p-2 font-mono text-xs"
             spellCheck={false}
           />
+          <p className="text-[11px] text-gray-500">
+            {activeTemplate
+              ? `Use a amostra no formato nativo do conector: ${activeTemplate.payload_format}.`
+              : 'Use JSON para fontes genéricas ou o payload nativo do conector selecionado.'}
+          </p>
           <button
             onClick={runPreview}
             disabled={previewMutation.isPending}
@@ -513,6 +536,13 @@ export default function MappingsPage() {
             className="max-h-56 overflow-auto rounded-lg bg-gray-900 p-3 text-xs text-emerald-200"
           >
             {prettyJson(previewResult || { message: 'Sem preview' })}
+          </pre>
+
+          <pre
+            aria-label="Resumo do parse da amostra do preview"
+            className="max-h-40 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-violet-200"
+          >
+            {prettyJson(previewSampleParse || { sample_parse: 'não aplicável' })}
           </pre>
 
           <pre
@@ -541,7 +571,11 @@ export default function MappingsPage() {
                     </div>
                     {!v.is_current && (
                       <button
-                        onClick={() => rollbackMutation.mutate({ id: selected.id, version: v.version_number })}
+                        onClick={() => {
+                          if (window.confirm(`Criar nova versão ativa a partir da v${v.version_number}?`)) {
+                            rollbackMutation.mutate({ id: selected.id, version: v.version_number });
+                          }
+                        }}
                         aria-label={`Rollback versão ${v.version_number} do mapping`}
                         className="rounded bg-amber-100 px-2 py-1 text-amber-700"
                       >

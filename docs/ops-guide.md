@@ -255,6 +255,13 @@ Passos recomendados:
 4. Se houver falhas de mapping, trate na quarentena e faça replay.
 5. Quando necessário, reprocessar o Bronze com a versao correta de mapping.
 
+Observação operacional:
+
+- Se nenhum `mapping_config_id` for informado, a API resolve automaticamente a versão ativa do tenant para `source_system + entity_type`.
+- O `IngestJob` persistido registra a versão efetiva usada em `mapping_config_id` e `mapping_version_id`.
+- Os endpoints `POST /ingest/event` e `POST /ingest/batch` também aceitam `mapping_config_id` para aplicar uma versão imutável específica antes do publish no Kafka.
+- O canal `WS /ingest/ws` aceita `mapping_config_id` por mensagem; o envelope preserva `raw_payload` e publica o payload já remapeado.
+
 Exemplo:
 
 ```bash
@@ -262,7 +269,8 @@ curl -X POST "http://localhost:8000/ingest/file" \
   -H "Authorization: Bearer <token>" \
   -F "file=@historico-marco.ndjson;type=application/x-ndjson" \
   -F "source_system=ConnectorDelta" \
-  -F "entity_type=transaction"
+  -F "entity_type=transaction" \
+  -F "mapping_config_id=<mapping-id-opcional>"
 ```
 
 ### Smoke real com pacote FictiBet
@@ -432,6 +440,12 @@ curl -X POST "http://localhost:8000/mappings/<mapping-id>/rollback?version_numbe
   -H "Authorization: Bearer <token>"
 ```
 
+Semântica atual:
+
+- o rollback não reativa a linha antiga em place;
+- o backend cria uma nova versão imutável ativa baseada na versão escolhida;
+- a resposta inclui `rollback_source_version_number` para auditoria e automação.
+
 Checklist antes do rollback:
 
 - confirmar que a versao alvo possui preview valido
@@ -441,9 +455,47 @@ Checklist antes do rollback:
 
 ### Streaming Operacional
 
-- `GET /ingest/stream` expõe heartbeat SSE para atualização operacional near-real-time.
-- `WS /ingest/ws` aceita ingestão contínua com fila limitada e resposta de backpressure.
+- `GET /ingest/stream` expõe snapshot SSE com `active_jobs`, `failed_jobs_24h`, `unresolved_errors`, `quarantine_breakdown`, métricas de fila do WebSocket e últimos jobs com falha.
+- `WS /ingest/ws` aceita ingestão contínua com fila limitada, `mapping_config_id` por mensagem e resposta de backpressure.
 - Eventos que falham após `DLQ_MAX_RETRIES` são publicados em `<topic>.dlq`.
+
+Exemplo de evento único com mapping explícito:
+
+```bash
+curl -X POST "http://localhost:8000/ingest/event" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_system": "BackofficeAlpha",
+    "entity_type": "TRANSACTION",
+    "mapping_config_id": "<mapping-version-id>",
+    "payload": {
+      "customer_id": "PLY-900",
+      "amount": "77.10",
+      "event_id": "evt-explicit-001"
+    }
+  }'
+```
+
+Exemplo de lote com versões explícitas:
+
+```bash
+curl -X POST "http://localhost:8000/ingest/batch" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '[
+    {
+      "source_system": "ConnectorGamma",
+      "entity_type": "TRANSACTION",
+      "mapping_config_id": "<mapping-version-id>",
+      "payload": {
+        "customer_id": "PLY-777",
+        "amount": "55.25",
+        "event_id": "evt-batch-001"
+      }
+    }
+  ]'
+```
 
 ## 6. Observabilidade
 
@@ -697,6 +749,7 @@ Comportamento operacional:
 curl -s -X POST "http://localhost:8000/ingest/connectors/gamma/parse" \
   -H "Authorization: Bearer $TOKEN" \
   -F "entity_type=transaction" \
+  -F "mapping_config_id=<mapping-id-opcional>" \
   -F "file=@./sample-gamma.xml;type=application/xml"
 ```
 
@@ -704,6 +757,7 @@ curl -s -X POST "http://localhost:8000/ingest/connectors/gamma/parse" \
 curl -s -X POST "http://localhost:8000/ingest/connectors/delta/parse" \
   -H "Authorization: Bearer $TOKEN" \
   -F "entity_type=transaction" \
+  -F "mapping_config_id=<mapping-id-opcional>" \
   -F "file=@./sample-delta.ndjson;type=application/x-ndjson"
 ```
 
@@ -711,6 +765,8 @@ Resposta inclui:
 
 - `job_id`
 - `source_system`
+- `mapping_config_id`
+- `mapping_version_id`
 - `status` (`DONE`, `PARTIAL` ou `FAILED`)
 - `summary.accepted`, `summary.failed`, `summary.total`, `summary.errors`
 

@@ -377,16 +377,30 @@ def _normalize_transaction_payload(payload: dict) -> dict:
     method = payload.get("method") or payload.get("payment_method") or payload.get("instrument_type")
     status = payload.get("status") or payload.get("txn_status") or "SETTLED"
     occurred_at = payload.get("occurred_at") or payload.get("timestamp") or payload.get("transactionDate") or _iso_now()
+    payment_instrument = payload.get("payment_instrument")
+    if not isinstance(payment_instrument, dict):
+        payment_instrument = {}
+    if not payment_instrument and (payload.get("instrument_type") or payload.get("instrument_token")):
+        payment_instrument = {
+            "instrument_type": payload.get("instrument_type"),
+            "instrument_id": payload.get("instrument_token"),
+        }
 
     return {
-        "player_id": payload.get("player_id") or payload.get("playerId") or payload.get("user_id"),
+        "player_id": (
+            payload.get("player_id")
+            or payload.get("playerId")
+            or payload.get("user_id")
+            or payload.get("external_player_id")
+            or payload.get("player_cpf")
+        ),
         "amount": amount,
         "type": str(tx_type).upper(),
         "method": method or "OTHER",
         "status": str(status).upper(),
         "currency": payload.get("currency") or payload.get("ccy") or "BRL",
         "occurred_at": occurred_at,
-        "payment_instrument": payload.get("payment_instrument") or {},
+        "payment_instrument": payment_instrument,
     }
 
 
@@ -398,7 +412,13 @@ def _normalize_bet_payload(payload: dict) -> dict:
     placed_at = payload.get("placed_at") or payload.get("occurred_at") or payload.get("timestamp") or _iso_now()
 
     return {
-        "player_id": payload.get("player_id") or payload.get("playerId") or payload.get("user_id"),
+        "player_id": (
+            payload.get("player_id")
+            or payload.get("playerId")
+            or payload.get("user_id")
+            or payload.get("external_player_id")
+            or payload.get("player_cpf")
+        ),
         "stake_amount": stake_amount,
         "odds": _coerce_float(odds, 0.0) if odds is not None else None,
         "potential_payout": _coerce_float(potential_payout, 0.0) if potential_payout is not None else None,
@@ -415,7 +435,13 @@ def _normalize_bet_payload(payload: dict) -> dict:
 def _normalize_device_payload(payload: dict) -> dict:
     occurred_at = payload.get("occurred_at") or payload.get("timestamp") or _iso_now()
     return {
-        "player_id": payload.get("player_id") or payload.get("playerId") or payload.get("user_id"),
+        "player_id": (
+            payload.get("player_id")
+            or payload.get("playerId")
+            or payload.get("user_id")
+            or payload.get("external_player_id")
+            or payload.get("player_cpf")
+        ),
         "device_id": payload.get("device_id") or payload.get("deviceId") or payload.get("fingerprint"),
         "action": payload.get("action") or payload.get("event_type") or "LOGIN",
         "ip": payload.get("ip") or payload.get("ip_address"),
@@ -496,6 +522,7 @@ async def process_raw_device_event(msg_value: dict, producer) -> None:
 # ──────────────────────────────────────────────────
 
 WINDOW_TTL_SECONDS = 90 * 24 * 3600  # 90 dias
+FEATURE_STORE_TTL_SECONDS = 4 * 3600
 
 
 async def _zadd_entry(redis_client, key: str, ts: datetime, entry: dict) -> None:
@@ -517,6 +544,94 @@ async def _zread_window(redis_client, key: str, cutoff: datetime) -> list[dict]:
         except Exception:
             pass
     return result
+
+
+def _latest_feature_snapshot_rows_sync() -> list[dict]:
+    import sqlalchemy as sa
+
+    engine = _get_oltp_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sa.text(
+                """
+                SELECT DISTINCT ON (tenant_id, player_id)
+                       tenant_id, player_id, feature_date, features, created_at
+                FROM feature_snapshots
+                ORDER BY tenant_id, player_id, feature_date DESC, created_at DESC
+                """
+            )
+        ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def _build_warmed_feature_store_entry(row: dict) -> tuple[str, dict[str, str]] | None:
+    tenant_id = str(row.get("tenant_id") or "")
+    player_id = str(row.get("player_id") or "")
+    if not tenant_id or not player_id:
+        return None
+
+    raw_features = row.get("features") or {}
+    if isinstance(raw_features, str):
+        try:
+            raw_features = json.loads(raw_features)
+        except Exception:
+            raw_features = {}
+    if not isinstance(raw_features, dict) or not raw_features:
+        return None
+
+    feature_date = row.get("feature_date")
+    feature_date_str = (
+        feature_date.isoformat()
+        if hasattr(feature_date, "isoformat")
+        else str(feature_date or _now_naive_utc().date().isoformat())
+    )
+    feature_version = raw_features.get("feature_version", 2)
+    try:
+        feature_version = int(feature_version or 2)
+    except (TypeError, ValueError):
+        feature_version = 2
+
+    snapshot_version = raw_features.get("snapshot_version", feature_version)
+    try:
+        snapshot_version = int(snapshot_version or feature_version)
+    except (TypeError, ValueError):
+        snapshot_version = feature_version
+
+    features = dict(raw_features)
+    features.setdefault("tenant_id", tenant_id)
+    features.setdefault("player_id", player_id)
+    features.setdefault("snapshot_date", feature_date_str)
+    features.setdefault("entity_type", "PLAYER")
+    features.setdefault("feature_version", feature_version)
+    features.setdefault("snapshot_version", snapshot_version)
+    features.setdefault(
+        "gold_object_path",
+        (
+            f"gold/tenant_id={tenant_id}/feature_date={feature_date_str}/"
+            f"entity_type=PLAYER/player_id={player_id}.json"
+        ),
+    )
+    features["warmed_from"] = "feature_snapshot"
+    redis_key = f"betaml:{tenant_id}:features:{player_id}"
+    return redis_key, {key: str(value) for key, value in features.items()}
+
+
+async def warm_feature_store_cache(redis_client) -> int:
+    """Restaura no Redis o snapshot Gold mais recente por jogador."""
+    warmed = 0
+    try:
+        rows = await asyncio.to_thread(_latest_feature_snapshot_rows_sync)
+        for row in rows:
+            warmed_entry = _build_warmed_feature_store_entry(row)
+            if warmed_entry is None:
+                continue
+            redis_key, mapping = warmed_entry
+            await redis_client.hset_dict(redis_key, mapping, ttl=FEATURE_STORE_TTL_SECONDS)
+            warmed += 1
+        logger.info("stream_feature_store_cache_warmed", players=warmed)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream_feature_store_cache_warm_failed", error=str(exc))
+    return warmed
 
 
 async def compute_features(
@@ -757,7 +872,11 @@ async def compute_features(
 
     # Persist to Redis (online store, TTL 4h)
     redis_key = f"betaml:{tenant_id}:features:{player_id}"
-    await redis_client.hset_dict(redis_key, {k: str(v) for k, v in features.items()}, ttl=14400)
+    await redis_client.hset_dict(
+        redis_key,
+        {k: str(v) for k, v in features.items()},
+        ttl=FEATURE_STORE_TTL_SECONDS,
+    )
 
     # Persist to ClickHouse (Gold — async via thread)
     try:
@@ -1138,12 +1257,12 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
     from minio import Minio
 
     from libs.connectors import get_connector
-    from libs.mapping import MappingEngine
+    from libs.mapping import MappingEngine, get_default_mapping
 
     job_id = msg_value.get("job_id")
     tenant_id = msg_value.get("tenant_id")
     source_system = msg_value.get("source_system", "")
-    mapping_config_id = msg_value.get("mapping_config_id")
+    mapping_config_id = msg_value.get("mapping_version_id") or msg_value.get("mapping_config_id")
     file_name = msg_value.get("file_name", "")
     file_path = msg_value.get("file_path")
 
@@ -1202,7 +1321,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
             )
         engine.dispose()
 
-    def _insert_ingest_error(*, raw_payload: dict, line_number: int, reason: str):
+    def _insert_ingest_error(*, raw_payload: dict, line_number: int, reason: str, entity_type: str = "TRANSACTION"):
         engine = sa.create_engine(sync_url, pool_pre_ping=True)
         with engine.begin() as conn:
             # RLS: ensure INSERT is allowed/visible for this tenant.
@@ -1243,7 +1362,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                     "tenant_id": tenant_id,
                     "ingest_job_id": job_id,
                     "source_system": source_system,
-                    "entity_type": "TRANSACTION",
+                    "entity_type": entity_type,
                     "raw_payload": json.dumps(raw_payload, ensure_ascii=False),
                     "error_reason": reason,
                     "error_detail": json.dumps({"line_number": line_number}, ensure_ascii=False),
@@ -1276,19 +1395,45 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
         await asyncio.to_thread(_update_job, "FAILED", 0, 0, 0, f"file load error: {exc}")
         return
 
-    mapping_cfg: dict | None = None
-    if mapping_config_id:
+    def _resolve_mapping_cfg() -> dict | None:
+        engine = sa.create_engine(sync_url, pool_pre_ping=True)
         try:
-            engine = sa.create_engine(sync_url, pool_pre_ping=True)
             with engine.connect() as conn:
+                if mapping_config_id:
+                    row = conn.execute(
+                        sa.text("SELECT config_json FROM mapping_configs WHERE id = :id"),
+                        {"id": mapping_config_id},
+                    ).fetchone()
+                    if row:
+                        return dict(row._mapping)["config_json"]
+
                 row = conn.execute(
-                    sa.text("SELECT config_json FROM mapping_configs WHERE id = :id"),
-                    {"id": mapping_config_id},
+                    sa.text(
+                        """
+                        SELECT config_json
+                        FROM mapping_configs
+                        WHERE tenant_id = :tenant_id
+                          AND source_system = :source_system
+                          AND entity_type = 'TRANSACTION'
+                          AND is_current = true
+                          AND active = true
+                        ORDER BY version_number DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {"tenant_id": tenant_id, "source_system": source_system},
                 ).fetchone()
-            mapping_cfg = dict(row._mapping)["config_json"] if row else None
-            engine.dispose()
+                if row:
+                    return dict(row._mapping)["config_json"]
         except Exception:
-                mapping_cfg = None
+            pass
+        finally:
+            engine.dispose()
+
+        default_cfg = get_default_mapping(str(source_system), "TRANSACTION")
+        return dict(default_cfg) if isinstance(default_cfg, dict) else None
+
+    mapping_cfg = _resolve_mapping_cfg()
 
     max_retries = int(os.getenv("DLQ_MAX_RETRIES", "3"))
 
@@ -1319,6 +1464,13 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                 await asyncio.sleep(0.1 * attempt)
         return False
 
+    mapper: MappingEngine | None = None
+    if isinstance(mapping_cfg, dict):
+        try:
+            mapper = MappingEngine(mapping_cfg)
+        except Exception as exc:
+            logger.warning("ingest_job_invalid_mapping", job_id=job_id, error=str(exc))
+
     connector_source_map = {
         "ConnectorGamma": ("gamma", {"root_tag": "transaction"}),
         "ConnectorDelta": ("delta", {}),
@@ -1340,8 +1492,15 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
 
         for idx, rec in enumerate(parse_result.records, start=1):
             try:
-                entity_type = str(rec.get("entity_type") or "transaction").lower()
-                source_event_id = str(rec.get("event_id") or rec.get("external_id") or uuid.uuid4())
+                mapped_rec = mapper.apply(rec) if mapper else rec
+                entity_type = str(mapped_rec.get("entity_type") or "transaction").lower()
+                source_event_id = str(
+                    mapped_rec.get("event_id")
+                    or rec.get("event_id")
+                    or mapped_rec.get("external_id")
+                    or rec.get("external_id")
+                    or uuid.uuid4()
+                )
                 envelope = {
                     "event_id": str(uuid.uuid4()),
                     "tenant_id": tenant_id,
@@ -1350,8 +1509,9 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                     "schema_version": 1,
                     "entity_type": entity_type,
                     "occurred_at": datetime.now(timezone.utc).isoformat(),
-                    "payload": rec,
+                    "payload": mapped_rec,
                     "raw_payload": rec,
+                    "mapping_config_id": mapping_config_id,
                     "ingest_metadata": {
                         "job_id": job_id,
                         "source": "file",
@@ -1428,13 +1588,6 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
         )
         return
 
-    mapper: MappingEngine | None = None
-    if isinstance(mapping_cfg, dict):
-        try:
-            mapper = MappingEngine(mapping_cfg)
-        except Exception as exc:
-            logger.warning("ingest_job_invalid_mapping", job_id=job_id, error=str(exc))
-
     def _iter_json_lines(text_stream: io.TextIOBase):
         for raw_line in text_stream:
             line = raw_line.strip()
@@ -1498,6 +1651,10 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                     bytes_processed += len(json.dumps(row_data, ensure_ascii=False).encode("utf-8"))
                 else:
                     failed += 1
+                    error_entity_type = str(
+                        row_data.get("entity_type")
+                        or (mapping_cfg.get("entity_type", "transaction") if mapping_cfg else "transaction")
+                    ).upper()
                     if len(error_sample) < 10:
                         error_sample.append({"line": idx, "reason": "publish_failed_after_retries", "raw": row_data})
                     await asyncio.to_thread(
@@ -1505,19 +1662,31 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                         raw_payload=row_data,
                         line_number=idx,
                         reason="publish_failed_after_retries",
+                        entity_type=error_entity_type,
                     )
             except Exception as exc:
                 reason = str(exc)
                 logger.warning("ingest_row_failed", job_id=job_id, line=idx, error=reason)
                 failed += 1
+                error_entity_type = str(
+                    row_data.get("entity_type")
+                    or (mapping_cfg.get("entity_type", "transaction") if mapping_cfg else "transaction")
+                ).upper()
+                target_topic = f"raw.{error_entity_type.lower()}s"
                 if len(error_sample) < 10:
                     error_sample.append({"line": idx, "reason": reason, "raw": row_data})
 
-                await asyncio.to_thread(_insert_ingest_error, raw_payload=row_data, line_number=idx, reason=reason)
+                await asyncio.to_thread(
+                    _insert_ingest_error,
+                    raw_payload=row_data,
+                    line_number=idx,
+                    reason=reason,
+                    entity_type=error_entity_type,
+                )
 
                 try:
                     await producer.send(
-                        "raw.transactions.dlq",
+                        f"{target_topic}.dlq",
                         {
                             "tenant_id": tenant_id,
                             "job_id": job_id,
@@ -1527,7 +1696,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                             "attempt": max_retries,
                             "max_retries": max_retries,
                             "failed_at": datetime.now(timezone.utc).isoformat(),
-                            "target_topic": "raw.transactions",
+                            "target_topic": target_topic,
                             "raw_payload": row_data,
                         },
                         key=str(job_id),
@@ -1581,6 +1750,8 @@ async def main():
 
     ch_client = ClickHouseClient(host=CH_HOST, port=CH_PORT, database=CH_DB)
     ch_client.connect()
+
+    await warm_feature_store_cache(redis_client)
 
     producer = KafkaProducerClient(KAFKA_SERVERS)
     await producer.start()

@@ -233,6 +233,30 @@ export default function OpsPage() {
                     : '—'}
                 </p>
               </div>
+              <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
+                <p className="text-[10px] uppercase tracking-wider text-gray-400">Rate limit ingestão</p>
+                <p className="text-xl font-bold text-gray-800 dark:text-white">
+                  {opsSummary?.ingest_rate_limit_per_min ?? '—'}
+                </p>
+              </div>
+              <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
+                <p className="text-[10px] uppercase tracking-wider text-gray-400">WS ativos</p>
+                <p className="text-xl font-bold text-gray-800 dark:text-white">
+                  {opsSummary?.ws_active_connections ?? '—'}
+                </p>
+              </div>
+              <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
+                <p className="text-[10px] uppercase tracking-wider text-gray-400">Fila WS</p>
+                <p className="text-xl font-bold text-gray-800 dark:text-white">
+                  {opsSummary ? `${opsSummary.ws_queued_messages}/${opsSummary.ws_peak_queue_depth}` : '—'}
+                </p>
+              </div>
+              <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
+                <p className="text-[10px] uppercase tracking-wider text-gray-400">Backpressure WS</p>
+                <p className="text-xl font-bold text-gray-800 dark:text-white">
+                  {opsSummary?.ws_backpressure_events ?? '—'}
+                </p>
+              </div>
             </div>
           )}
         </div>
@@ -279,6 +303,26 @@ export default function OpsPage() {
             </button>
           </div>
         </div>
+
+        {opsSummary?.dlq_breakdown?.length ? (
+          <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900 lg:col-span-2">
+            <h2 className="mb-3 text-base font-semibold text-gray-800 dark:text-gray-200">
+              Breakdown da Quarentena
+            </h2>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {opsSummary.dlq_breakdown.map((item) => (
+                <div
+                  key={`${item.source_system}-${item.entity_type ?? 'unknown'}`}
+                  className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm dark:border-red-800 dark:bg-red-950/30"
+                >
+                  <p className="font-semibold text-red-800 dark:text-red-200">{item.source_system}</p>
+                  <p className="text-xs text-red-700 dark:text-red-300">{item.entity_type ?? '—'}</p>
+                  <p className="mt-1 text-xl font-bold text-red-800 dark:text-red-200">{item.count}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

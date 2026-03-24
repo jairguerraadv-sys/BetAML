@@ -47,3 +47,14 @@ def test_openapi_contains_core_paths() -> None:
     assert "/rules/{rule_id}/simulate" in paths
     assert "/feature-store/players/{player_id}/history" in paths
     assert "/cases/{case_id}/report-package" in paths
+
+
+def test_openapi_ingest_schemas_include_mapping_controls() -> None:
+    schema = app.openapi()
+    components = schema.get("components", {}).get("schemas", {})
+
+    ingest_event = components.get("IngestEventRequest", {})
+    replay_error = components.get("ReplayIngestErrorRequest", {})
+
+    assert "mapping_config_id" in ingest_event.get("properties", {})
+    assert "apply_mapping" in replay_error.get("properties", {})
