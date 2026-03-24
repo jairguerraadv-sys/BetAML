@@ -172,6 +172,7 @@ python tests/load/generate_report.py /tmp/betaml_load_results
 
 Guias principais:
 
+- [README de E2E Playwright](/workspaces/BetAML/e2e/README.md)
 - [README da API](/workspaces/BetAML/services/api/README.md)
 - [README do Frontend](/workspaces/BetAML/services/frontend/README.md)
 - [README do Stream Processor](/workspaces/BetAML/services/stream_processor/README.md)

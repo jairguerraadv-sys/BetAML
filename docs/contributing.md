@@ -43,6 +43,8 @@ services/frontend/node_modules/.bin/tsc -p services/frontend/tsconfig.json --noE
 
 ## E2E (Playwright)
 
+Referencia completa de variaveis e troubleshooting: `e2e/README.md`.
+
 Rodar smoke:
 
 ```bash
@@ -104,6 +106,7 @@ rm -rf e2e/playwright-report e2e/test-results e2e/playwright-report-* e2e/test-r
 - `artifact-e2e-playwright-report`
 - `artifact-e2e-playwright-results`
 - `artifact-e2e-docker-logs`
+- `artifact-e2e-wrapper-run-log`
 - `artifact-readiness-playwright-report`
 - `artifact-readiness-playwright-results`
 - `artifact-readiness-docker-logs`

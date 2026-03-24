@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.2] — 2026-03-24
+
+### Added — E2E resiliency hardening
+- `e2e/README.md` com runbook da suite Playwright, variaveis de ambiente e troubleshooting operacional.
+- Wrapper E2E `e2e/scripts/run-playwright.sh` com preflight de stack (frontend + API), retry para falhas transitórias e snapshot automatico de diagnostico Docker (`docker compose ps` + logs de `api`/`frontend`).
+- Workflow `.github/workflows/e2e.yml` com health gate explicito antes da execucao da suite.
+- Novo artefato de CI `artifact-e2e-wrapper-run-log` com log consolidado da execucao E2E.
+
+### Changed
+- `e2e/tests/helpers.ts` (`createMappingViaApi`) com retry para status transitorios (5xx/429/408) configuravel por `E2E_API_RETRIES`.
+- Falhas finais de criacao de mapping agora incluem status HTTP e preview de body para RCA rapido em CI.
+- `docs/contributing.md` e `README.md` atualizados para referenciar o guia E2E e o novo artefato de log.
+
 ## [0.9.1] — 2026-03-13
 
 ### Added — Migration governance & operations

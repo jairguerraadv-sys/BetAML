@@ -22,6 +22,10 @@ env:
   NODE_VERSION: "20"
   BASE_URL: "http://localhost:3000"
   E2E_API_URL: "http://localhost:8000"
+  PW_REQUIRE_STACK_HEALTH: "1"
+  PW_HEALTH_TIMEOUT_SEC: "90"
+  PW_CAPTURE_DOCKER_DIAGNOSTICS: "1"
+  PW_DIAGNOSTIC_LOG_LINES: "200"
 
 jobs:
   e2e:
@@ -57,6 +61,30 @@ jobs:
             curl -sf http://localhost:3000 && break
             echo "Waiting for frontend... ($i/20)" && sleep 5
           done
+
+      - name: E2E health gate
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            api_ok=0
+            fe_ok=0
+
+            curl -sf "${E2E_API_URL}/health/live" >/dev/null 2>&1 && api_ok=1 || true
+            curl -sf "${BASE_URL}" >/dev/null 2>&1 && fe_ok=1 || true
+
+            if [ "$api_ok" -eq 1 ] && [ "$fe_ok" -eq 1 ]; then
+              echo "Health gate OK"
+              exit 0
+            fi
+
+            echo "Health gate pending ($i/30): api_ok=$api_ok frontend_ok=$fe_ok"
+            sleep 3
+          done
+
+          echo "Health gate failed" >&2
+          docker compose -f infra/docker-compose.yml ps || true
+          docker compose -f infra/docker-compose.yml logs --tail 120 api frontend || true
+          exit 1
 
       - name: Set up Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -108,17 +136,24 @@ jobs:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report
           PLAYWRIGHT_JUNIT_OUTPUT_DIR: test-results
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: e2e-junit.xml
+          PW_REQUIRE_STACK_HEALTH: ${{ env.PW_REQUIRE_STACK_HEALTH }}
+          PW_HEALTH_TIMEOUT_SEC: ${{ env.PW_HEALTH_TIMEOUT_SEC }}
+          PW_CAPTURE_DOCKER_DIAGNOSTICS: ${{ env.PW_CAPTURE_DOCKER_DIAGNOSTICS }}
+          PW_DIAGNOSTIC_LOG_LINES: ${{ env.PW_DIAGNOSTIC_LOG_LINES }}
+          PW_COMPOSE_FILE: ../infra/docker-compose.yml
+          E2E_API_RETRIES: "3"
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            npm run test:nightly -- --reporter=html,junit
+            npm run test:nightly -- --reporter=html,junit 2>&1 | tee /tmp/e2e-wrapper-run.log
           elif [ "${{ github.event.inputs.suite || 'smoke' }}" = "extended" ]; then
-            npm run test:extended -- --reporter=html,junit
+            npm run test:extended -- --reporter=html,junit 2>&1 | tee /tmp/e2e-wrapper-run.log
           elif [ "${{ github.event.inputs.suite || 'smoke' }}" = "security" ]; then
-            npm run test:security -- --reporter=html,junit
+            npm run test:security -- --reporter=html,junit 2>&1 | tee /tmp/e2e-wrapper-run.log
           elif [ "${{ github.event.inputs.suite || 'smoke' }}" = "nightly" ]; then
-            npm run test:nightly -- --reporter=html,junit
+            npm run test:nightly -- --reporter=html,junit 2>&1 | tee /tmp/e2e-wrapper-run.log
           else
-            npm run test:smoke -- --reporter=html,junit
+            npm run test:smoke -- --reporter=html,junit 2>&1 | tee /tmp/e2e-wrapper-run.log
           fi
 
       - name: Upload Playwright report
@@ -135,6 +170,15 @@ jobs:
         with:
           name: artifact-e2e-playwright-results
           path: e2e/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload E2E wrapper run log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-e2e-wrapper-run-log
+          path: /tmp/e2e-wrapper-run.log
           if-no-files-found: ignore
           retention-days: 14
 

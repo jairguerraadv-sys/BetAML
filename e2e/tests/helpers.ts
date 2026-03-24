@@ -199,19 +199,48 @@ export async function createMappingViaApi(
   }>,
 ) {
   const template = await fetchMappingTemplate(request, token, 'ConnectorGamma');
-  const response = await request.post(`${API_URL}/mappings`, {
-    headers: authHeaders(token),
-    data: {
-      name: overrides?.name ?? `E2E Mapping ${Date.now()}`,
-      source_system: overrides?.source_system ?? `ConnectorGammaE2E-${Date.now()}`,
-      entity_type: overrides?.entity_type ?? 'TRANSACTION',
-      config_text: template.template,
-      format: template.format ?? 'yaml',
-      change_notes: overrides?.change_notes ?? 'Criação via helper E2E',
-    },
-  });
-  expect(response.ok()).toBeTruthy();
-  return (await response.json()) as { id: string; name: string; version_number: number; is_current: boolean };
+  const retries = Number(process.env.E2E_API_RETRIES ?? '3');
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  let lastResponse: Awaited<ReturnType<APIRequestContext['post']>> | null = null;
+  let lastResponseBodyPreview = '';
+
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    const response = await request.post(`${API_URL}/mappings`, {
+      headers: authHeaders(token),
+      data: {
+        name: overrides?.name ?? `E2E Mapping ${Date.now()}`,
+        source_system: overrides?.source_system ?? `ConnectorGammaE2E-${Date.now()}`,
+        entity_type: overrides?.entity_type ?? 'TRANSACTION',
+        config_text: template.template,
+        format: template.format ?? 'yaml',
+        change_notes: overrides?.change_notes ?? 'Criação via helper E2E',
+      },
+    });
+
+    if (response.ok()) {
+      return (await response.json()) as { id: string; name: string; version_number: number; is_current: boolean };
+    }
+
+    lastResponse = response;
+    const responseText = await response.text();
+    lastResponseBodyPreview = responseText.slice(0, 800);
+    const status = response.status();
+    const isTransient = status >= 500 || status === 429 || status === 408;
+
+    if (!isTransient || attempt === retries) {
+      break;
+    }
+
+    await sleep(500 * attempt);
+  }
+
+  const statusText = lastResponse ? `${lastResponse.status()} ${lastResponse.statusText()}` : 'no-response';
+  expect(
+    lastResponse?.ok(),
+    `createMappingViaApi failed after ${retries} attempts; status=${statusText}; body=${lastResponseBodyPreview}`,
+  ).toBeTruthy();
+  return (await lastResponse!.json()) as { id: string; name: string; version_number: number; is_current: boolean };
 }
 
 export async function createMappingVersionViaApi(
