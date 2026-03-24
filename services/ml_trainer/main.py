@@ -429,11 +429,239 @@ async def retrain_isolation_forest() -> None:
         logger.exception("ml_training_failed")
 
 
+async def _train_structuring_detector_job() -> None:
+    """Wrapper job para StructuringDetector com tratamento de exceções."""
+    try:
+        from minio import Minio
+
+        from structuring_detector import train_structuring_detector  # noqa: PLC0415
+
+        minio_client = Minio(
+            settings.minio_endpoint.replace("http://", "").replace("https://", ""),
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            secure=settings.minio_endpoint.startswith("https://"),
+        )
+
+        bucket = "betaml-models"
+        if not minio_client.bucket_exists(bucket):
+            minio_client.make_bucket(bucket)
+
+        async with Session() as db:
+            result = await train_structuring_detector(db, minio_client, bucket)
+
+            if result is None:
+                logger.info("structuring_detector_skipped_insufficient_data")
+                return
+
+            # Registra no model_registry
+            from models import ModelRegistry, Notification, User  # noqa: PLC0415
+
+            registry_entry = ModelRegistry(
+                tenant_id=None,  # modelo global multi-tenant
+                model_name=result["model_name"],
+                model_type=result["model_type"],
+                algorithm=result["algorithm"],
+                model_version=result["model_version"],
+                artifact_uri=result["artifact_uri"],
+                training_rows=result["training_rows"],
+                feature_columns=result["feature_columns"],
+                metrics=result["metrics"],
+                status="STAGING",
+                trained_at=datetime.now(UTC),
+            )
+            db.add(registry_entry)
+
+            # Auto-promove se F1 > 0.70
+            f1 = result["metrics"]["f1_score"]
+            if f1 > 0.70:
+                registry_entry.status = "champion"
+                logger.info("structuring_detector_promoted", f1=f1)
+
+            # Notifica ADMINs
+            admins = (
+                await db.execute(
+                    select(User).where(
+                        User.role.in_(["ADMIN", "SUPER_ADMIN"]),
+                        User.active.is_(True),
+                    )
+                )
+            ).scalars().all()
+
+            for admin in admins:
+                db.add(
+                    Notification(
+                        tenant_id=admin.tenant_id,
+                        user_id=admin.id,
+                        type="ML_TRAINING_COMPLETED",
+                        title="Structuring Detector retreinado",
+                        body=f"Precision={result['metrics']['precision']:.3f}, F1={f1:.3f}",
+                        reference_type="ModelRegistry",
+                        reference_id=str(registry_entry.id),
+                    )
+                )
+
+            await db.commit()
+            logger.info("structuring_detector_job_success", f1=f1)
+
+    except Exception:
+        logger.exception("structuring_detector_job_failed")
+
+
+async def _train_network_clustering_job() -> None:
+    """Wrapper job para Network Clustering com tratamento de exceções."""
+    try:
+        from minio import Minio
+
+        from network_clustering import train_network_clustering  # noqa: PLC0415
+
+        minio_client = Minio(
+            settings.minio_endpoint.replace("http://", "").replace("https://", ""),
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            secure=settings.minio_endpoint.startswith("https://"),
+        )
+
+        bucket = "betaml-models"
+        if not minio_client.bucket_exists(bucket):
+            minio_client.make_bucket(bucket)
+
+        async with Session() as db:
+            result = await train_network_clustering(db, minio_client, bucket, tenant_id=None)
+
+            if result is None:
+                logger.info("network_clustering_skipped_insufficient_data")
+                return
+
+            # Registra no model_registry
+            from models import ModelRegistry, Notification, User  # noqa: PLC0415
+
+            registry_entry = ModelRegistry(
+                tenant_id=None,
+                model_name=result["model_name"],
+                model_type=result["model_type"],
+                algorithm=result["algorithm"],
+                model_version=result["model_version"],
+                artifact_uri=result["artifact_uri"],
+                training_rows=result["training_rows"],
+                feature_columns=result["feature_columns"],
+                metrics=result["metrics"],
+                status="champion",  # sempre champion (não é supervisionado)
+                trained_at=datetime.now(UTC),
+            )
+            db.add(registry_entry)
+
+            # Notifica ADMINs
+            admins = (
+                await db.execute(
+                    select(User).where(
+                        User.role.in_(["ADMIN", "SUPER_ADMIN"]),
+                        User.active.is_(True),
+                    )
+                )
+            ).scalars().all()
+
+            for admin in admins:
+                db.add(
+                    Notification(
+                        tenant_id=admin.tenant_id,
+                        user_id=admin.id,
+                        type="ML_TRAINING_COMPLETED",
+                        title="Network Clustering concluído",
+                        body=f"Clusters detectados: {result['metrics']['n_clusters']}, Suspeitos: {result['metrics']['suspicious_clusters_count']}",
+                        reference_type="ModelRegistry",
+                        reference_id=str(registry_entry.id),
+                    )
+                )
+
+            await db.commit()
+            logger.info("network_clustering_job_success", clusters=result["metrics"]["n_clusters"])
+
+    except Exception:
+        logger.exception("network_clustering_job_failed")
+
+
+async def _train_recurrence_estimator_job() -> None:
+    """Wrapper job para Recurrence Estimator com tratamento de exceções."""
+    try:
+        from minio import Minio
+
+        from recurrence_estimator import train_recurrence_estimator  # noqa: PLC0415
+
+        minio_client = Minio(
+            settings.minio_endpoint.replace("http://", "").replace("https://", ""),
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            secure=settings.minio_endpoint.startswith("https://"),
+        )
+
+        bucket = "betaml-models"
+        if not minio_client.bucket_exists(bucket):
+            minio_client.make_bucket(bucket)
+
+        async with Session() as db:
+            result = await train_recurrence_estimator(db, minio_client, bucket, tenant_id=None)
+
+            if result is None:
+                logger.info("recurrence_estimator_skipped_insufficient_baseline")
+                return
+
+            # Registra no model_registry
+            from models import ModelRegistry, Notification, User  # noqa: PLC0415
+
+            registry_entry = ModelRegistry(
+                tenant_id=None,
+                model_name=result["model_name"],
+                model_type=result["model_type"],
+                algorithm=result["algorithm"],
+                model_version=result["model_version"],
+                artifact_uri=result["artifact_uri"],
+                training_rows=result["training_rows"],
+                feature_columns=result["feature_columns"],
+                metrics=result["metrics"],
+                status="champion",  # sempre champion (é scoring, não classificação)
+                trained_at=datetime.now(UTC),
+            )
+            db.add(registry_entry)
+
+            # Notifica ADMINs
+            admins = (
+                await db.execute(
+                    select(User).where(
+                        User.role.in_(["ADMIN", "SUPER_ADMIN"]),
+                        User.active.is_(True),
+                    )
+                )
+            ).scalars().all()
+
+            for admin in admins:
+                db.add(
+                    Notification(
+                        tenant_id=admin.tenant_id,
+                        user_id=admin.id,
+                        type="ML_TRAINING_COMPLETED",
+                        title="Recurrence Estimator retreinado",
+                        body=f"Players suspeitos identificados: {result['metrics'].get('suspicious_count', 0)}",
+                        reference_type="ModelRegistry",
+                        reference_id=str(registry_entry.id),
+                    )
+                )
+
+            await db.commit()
+            logger.info(
+                "recurrence_estimator_job_success",
+                suspicious=result["metrics"].get("suspicious_count", 0),
+            )
+
+    except Exception:
+        logger.exception("recurrence_estimator_job_failed")
+
+
 async def main() -> None:
     """Inicializa o scheduler e mantém o processo vivo."""
     scheduler = AsyncIOScheduler(timezone="UTC")
 
-    # Treina todo dia às 03:00 UTC (antes do risk_score_decay às 04:00)
+    # Job 1: Treino principal (GradientBoosting/IsolationForest) - Diário 03:00 UTC
     scheduler.add_job(
         retrain_isolation_forest,
         trigger="cron",
@@ -444,8 +672,51 @@ async def main() -> None:
         misfire_grace_time=3600,
     )
 
+    # Job 2: Structuring Detector - Diário 03:15 UTC (após treino principal)
+    scheduler.add_job(
+        _train_structuring_detector_job,
+        trigger="cron",
+        hour=3,
+        minute=15,
+        id="structuring_detector",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    # Job 3: Network Clustering - Semanal Domingo 04:00 UTC
+    scheduler.add_job(
+        _train_network_clustering_job,
+        trigger="cron",
+        day_of_week="sun",
+        hour=4,
+        minute=0,
+        id="network_clustering",
+        replace_existing=True,
+        misfire_grace_time=7200,
+    )
+
+    # Job 4: Recurrence Estimator - Semanal Sábado 05:00 UTC
+    scheduler.add_job(
+        _train_recurrence_estimator_job,
+        trigger="cron",
+        day_of_week="sat",
+        hour=5,
+        minute=0,
+        id="recurrence_estimator",
+        replace_existing=True,
+        misfire_grace_time=7200,
+    )
+
     scheduler.start()
-    logger.info("ml_trainer_started", schedule="03:00 UTC daily")
+    logger.info(
+        "ml_trainer_started",
+        jobs=[
+            "ml_training (daily 03:00)",
+            "structuring_detector (daily 03:15)",
+            "network_clustering (weekly Sun 04:00)",
+            "recurrence_estimator (weekly Sat 05:00)",
+        ],
+    )
 
     try:
         await asyncio.Event().wait()

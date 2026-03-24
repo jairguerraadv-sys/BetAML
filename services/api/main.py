@@ -545,6 +545,65 @@ async def _startup():
             misfire_grace_time=3600,
         )
 
+        # Feature Drift Detection — todo dia às 07:00 UTC (após population_stats)
+        async def _drift_detection_job():
+            """Wrapper para executar drift detection e criar notificações."""
+            try:
+                from routers import feature_store  # noqa: PLC0415
+
+                # Chama o endpoint de drift detection internamente
+                # Simula request vazio (tenant context será inferido)
+                class _MockRequest:
+                    pass
+
+                # Para cada tenant ativo, executa drift detection
+                async with AsyncSessionLocal() as _db:
+                    from models import Tenant  # noqa: PLC0415
+
+                    tenants = (await _db.execute(select(Tenant).where(Tenant.active.is_(True)))).scalars().all()
+
+                    for tenant in tenants:
+                        try:
+                            # Mock user context para tenant
+                            class _MockUser:
+                                def __init__(self, tid):
+                                    self.tenant_id = tid
+                                    self.role = "ADMIN"
+
+                            # Chama a função de drift detection
+                            from routers.feature_store import get_feature_quality_latest  # noqa: PLC0415
+
+                            result = await get_feature_quality_latest(
+                                db=_db,
+                                current_user=_MockUser(tenant.id),
+                            )
+
+                            if result and result.drift_detected:
+                                logger.info(
+                                    "drift_detection_completed",
+                                    tenant_id=str(tenant.id),
+                                    drift_score=result.max_drift_score,
+                                    findings=len(result.findings),
+                                )
+                            else:
+                                logger.info("drift_detection_no_drift", tenant_id=str(tenant.id))
+
+                        except Exception as e:
+                            logger.error("drift_detection_tenant_failed", tenant_id=str(tenant.id), error=str(e))
+
+            except Exception as exc:
+                logger.error("drift_detection_job_failed", error=str(exc))
+
+        scheduler.add_job(
+            _drift_detection_job,
+            trigger="cron",
+            hour=7,
+            minute=0,
+            id="feature_drift_detection",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
         # Data Quality Alerting — todo dia às 06:30 UTC
         from jobs import data_quality_alerting
         scheduler.add_job(

@@ -1,0 +1,81 @@
+{
+  "baseline_version": "1.0.0",
+  "baseline_date": "2026-01-01T00:00:00Z",
+  "description": "Baseline histórico de métricas ML do BetAML para testes de regressão",
+  "models": {
+    "anomaly_detection": {
+      "model_type": "GradientBoostingClassifier",
+      "algorithm": "GradientBoosting",
+      "baseline_metrics": {
+        "precision": 0.82,
+        "recall": 0.75,
+        "f1_score": 0.78,
+        "auc_roc": 0.85
+      },
+      "min_acceptable_metrics": {
+        "precision": 0.74,
+        "recall": 0.68,
+        "f1_score": 0.70,
+        "auc_roc": 0.77
+      },
+      "training_samples_min": 50,
+      "notes": "Modelo principal de anomaly detection. Regression tolerance: max 10% drop em F1."
+    },
+    "structuring_detection": {
+      "model_type": "RandomForestClassifier",
+      "algorithm": "RandomForest",
+      "baseline_metrics": {
+        "precision": 0.80,
+        "recall": 0.72,
+        "f1_score": 0.76,
+        "auc_roc": 0.83
+      },
+      "min_acceptable_metrics": {
+        "precision": 0.72,
+        "recall": 0.65,
+        "f1_score": 0.68,
+        "auc_roc": 0.75
+      },
+      "training_samples_min": 30,
+      "notes": "Detector especializado em depósitos fracionados (structuring). Features focadas em velocity e instrumentos."
+    },
+    "network_detection": {
+      "model_type": "DBSCAN",
+      "algorithm": "DBSCAN",
+      "baseline_metrics": {
+        "n_clusters": 12,
+        "n_noise": 150,
+        "suspicious_clusters_count": 3,
+        "largest_cluster_size": 8
+      },
+      "min_acceptable_metrics": {
+        "n_clusters": 5,
+        "suspicious_clusters_count": 1,
+        "largest_cluster_size": 5
+      },
+      "training_samples_min": 10,
+      "notes": "Clustering de rede para detectar players interconectados. eps=0.3, min_samples=3."
+    },
+    "recurrence_detection": {
+      "model_type": "k-NN",
+      "algorithm": "k-NN",
+      "baseline_metrics": {
+        "baseline_samples": 25,
+        "active_players_scored": 180,
+        "suspicious_count": 5,
+        "k": 5
+      },
+      "min_acceptable_metrics": {
+        "baseline_samples": 5,
+        "suspicious_count": 0
+      },
+      "training_samples_min": 5,
+      "notes": "Detector de reincidência usando k-NN. Threshold: similarity > 0.85 vs players já reportados."
+    }
+  },
+  "regression_test_guidelines": {
+    "critical_threshold": 0.05,
+    "warning_threshold": 0.10,
+    "description": "Alerta se novo modelo tiver queda de F1 > 5% (critical) ou > 10% (block promotion)."
+  }
+}
