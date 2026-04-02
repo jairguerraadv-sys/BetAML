@@ -38,6 +38,8 @@ services:
       - ./migration_v18.sql:/docker-entrypoint-initdb.d/18-migration.sql
       - ./migration_v19.sql:/docker-entrypoint-initdb.d/19-migration.sql
       - ./migration_v20.sql:/docker-entrypoint-initdb.d/20-migration.sql
+      - ./migration_v21.sql:/docker-entrypoint-initdb.d/21-migration.sql
+      - ./migration_v22.sql:/docker-entrypoint-initdb.d/22-migration.sql
     ports:
       - "5432:5432"
     healthcheck:
@@ -197,11 +199,13 @@ services:
       # o startup da API lançará RuntimeError e recusará subir.
       PII_ENCRYPTION_KEY:      ${PII_ENCRYPTION_KEY:-ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5}
       ENVIRONMENT:             ${ENVIRONMENT:-development}
+      SANCTIONS_CSV_PATH:      /data/sanctions.csv
     ports:
       - "8000:8000"
     volumes:
       - ../services/api:/app
       - ../libs:/app/libs
+      - ../datasets/sanctions_sample.csv:/data/sanctions.csv:ro
     command: >
       bash -c "set -euo pipefail; \
       APP_DATABASE_URL=\"$$DATABASE_URL\"; \

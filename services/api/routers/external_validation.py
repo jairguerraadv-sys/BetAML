@@ -28,6 +28,11 @@ IDEMPOTENCY_WINDOW_MINUTES = 10
 MAX_PROVIDER_RETRIES = 3
 _PROVIDER_CB_UNTIL: dict[str, datetime] = {}
 
+# Provider configurado via env. Use "mock" apenas em development/test.
+# Em produção configure EXTERNAL_VALIDATION_PROVIDER=<nome_real_do_provider>.
+_VALIDATION_PROVIDER = os.getenv("EXTERNAL_VALIDATION_PROVIDER", "mock").lower()
+_BETAML_ENV = os.getenv("BETAML_ENVIRONMENT", os.getenv("ENVIRONMENT", "development")).lower()
+
 
 def _cb_window_seconds() -> int:
     try:
@@ -84,8 +89,43 @@ async def _mock_provider_call(provider: str, validation_type: str, request_id: s
     }
 
 
+async def _dispatch_provider_call(provider: str, validation_type: str, request_id: str) -> dict:
+    """Despacha para o provider configurado via EXTERNAL_VALIDATION_PROVIDER.
+
+    Em ambientes de produção, emite warning quando o mock ainda está ativo para
+    que equipes de operações percebam que validações externas não são reais.
+    Quando BETAML_ENVIRONMENT=production e o provider ainda é mock, o request
+    é rejeitado para evitar validações silenciosamente falsas.
+    """
+    import structlog as _slog  # noqa: PLC0415
+    _logger = _slog.get_logger()
+
+    if _VALIDATION_PROVIDER == "mock":
+        if _BETAML_ENV == "production":
+            _logger.error(
+                "external_validation_mock_blocked_in_production",
+                provider=provider,
+                validation_type=validation_type,
+                request_id=request_id,
+                hint="Configure EXTERNAL_VALIDATION_PROVIDER com um provider real.",
+            )
+            raise RuntimeError("mock_provider_not_allowed_in_production")
+        if _BETAML_ENV not in ("development", "test"):
+            _logger.warning(
+                "external_validation_mock_in_non_dev",
+                provider=provider,
+                validation_type=validation_type,
+                environment=_BETAML_ENV,
+                request_id=request_id,
+            )
+
+    # Aqui novos providers reais serão despachados por _VALIDATION_PROVIDER.
+    # Por hora só o mock está implementado; providers reais entram nesta função.
+    return await _mock_provider_call(provider, validation_type, request_id)
+
+
 async def _process_validation_request(request_id: str, tenant_id: str | None = None) -> None:
-    """Processamento assíncrono mockado para provider externo."""
+    """Processamento assíncrono para provider externo."""
     async with AsyncSessionLocal() as db:
         if tenant_id:
             await _set_tenant_context(db, tenant_id)
@@ -102,7 +142,7 @@ async def _process_validation_request(request_id: str, tenant_id: str | None = N
             response: dict | None = None
             for attempt in range(1, MAX_PROVIDER_RETRIES + 1):
                 try:
-                    response = await _mock_provider_call(req.provider, req.validation_type, request_id)
+                    response = await _dispatch_provider_call(req.provider, req.validation_type, request_id)
                     response["attempts"] = attempt
                     response["retries_count"] = max(0, attempt - 1)
                     break
@@ -118,6 +158,29 @@ async def _process_validation_request(request_id: str, tenant_id: str | None = N
             req.status = "COMPLETED"
             req.external_request_id = str(response.get("external_request_id") or f"mock-{request_id[:8]}")
             response["latency_ms"] = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+
+            # ── Verificação automática nas listas de sanções / PEP ────────────────
+            # Executada após o provider responder, antes de persistir o resultado,
+            # para que analistas já recebam o consolidado numa única leitura.
+            try:
+                from auth import decrypt_pii  # noqa: PLC0415
+                from sanctions import get_sanctions_checker  # noqa: PLC0415
+
+                player = await db.get(Player, req.player_id)
+                if player:
+                    player_cpf_hmac: str | None = getattr(player, "cpf_hmac", None)
+                    player_name: str | None = None
+                    try:
+                        player_name = decrypt_pii(player.name_encrypted) if player.name_encrypted else None
+                    except Exception:  # pragma: no cover
+                        pass
+
+                    checker = get_sanctions_checker()
+                    _sanctions_result = checker.check(cpf_hmac=player_cpf_hmac, name=player_name)
+                    response["sanctions_check"] = _sanctions_result.to_dict()
+            except Exception as _sanctions_exc:  # noqa: BLE001 — nunca bloqueia o resultado principal
+                response["sanctions_check"] = {"error": str(_sanctions_exc), "matched": False}
+
             req.response_payload = response
             req.completed_at = datetime.now(timezone.utc)
             observe_external_validation_result(req.provider, "COMPLETED")

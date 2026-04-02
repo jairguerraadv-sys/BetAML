@@ -1220,17 +1220,17 @@ async def download_coaf_xml(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_roles("ADMIN", "AML_ANALYST")),
 ):
-    """Gera XML de Comunicação ao COAF conforme Resolução COAF 36/2021.
+    """Gera XML de Comunicação ao COAF conforme Resolução COAF 40/2021
+    (formato COS v2.1 — Comunicado Siscoaf 97 / Portaria SPA/MF 1.143/2024).
 
-    Busca o ReportPackage mais recente do caso para obter a narrativa do analista.
-    O CNPJ do operador é lido de Tenant.settings["cnpj"]; se ausente, usa
-    "00000000000000" e registra warning no log.
+    Busca o ReportPackage mais recente do caso para obter payload completo
+    (narrativa, siscoaf codes, transações). O CPF é incluído sem máscara no
+    XML conforme exige o COAF. O CNPJ do operador é lido de ``Tenant.cnpj``
+    ou ``Tenant.settings["cnpj"]``.
 
     Returns:
-        application/xml — arquivo para download.
+        application/xml — arquivo para download/submissão ao Siscoaf.
     """
-    from xml.etree.ElementTree import Element, SubElement, tostring
-    from xml.dom import minidom
 
     case = await db.get(Case, case_id)
     if not case or str(case.tenant_id) != str(current_user.tenant_id):
@@ -1278,97 +1278,62 @@ async def download_coaf_xml(
     # ── Buscar player ─────────────────────────────────────────────────────────
     player = await db.get(Player, case.player_id) if case.player_id is not None else None
 
-    # ── Montar XML conforme schema COAF RIF ───────────────────────────────────
-    root = Element("ComunicacaoMifd")
-    root.set("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
-    root.set("versao", "3.0")
-
-    # Cabeçalho
-    cabecalho = SubElement(root, "Cabecalho")
-    SubElement(cabecalho, "NumeroSequencial").text = str(
-        getattr(case, "reference_number", None) or case_id[-8:]
-    )
-    SubElement(cabecalho, "DataHoraEnvio").text = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
-    SubElement(cabecalho, "TipoOperacao").text = "I"  # Inclusão
-
-    # Comunicante (Operador)
-    comunicante = SubElement(root, "Comunicante")
-    SubElement(comunicante, "CnpjOuCpfComunicante").text = cnpj
-    SubElement(comunicante, "NomeComunicante").text = str(
-        (tenant.name if tenant else None) or current_user.tenant_id
-    )
-    SubElement(comunicante, "TipoAtividade").text = "APOSTAS"
-
-    # Parte Envolvida
+    # ── Dados PII do sujeito — decifrados para submissão ao COAF ─────────────
+    # COAF exige CPF sem máscara no XML (Res. COAF 40/2021).
+    cpf_plain_xml: str | None = None
+    name_plain_xml: str | None = None
     if player:
-        partes = SubElement(root, "PartesEnvolvidas")
-        parte = SubElement(partes, "Parte")
-        SubElement(parte, "TipoPessoa").text = "F"  # Física
-        SubElement(parte, "NomePessoa").text = "CONFIDENCIAL"  # PII protegida por LGPD
-        SubElement(parte, "TipoPapel").text = "COMUNICADO"
-        # CPF mascarado — obrigatório COAF Res. 36/2021 Schema MIFD v3
-        cpf_plain = decrypt_pii(player.cpf_encrypted)  # type: ignore[arg-type]
-        SubElement(parte, "CpfCnpjPessoa").text = mask_cpf(cpf_plain)
-        # Siscoaf 97: tipos de envolvimento (default 49=Apostador)
-        # Serão vinculados aos codes de ocorrência — pré-carregar do payload se disponível
-        SubElement(parte, "TipoEnvolvimentoPrincipal").text = "49"  # Apostador — será sobrescrito pelo payload
+        cpf_plain_xml = decrypt_pii(player.cpf_encrypted)  # type: ignore[arg-type]
+        name_plain_xml = decrypt_pii(player.name_encrypted)  # type: ignore[arg-type]
 
-    # Operação Suspeita
-    # Buscar total de transações do player (ValorOperacao — obrigatório MIFD v3)
-    total_amount: float = 0.0
-    if case.player_id is not None:
-        total_amount = float((await db.execute(
-            select(sqlfunc.coalesce(sqlfunc.sum(FinancialTransaction.amount), 0))
-            .where(
-                FinancialTransaction.player_id == case.player_id,
-                FinancialTransaction.tenant_id == case.tenant_id,
-            )
-        )).scalar() or 0)
-
-    operacoes = SubElement(root, "Operacoes")
-    operacao = SubElement(operacoes, "Operacao")
-    SubElement(operacao, "NumeroOperacao").text = str(case_id[-8:])
-    SubElement(operacao, "DataOperacao").text = case.created_at.strftime("%Y-%m-%d")
-    SubElement(operacao, "NaturezaOperacao").text = "APOSTA_ESPORTIVA"
-    SubElement(operacao, "ValorOperacao").text = f"{total_amount:.2f}"
-    SubElement(operacao, "DescricaoSuspeita").text = analyst_narrative
-
-    # ── Siscoaf Comunicado 97 — Tabela de Ocorrências (Portaria SPA/MF 1.143/2024) ──
-    siscoaf_payload: dict = {}
+    # ── Payload do ReportPackage (ou payload mínimo se nenhum rp existe) ──────
     if rp is not None and isinstance(rp.payload, dict):
-        siscoaf_payload = rp.payload.get("siscoaf") or {}
+        rp_payload_for_xml: dict = rp.payload
+    else:
+        # Monta payload mínimo a partir dos dados do caso
+        total_amount: float = 0.0
+        if case.player_id is not None:
+            total_amount = float((await db.execute(
+                select(sqlfunc.coalesce(sqlfunc.sum(FinancialTransaction.amount), 0))
+                .where(
+                    FinancialTransaction.player_id == case.player_id,
+                    FinancialTransaction.tenant_id == case.tenant_id,
+                )
+            )).scalar() or 0)
+        rp_payload_for_xml = {
+            "reportId": str(case_id),
+            "analystNarrative": analyst_narrative,
+            "generatedAt": datetime.now(UTC).isoformat(),
+            "subject": {
+                "birthDate": player.birth_date.isoformat() if player and player.birth_date else None,
+                "pepFlag": bool(player.pep_flag) if player else False,
+                "profession": player.profession if player else None,
+                "declaredIncomeMonthly": float(player.declared_income_monthly or 0) if player else 0,
+            },
+            "financialSummary": {"totalDeposits90d": total_amount},
+            "keyTransactions": [],
+            "keyBets": [],
+            "siscoaf": {
+                "occurrence_codes": [],
+                "involvement_types": [49],
+                "valor_premio": 0.0,
+                "valor_apostas": 0.0,
+                "informacoes_adicionais": analyst_narrative,
+                "portaria_referencia": "SPA/MF 1.143/2024",
+                "comunicado_siscoaf": "97",
+            },
+        }
 
-    occurrence_codes = siscoaf_payload.get("occurrence_codes") or []
-    involvement_types = siscoaf_payload.get("involvement_types") or [49]
-    valor_premio = siscoaf_payload.get("valor_premio", 0.0)
-    valor_apostas = siscoaf_payload.get("valor_apostas", 0.0)
-    informacoes_adicionais = siscoaf_payload.get("informacoes_adicionais") or analyst_narrative
+    # ── Gerar XML COAF/RIF via gerador alinhado à Res. COAF 40/2021 ──────────
+    from coaf_xml import generate_coaf_xml  # noqa: PLC0415
 
-    if occurrence_codes:
-        tabelaOcorrencias = SubElement(operacao, "TabelaOcorrencias")
-        for code in occurrence_codes:
-            if code in _VALID_OCCURRENCE_CODES:
-                occ = SubElement(tabelaOcorrencias, "Ocorrencia")
-                SubElement(occ, "CodigoOcorrencia").text = str(code)
-                SubElement(occ, "DescricaoOcorrencia").text = SISCOAF_OCCURRENCE_CODES[code]
-                SubElement(occ, "InformacoesAdicionais").text = informacoes_adicionais
-                SubElement(occ, "ValorPremio").text = f"{float(valor_premio):.2f}"
-                SubElement(occ, "ValorApostasTotal").text = f"{float(valor_apostas):.2f}"
-
-    if involvement_types:
-        tabelaEnvolvimentos = SubElement(operacao, "TiposEnvolvimento")
-        for tipo in involvement_types:
-            if tipo in _VALID_INVOLVEMENT_TYPES:
-                env = SubElement(tabelaEnvolvimentos, "TipoEnvolvimento")
-                SubElement(env, "Codigo").text = str(tipo)
-                SubElement(env, "Descricao").text = SISCOAF_INVOLVEMENT_TYPES[tipo]
-
-    SubElement(operacao, "PortariaReferencia").text = "SPA/MF 1.143/2024"
-    SubElement(operacao, "ComunicadoSiscoaf").text = "97"
-
-    # Serializar com pretty print
-    raw = tostring(root, encoding="unicode")
-    pretty = minidom.parseString(raw).toprettyxml(indent="  ", encoding="UTF-8")  # nosec B318
+    xml_bytes = generate_coaf_xml(
+        rp_payload_for_xml,
+        cpf_plain=cpf_plain_xml,
+        name_plain=name_plain_xml,
+        tenant_cnpj=cnpj,
+        tenant_name=tenant.name if tenant else None,
+    ).encode("utf-8")
 
     # Audit
     await write_audit(db, current_user.tenant_id, current_user.id,
@@ -1376,7 +1341,7 @@ async def download_coaf_xml(
     await db.commit()
 
     return FastAPIResponse(
-        content=pretty if isinstance(pretty, bytes) else pretty.encode("utf-8"),
+        content=xml_bytes,
         media_type="application/xml",
         headers={"Content-Disposition": f"attachment; filename=coaf_{case_id[:8]}.xml"},
     )

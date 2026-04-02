@@ -1,0 +1,10 @@
+name,cpf,type,source,notes
+FULANO FICTICIO PRESO,12345678900,SANCTION,MJ_BR,Condenado por lavagem de dinheiro - processo 0001234-56.2020.8.26.0001
+SICRANA TERRORISMO FICTICIA,,TERRORIST_FINANCING,UN,Lista consolidada ONU - Resolução CSNU 1267
+BELTRANO POLITICO EXPOSTO,98765432100,PEP,MJ_BR,Prefeito municipal - mandato 2024-2028
+EMPRESA FANTASMA LTDA,,SANCTION,COAF,Comunicado COAF 45/2023 - operações suspeitas reiteradas
+JOHN DOE OFAC SAMPLE,,SANCTION,OFAC,SDN List - Narcotics Trafficking designation
+PEDRO EVASAO FISCAL,11122233344,SANCTION,MJ_BR,Condenado por evasão fiscal e associação criminosa
+CARTEL APOSTAS ILEGAIS FICTICIO,,SANCTION,COAF,Operação policial - apostas ilegais e LD - 2024
+MARIA TESTA PEP,55566677788,PEP,MJ_BR,Secretária estadual de fazenda - mandato vigente
+JORGE INTERPOL VERMELHO,,SANCTION,OFAC,Difusão vermelha Interpol - crimes financeiros transnacionais

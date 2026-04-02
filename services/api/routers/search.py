@@ -52,20 +52,38 @@ async def global_search(
     digits = _query_digits(q)
 
     # ── Players — text lookup ─────────────────────────────────────────────────
+    # Busca por external_player_id via índice SQL (rápido).
+    # Busca por nome: full_name foi removida do DB (migration_v22, LGPD Art. 46);
+    # decode in-memory de name_encrypted — volume por tenant é limitado.
     stmt_players = (
         select(Player)
         .where(
             Player.tenant_id == tid,
             Player.status != "ERASED",
-            or_(
-                Player.external_player_id.ilike(q_prefix),
-                # full_name is the unencrypted display name populated during ingest
-                Player.full_name.ilike(q_like),
-            ),
+            Player.external_player_id.ilike(q_prefix),
         )
         .limit(_MAX)
     )
     players_rows = list((await db.execute(stmt_players)).scalars().all())
+
+    # Busca por nome: carrega candidatos (sem ERASED) e filtra em memória após decrypt
+    if len(q) >= 3:
+        name_candidates = list((
+            await db.execute(
+                select(Player)
+                .where(
+                    Player.tenant_id == tid,
+                    Player.status != "ERASED",
+                )
+                .order_by(Player.updated_at.desc())
+                .limit(500)
+            )
+        ).scalars().all())
+        q_lower = q.lower()
+        for player in name_candidates:
+            name = player.full_name  # @property decifra name_encrypted
+            if name and q_lower in name.lower():
+                players_rows.append(player)
 
     # ── CPF lookup: O(1) via cpf_hmac index (preferred) ──────────────────────
     if digits and len(digits) == 11:
@@ -156,7 +174,7 @@ async def global_search(
             {
                 "id": str(p.id),
                 "external_id": p.external_player_id,
-                "name": p.full_name or p.external_player_id,
+                "name": p.full_name or p.external_player_id,  # @property decifra name_encrypted
                 "cpf_masked": _safe_masked_cpf(p),
                 "risk_band": p.risk_band or "UNKNOWN",
             }

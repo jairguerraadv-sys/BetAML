@@ -498,6 +498,15 @@ async def _startup():
         name="feature_store_maintenance",
     )
 
+    # ── Sanctions / PEP checker — carregamento inicial ───────────────────────
+    try:
+        from sanctions import get_sanctions_checker
+        _sc = get_sanctions_checker()
+        _sc.reload()
+        logger.info("sanctions_checker_loaded", total_entries=_sc.total_entries)
+    except Exception as exc:
+        logger.warning("sanctions_checker_load_failed", error=str(exc))
+
     # ── Scheduled jobs (APScheduler) ─────────────────────────────────────────
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -563,56 +572,10 @@ async def _startup():
         )
 
         # Feature Drift Detection — todo dia às 07:00 UTC (após population_stats)
-        async def _drift_detection_job():
-            """Wrapper para executar drift detection e criar notificações."""
-            try:
-                from routers import feature_store  # noqa: PLC0415
-
-                # Chama o endpoint de drift detection internamente
-                # Simula request vazio (tenant context será inferido)
-                class _MockRequest:
-                    pass
-
-                # Para cada tenant ativo, executa drift detection
-                async with AsyncSessionLocal() as _db:
-                    from models import Tenant  # noqa: PLC0415
-
-                    tenants = (await _db.execute(select(Tenant).where(Tenant.active.is_(True)))).scalars().all()
-
-                    for tenant in tenants:
-                        try:
-                            # Mock user context para tenant
-                            class _MockUser:
-                                def __init__(self, tid):
-                                    self.tenant_id = tid
-                                    self.role = "ADMIN"
-
-                            # Chama a função de drift detection
-                            from routers.feature_store import get_feature_quality_latest  # noqa: PLC0415
-
-                            result = await get_feature_quality_latest(
-                                db=_db,
-                                current_user=_MockUser(tenant.id),
-                            )
-
-                            if result and result.drift_detected:
-                                logger.info(
-                                    "drift_detection_completed",
-                                    tenant_id=str(tenant.id),
-                                    drift_score=result.max_drift_score,
-                                    findings=len(result.findings),
-                                )
-                            else:
-                                logger.info("drift_detection_no_drift", tenant_id=str(tenant.id))
-
-                        except Exception as e:
-                            logger.error("drift_detection_tenant_failed", tenant_id=str(tenant.id), error=str(e))
-
-            except Exception as exc:
-                logger.error("drift_detection_job_failed", error=str(exc))
-
+        # _run_feature_drift_check_once é uma função pura definida neste módulo;
+        # não requer objetos mock de request ou usuário.
         scheduler.add_job(
-            _drift_detection_job,
+            _run_feature_drift_check_once,
             trigger="cron",
             hour=7,
             minute=0,
@@ -655,6 +618,18 @@ async def _startup():
             id="business_metrics_update",
             replace_existing=True,
             misfire_grace_time=60,
+        )
+
+        # Sanctions / PEP list reload — todo dia às 06:00 UTC
+        from sanctions import reload_sanctions
+        scheduler.add_job(
+            reload_sanctions,
+            trigger="cron",
+            hour=6,
+            minute=0,
+            id="sanctions_reload",
+            replace_existing=True,
+            misfire_grace_time=3600,
         )
 
         scheduler.start()
@@ -736,6 +711,7 @@ from routers.player_lists import router as player_lists_router    # noqa: E402
 from routers.reports import router as reports_router              # noqa: E402
 from routers.search import router as search_router                # noqa: E402
 from routers.stats import router as stats_router                  # noqa: E402
+from routers.sanctions import router as sanctions_router          # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(alerts.router)
@@ -757,3 +733,4 @@ app.include_router(internal_router)
 app.include_router(search_router)
 app.include_router(stats_router)
 app.include_router(external_validation.router)
+app.include_router(sanctions_router)

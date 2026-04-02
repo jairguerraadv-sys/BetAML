@@ -273,7 +273,7 @@ async def load_compound_rules(tenant_id: str) -> list[dict]:
         with engine.connect() as conn:
             rows = conn.execute(
                 sa.text(
-                    "SELECT id, name, logic, operator, n_threshold, component_rule_ids, child_rule_ids, "
+                    "SELECT id, name, logic, n_threshold, component_rule_ids, "
                     "severity_mode, fixed_severity, score_weights, min_score_threshold "
                     "FROM compound_rules WHERE tenant_id = :tid AND is_active = true"
                 ),
@@ -531,10 +531,10 @@ async def evaluate_rules(
 
     # ── Compound rule evaluation ─────────────────────────────────────────────
     for crule in (compound_rules or []):
-        component_ids = crule.get("component_rule_ids") or crule.get("child_rule_ids") or []
+        component_ids = crule.get("component_rule_ids") or []
         score_weights = crule.get("score_weights") or {}
         min_threshold = crule.get("min_score_threshold") or 0.5
-        operator = str(crule.get("operator") or crule.get("logic") or "AND").upper()
+        operator = str(crule.get("logic") or "AND").upper()
         n_threshold = int(crule.get("n_threshold") or 1)
         severity_mode = str(crule.get("severity_mode") or "MAX").upper()
         fixed_severity = crule.get("fixed_severity")

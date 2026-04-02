@@ -105,12 +105,10 @@ async def create_compound_rule(
         name=body.name,
         description=body.description,
         status=body.status,
-        operator=operator,
         logic=operator,
         n_threshold=body.n_threshold,
         severity_mode=body.severity_mode,
         fixed_severity=body.fixed_severity,
-        child_rule_ids=body.component_rule_ids or [],
         component_rule_ids=body.component_rule_ids or [],
         score_weights=body.score_weights or {},
         min_score_threshold=body.min_score_threshold,
@@ -168,7 +166,6 @@ async def update_compound_rule(
         if len(component_rows) != len(set(body.component_rule_ids)):
             raise HTTPException(400, "Uma ou mais regras componentes não pertencem ao tenant.")
         row.component_rule_ids = body.component_rule_ids
-        row.child_rule_ids = body.component_rule_ids
 
     if body.name is not None:
         row.name = body.name

@@ -55,12 +55,11 @@ class Player(Base):
     tenant_id               = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     external_player_id      = Column(Text, nullable=False)
     external_id             = Column(Text)
-    full_name               = Column(Text)
+    # full_name foi removida (migration_v22) — PII em claro viola LGPD Art. 46.
+    # Use a @property full_name abaixo para acesso transparente via name_encrypted.
     cpf_encrypted           = Column(LargeBinary, nullable=False)
     name_encrypted          = Column(LargeBinary, nullable=False)
     # cpf_hmac: HMAC-SHA256 determinístico do CPF (digits only) para lookup indexado O(1)
-    # Permite busca por CPF sem descriptografia de toda a tabela (substitui scan O(n))
-    # Gerado por auth.compute_cpf_hmac(); backfill via migration_v21.sql
     cpf_hmac                = Column(String(64), index=True)
     birth_date              = Column(Date)
     pep_flag                = Column(Boolean, nullable=False, default=False)
@@ -73,6 +72,39 @@ class Player(Base):
     last_scored_at          = Column(DateTime(timezone=True))
     created_at              = Column(DateTime(timezone=True), server_default=func.now())
     updated_at              = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    @property
+    def full_name(self) -> str | None:
+        """Decifra name_encrypted em tempo de execução — nenhum nome em claro é persistido no DB.
+        Retorna None se name_encrypted estiver vazio/inválido (ex.: player apagado por LGPD).
+        """
+        if not self.name_encrypted:
+            return None
+        raw = bytes(self.name_encrypted)
+        # Sentinelas de apagamento LGPD: retornar como-está (não é Fernet válido)
+        if raw.startswith(b"ERASURE_") or raw.startswith(b"PENDING_MIGRATION"):
+            return raw.decode("utf-8", errors="replace")
+        try:
+            from auth import decrypt_pii  # lazy import para evitar circular
+            return decrypt_pii(raw)
+        except Exception:
+            return None
+
+    @full_name.setter
+    def full_name(self, value: str | None) -> None:
+        """Cifra o nome e grava em name_encrypted — nunca persiste texto em claro."""
+        if value is None:
+            return
+        # Sentinelas de apagamento não precisam de Fernet
+        if value.startswith("ERASURE_") or value.startswith("PENDING_MIGRATION"):
+            self.name_encrypted = value.encode("utf-8")
+            return
+        try:
+            from auth import encrypt_pii  # lazy import para evitar circular
+            self.name_encrypted = encrypt_pii(value)
+        except Exception:
+            # Fallback seguro: não gravar em claro, deixar name_encrypted inalterado
+            pass
 
 
 # ── Ingest ────────────────────────────────────────────────────────────────────
@@ -190,23 +222,38 @@ class CompoundRule(Base):
     name                 = Column(Text, nullable=False)
     description          = Column(Text)
     status               = Column(String(20), nullable=False, default="ACTIVE")
-    # Modelo canônico unificado (garante compatibilidade com rules_engine)
-    operator             = Column(String(10), nullable=False, default="AND")     # AND / OR / N_OF_M
+    # Campos canônicos (migration_v22 removeu os aliases operator + child_rule_ids)
+    logic                = Column(String(10), nullable=False, default="AND")     # AND / OR / N_OF_M
     n_threshold          = Column(Integer)                                        # para N_OF_M
-    child_rule_ids       = Column(JSONB, nullable=False, default=[])              # alias legado
-    severity_mode        = Column(String(10), nullable=False, default="MAX")     # MAX / FIXED / WEIGHTED
-    fixed_severity       = Column(String(10))
-    # Campos usados pelo rules_engine via SQL
-    logic                = Column(String(10))                                     # AND / OR / N_OF_M (sinônimo de operator)
-    component_rule_ids   = Column(JSONB, default=[])                              # lista de rule_definition IDs
+    component_rule_ids   = Column(JSONB, nullable=False, default=[])              # lista de rule_definition IDs
     score_weights        = Column(JSONB, default={})                              # {rule_id: weight}
     min_score_threshold  = Column(Numeric(5, 4))
+    severity_mode        = Column(String(10), nullable=False, default="MAX")     # MAX / FIXED / WEIGHTED
+    fixed_severity       = Column(String(10))
     is_active            = Column(Boolean, nullable=False, default=True)
     version              = Column(Integer, nullable=False, default=1)
     created_by           = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     updated_by           = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     created_at           = Column(DateTime(timezone=True), server_default=func.now())
     updated_at           = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    @property
+    def operator(self) -> str:
+        """Alias legado para logic — mantém compat com código que ainda lê .operator."""
+        return str(self.logic or "AND")
+
+    @operator.setter
+    def operator(self, value: str) -> None:
+        self.logic = value
+
+    @property
+    def child_rule_ids(self) -> list:
+        """Alias legado para component_rule_ids."""
+        return self.component_rule_ids or []
+
+    @child_rule_ids.setter
+    def child_rule_ids(self, value: list) -> None:
+        self.component_rule_ids = value
 
 
 class RuleMacro(Base):
@@ -394,18 +441,15 @@ class ModelRegistry(Base):
     model_type           = Column(String(20), nullable=False, default="ANOMALY")
     model_version        = Column(Text, nullable=False)
     algorithm            = Column(Text, nullable=False)
-    # artifact_path = nome canônico no ORM; artifact_uri = alias usado pelo ml_service (ambos mapeiam para a mesma coluna via migration)
-    artifact_path        = Column(Text)       # caminho/URI do artefato (pode ser MinIO path)
-    artifact_uri         = Column(Text)       # alias usado pelo ml_service (mesmo dado)
+    # Campos canônicos (migration_v22 removeu active, artifact_path, sample_count)
+    artifact_uri         = Column(Text)       # caminho/URI do artefato no MinIO
     dataset_window_start = Column(DateTime(timezone=True))
     dataset_window_end   = Column(DateTime(timezone=True))
     dataset_window_days  = Column(Integer)
-    sample_count         = Column(Integer)    # alias legado
-    training_rows        = Column(Integer)    # usado pelo ml_service
+    training_rows        = Column(Integer)    # linhas usadas no treino
     feature_columns      = Column(JSONB, default=[])   # lista de features usadas no treino
     metrics              = Column(JSONB, nullable=False, default={})
-    active               = Column(Boolean, nullable=False, default=False)   # alias legado
-    is_active            = Column(Boolean, nullable=False, default=False)   # usado pelo ml_service
+    is_active            = Column(Boolean, nullable=False, default=False)
     status               = Column(String(20), nullable=False, default="STAGING")
     is_challenger        = Column(Boolean, nullable=False, default=False)
     champion_id          = Column(UUID(as_uuid=False), ForeignKey("model_registry.id"))
@@ -419,6 +463,33 @@ class ModelRegistry(Base):
     def version(self):
         """Alias for model_version — used by ModelRegistryOut schema (from_attributes=True)."""
         return self.model_version
+
+    @property
+    def active(self) -> bool:
+        """Alias legado para is_active."""
+        return bool(self.is_active)
+
+    @active.setter
+    def active(self, value: bool) -> None:
+        self.is_active = value
+
+    @property
+    def artifact_path(self) -> str | None:
+        """Alias legado para artifact_uri."""
+        return self.artifact_uri
+
+    @artifact_path.setter
+    def artifact_path(self, value: str | None) -> None:
+        self.artifact_uri = value
+
+    @property
+    def sample_count(self) -> int | None:
+        """Alias legado para training_rows."""
+        return self.training_rows
+
+    @sample_count.setter
+    def sample_count(self, value: int | None) -> None:
+        self.training_rows = value
 
 
 class ModelInferenceLog(Base):

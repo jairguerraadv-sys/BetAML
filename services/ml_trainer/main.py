@@ -657,9 +657,158 @@ async def _train_recurrence_estimator_job() -> None:
         logger.exception("recurrence_estimator_job_failed")
 
 
+async def bootstrap_model_if_needed() -> None:
+    """Garante que existe ao menos um modelo IsolationForest champion no registry.
+
+    Chamado no startup do ml_trainer. Se o model_registry estiver vazio
+    (ambiente novo, container recém-criado ou banco recém-migrado), treina um
+    IsolationForest mínimo com dados sintéticos realistas para que o ml_service
+    nunca inicie sem modelo disponível.
+
+    O modelo gerado recebe status="bootstrap" em vez de "champion" para que
+    analistas saibam que é um modelo inicial sem dados reais. Será substituído
+    automaticamente pelo primeiro ciclo de treino diário quando houver
+    histórico suficiente (>= 50 alertas com feature vectors).
+    """
+    try:
+        from minio import Minio  # noqa: PLC0415
+
+        minio_client = Minio(
+            settings.minio_endpoint.replace("http://", "").replace("https://", ""),
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            secure=settings.minio_endpoint.startswith("https://"),
+        )
+        bucket = "betaml-models"
+        if not minio_client.bucket_exists(bucket):
+            minio_client.make_bucket(bucket)
+
+        async with Session() as db:
+            from models import ModelRegistry  # noqa: PLC0415
+
+            # Verifica se já existe qualquer modelo no registry
+            existing = (await db.execute(
+                select(ModelRegistry).limit(1)
+            )).scalar_one_or_none()
+
+            if existing is not None:
+                logger.info(
+                    "ml_bootstrap_skip_model_exists",
+                    model_id=str(existing.id),
+                    status=existing.status,
+                )
+                return
+
+            logger.warning(
+                "ml_bootstrap_no_model_found",
+                hint="Gerando IsolationForest sintético de bootstrap. "
+                     "Será substituído no próximo ciclo de treino diário.",
+            )
+
+            # ── Gera 100 amostras sintéticas com distribuição realista ──────────
+            rng = np.random.default_rng(seed=42)
+            n_samples = 100
+
+            # Cada feature tem média e desvio realistas baseado no domínio PLD
+            _feature_stats = [
+                # (mean, std) por feature em FEATURE_COLUMNS
+                (5000, 3000),   # deposit_sum_24h
+                (20000, 15000), # deposit_sum_7d
+                (8, 5),         # deposit_count_7d
+                (3000, 2000),   # withdrawal_sum_24h
+                (12000, 8000),  # withdrawal_sum_7d
+                (0.4, 0.3),     # cashout_ratio_30d
+                (0.5, 0.3),     # velocity_score
+                (0.2, 0.15),    # night_activity_ratio
+                (0.1, 0.1),     # round_amount_ratio
+                (200, 150),     # avg_bet_stake
+                (15, 10),       # bet_count_7d
+                (1.0, 0.5),     # win_loss_ratio_30d
+                (0.3, 0.25),    # structuring_score
+                (0.2, 0.2),     # layering_score
+                (0.25, 0.2),    # rapid_cashout_score
+                (0.05, 0.22),   # pep_flag (Bernoulli ~5%)
+                (365, 200),     # account_age_days
+                (12, 8),        # login_count_7d
+                (2, 1.5),       # unique_payment_methods_30d
+                (6, 5),         # deposit_withdrawal_gap_hours
+                (2, 2),         # high_risk_events_count
+                (0.3, 0.2),     # network_centrality_score
+                (0.2, 0.15),    # ml_anomaly_score
+                (0.3, 0.2),     # composite_risk_score
+            ]
+            X_bootstrap = np.zeros((n_samples, len(FEATURE_COLUMNS)), dtype=float)
+            for i, (mean, std) in enumerate(_feature_stats):
+                X_bootstrap[:, i] = np.clip(rng.normal(mean, std, n_samples), 0, None)
+
+            # Injeta ~10% de anomalias sintéticas
+            n_anomalies = n_samples // 10
+            anomaly_idx = rng.choice(n_samples, n_anomalies, replace=False)
+            X_bootstrap[anomaly_idx] *= rng.uniform(3.0, 5.0, (n_anomalies, len(FEATURE_COLUMNS)))
+
+            model = IsolationForest(
+                n_estimators=50,
+                contamination=0.10,
+                random_state=42,
+                n_jobs=-1,
+            )
+            model.fit(X_bootstrap)
+
+            version = datetime.now(UTC).strftime("%Y%m%d%H%M%S") + "_bootstrap"
+            model_filename = f"isolation_forest_v{version}.pkl"
+            model_bytes = pickle.dumps(model)
+
+            minio_client.put_object(
+                bucket_name=bucket,
+                object_name=model_filename,
+                data=io.BytesIO(model_bytes),
+                length=len(model_bytes),
+                content_type="application/octet-stream",
+            )
+
+            artifact_uri = f"s3://{bucket}/{model_filename}"
+            registry_entry = ModelRegistry(
+                model_name="IsolationForest",
+                model_type="ANOMALY",
+                model_version=version,
+                algorithm="IsolationForest",
+                artifact_uri=artifact_uri,
+                training_rows=n_samples,
+                feature_columns=FEATURE_COLUMNS,
+                metrics={
+                    "note": "Bootstrap sintético — substitua com treino real",
+                    "contamination": 0.10,
+                    "n_estimators": 50,
+                    "training_samples": n_samples,
+                    "synthetic": True,
+                },
+                # "bootstrap" indica que não é um modelo produtivo;
+                # o ml_service deve reconhecer este status como "champion fallback".
+                status="bootstrap",
+                is_active=True,
+                is_challenger=False,
+                trained_at=datetime.now(UTC),
+            )
+            db.add(registry_entry)
+            await db.commit()
+
+            logger.info(
+                "ml_bootstrap_model_created",
+                artifact_uri=artifact_uri,
+                version=version,
+                hint="Modelo sintético ativo. Será substituído no próximo ciclo diário (03:00 UTC).",
+            )
+
+    except Exception:
+        logger.exception("ml_bootstrap_failed")
+
+
 async def main() -> None:
     """Inicializa o scheduler e mantém o processo vivo."""
     scheduler = AsyncIOScheduler(timezone="UTC")
+
+    # Bootstrap: garante que sempre há um modelo disponível antes dos jobs periódicos
+    await bootstrap_model_if_needed()
 
     # Job 1: Treino principal (GradientBoosting/IsolationForest) - Diário 03:00 UTC
     scheduler.add_job(

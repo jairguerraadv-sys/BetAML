@@ -98,6 +98,43 @@ async def get_player(
     )
     await db.flush()
 
+    # ── income_compat inline (evita chamada extra a /econ-compat) ──────────────
+    sc_row = (
+        await db.execute(
+            select(ScoringConfig).where(ScoringConfig.tenant_id == current_user.tenant_id).limit(1)
+        )
+    ).scalars().first()
+    ratio_threshold = float(sc_row.income_volume_ratio_threshold) if sc_row else 1.5
+
+    cutoff_30d = _utcnow() - timedelta(days=30)
+    deposit_sum_30d = float(
+        (
+            await db.execute(
+                select(sqlfunc.coalesce(sqlfunc.sum(FinancialTransaction.amount), 0)).where(
+                    FinancialTransaction.tenant_id == current_user.tenant_id,
+                    FinancialTransaction.player_id == player_id,
+                    FinancialTransaction.type == "DEPOSIT",
+                    FinancialTransaction.occurred_at >= cutoff_30d,
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    declared_income = float(p.declared_income_monthly) if p.declared_income_monthly else None
+    if declared_income and declared_income > 0:
+        income_ratio_30d = round(deposit_sum_30d / declared_income, 4)
+    else:
+        income_ratio_30d = None
+
+    if income_ratio_30d is None:
+        compat_tier = "UNKNOWN"
+    elif income_ratio_30d <= ratio_threshold:
+        compat_tier = "GREEN"
+    elif income_ratio_30d <= ratio_threshold * 2:
+        compat_tier = "YELLOW"
+    else:
+        compat_tier = "RED"
+
     return {
         "id": p.id,
         "external_player_id": p.external_player_id,
@@ -105,8 +142,14 @@ async def get_player(
         "pep_flag": p.pep_flag,
         "risk_score": float(p.risk_score),
         "risk_band": p.risk_band,
-        "declared_income_monthly": float(p.declared_income_monthly) if p.declared_income_monthly else None,
+        "declared_income_monthly": declared_income,
         "last_scored_at": p.last_scored_at,
+        "income_compat": {
+            "deposit_sum_30d": deposit_sum_30d,
+            "income_ratio_30d": income_ratio_30d,
+            "ratio_threshold": ratio_threshold,
+            "tier": compat_tier,
+        },
     }
 
 
@@ -665,70 +708,222 @@ async def get_player_payment_instruments(
 @router.get("/players/{player_id}/network")
 async def get_player_network(
     player_id: str,
+    depth: int = Query(1, ge=1, le=2, description="Profundidade do grafo (1=vizinhos diretos, 2=vizinhos de vizinhos)"),
     current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Players relacionados por device_hash ou bank_account_hash partilhados."""
+    """Grafo de rede do player para visualização de clusters e lavagem via intermediários.
+
+    Retorna nodes + edges compatível com D3-force / Cytoscape.js.
+    Arestas representam elementos compartilhados: dispositivo, conta bancária ou IP.
+
+    Campos de cada nó:
+      id, external_player_id, risk_score, risk_band, pep_flag, cluster_risk
+
+    Campos de cada aresta:
+      source, target, edge_type (device|bank_account|ip), shared_hash_prefix,
+      event_count (quantos eventos compartilhados), weight (0..1)
+
+    Indicadores de cluster:
+      total_nodes, total_edges, max_cluster_risk, network_risk_score,
+      has_pep_connection, shared_device_count, shared_bank_count, shared_ip_count
+    """
     p = await db.get(Player, player_id)
     if not p or p.tenant_id != current_user.tenant_id:
         raise HTTPException(404, "Player não encontrado")
 
-    related: dict[str, dict] = {}
+    tid = current_user.tenant_id
 
-    # Shared device fingerprint
-    device_hashes = (await db.execute(
-        select(DeviceEvent.device_hash).distinct()
-        .where(
-            DeviceEvent.tenant_id == current_user.tenant_id,
-            DeviceEvent.player_id == player_id,
-            DeviceEvent.device_hash.isnot(None),
-        )
-    )).scalars().all()
+    # ── Coletar seeds para expansão ───────────────────────────────────────────
+    seeds = {player_id}
+    all_edges: list[dict] = []
 
-    if device_hashes:
-        peers = (await db.execute(
-            select(DeviceEvent.player_id, DeviceEvent.device_hash).distinct()
+    async def _expand(pid_set: set[str]) -> set[str]:
+        """Retorna todos os player_ids encontrados como vizinhos de pid_set via qualquer hash."""
+        found: set[str] = set()
+
+        # ── Device hash ───────────────────────────────────────────────────────
+        dev_hashes = (await db.execute(
+            select(DeviceEvent.device_hash, sqlfunc.count(DeviceEvent.id).label("cnt"))
             .where(
-                DeviceEvent.tenant_id == current_user.tenant_id,
-                DeviceEvent.device_hash.in_(device_hashes),
-                DeviceEvent.player_id != player_id,
-                DeviceEvent.player_id.isnot(None),
+                DeviceEvent.tenant_id == tid,
+                DeviceEvent.player_id.in_(pid_set),
+                DeviceEvent.device_hash.isnot(None),
             )
-            .limit(100)
+            .group_by(DeviceEvent.device_hash)
         )).all()
-        for row in peers:
-            pid = str(row.player_id)
-            related.setdefault(pid, {"player_id": pid, "shared_by": []})
-            related[pid]["shared_by"].append({"type": "device", "value": row.device_hash[:8] + "…"})
 
-    # Shared bank account hash
-    bank_hashes = (await db.execute(
-        select(FinancialTransaction.bank_account_hash).distinct()
-        .where(
-            FinancialTransaction.tenant_id == current_user.tenant_id,
-            FinancialTransaction.player_id == player_id,
-            FinancialTransaction.bank_account_hash.isnot(None),
-        )
-    )).scalars().all()
+        for dh, cnt in dev_hashes:
+            peers_q = (await db.execute(
+                select(DeviceEvent.player_id, sqlfunc.count(DeviceEvent.id).label("ev_cnt"))
+                .where(
+                    DeviceEvent.tenant_id == tid,
+                    DeviceEvent.device_hash == dh,
+                    DeviceEvent.player_id.notin_(pid_set | found),
+                    DeviceEvent.player_id.isnot(None),
+                )
+                .group_by(DeviceEvent.player_id)
+                .limit(50)
+            )).all()
+            for peer_pid, ev_cnt in peers_q:
+                p2 = str(peer_pid)
+                found.add(p2)
+                # Aresta por player de origem
+                for src in pid_set:
+                    all_edges.append({
+                        "source": src, "target": p2,
+                        "edge_type": "device",
+                        "shared_hash_prefix": dh[:12] + "…",
+                        "event_count": int(ev_cnt),
+                        "weight": min(1.0, round(ev_cnt / 10, 2)),
+                    })
 
-    if bank_hashes:
-        bank_peers = (await db.execute(
-            select(FinancialTransaction.player_id, FinancialTransaction.bank_account_hash).distinct()
+        # ── Banco ─────────────────────────────────────────────────────────────
+        bank_hashes = (await db.execute(
+            select(FinancialTransaction.bank_account_hash)
+            .distinct()
             .where(
-                FinancialTransaction.tenant_id == current_user.tenant_id,
-                FinancialTransaction.bank_account_hash.in_(bank_hashes),
-                FinancialTransaction.player_id != player_id,
-                FinancialTransaction.player_id.isnot(None),
+                FinancialTransaction.tenant_id == tid,
+                FinancialTransaction.player_id.in_(pid_set),
+                FinancialTransaction.bank_account_hash.isnot(None),
             )
-            .limit(100)
-        )).all()
-        for row in bank_peers:
-            pid = str(row.player_id)
-            related.setdefault(pid, {"player_id": pid, "shared_by": []})
-            related[pid]["shared_by"].append({"type": "bank_account",
-                                              "value": row.bank_account_hash[:8] + "…"})
+        )).scalars().all()
 
-    return {"player_id": player_id, "related_players": list(related.values())[:50]}
+        for bh in bank_hashes:
+            peers_q = (await db.execute(
+                select(FinancialTransaction.player_id, sqlfunc.count(FinancialTransaction.id).label("ev_cnt"))
+                .where(
+                    FinancialTransaction.tenant_id == tid,
+                    FinancialTransaction.bank_account_hash == bh,
+                    FinancialTransaction.player_id.notin_(pid_set | found),
+                    FinancialTransaction.player_id.isnot(None),
+                )
+                .group_by(FinancialTransaction.player_id)
+                .limit(50)
+            )).all()
+            for peer_pid, ev_cnt in peers_q:
+                p2 = str(peer_pid)
+                found.add(p2)
+                for src in pid_set:
+                    all_edges.append({
+                        "source": src, "target": p2,
+                        "edge_type": "bank_account",
+                        "shared_hash_prefix": bh[:12] + "…",
+                        "event_count": int(ev_cnt),
+                        "weight": min(1.0, round(ev_cnt / 5, 2)),
+                    })
+
+        # ── IP hash ───────────────────────────────────────────────────────────
+        ip_hashes = (await db.execute(
+            select(DeviceEvent.ip_hash)
+            .distinct()
+            .where(
+                DeviceEvent.tenant_id == tid,
+                DeviceEvent.player_id.in_(pid_set),
+                DeviceEvent.ip_hash.isnot(None),
+            )
+        )).scalars().all()
+
+        for ih in ip_hashes:
+            peers_q = (await db.execute(
+                select(DeviceEvent.player_id, sqlfunc.count(DeviceEvent.id).label("ev_cnt"))
+                .where(
+                    DeviceEvent.tenant_id == tid,
+                    DeviceEvent.ip_hash == ih,
+                    DeviceEvent.player_id.notin_(pid_set | found),
+                    DeviceEvent.player_id.isnot(None),
+                )
+                .group_by(DeviceEvent.player_id)
+                .limit(50)
+            )).all()
+            for peer_pid, ev_cnt in peers_q:
+                p2 = str(peer_pid)
+                found.add(p2)
+                for src in pid_set:
+                    all_edges.append({
+                        "source": src, "target": p2,
+                        "edge_type": "ip",
+                        "shared_hash_prefix": ih[:12] + "…",
+                        "event_count": int(ev_cnt),
+                        "weight": min(1.0, round(ev_cnt / 20, 2)),  # IP compartilhado tem peso menor
+                    })
+
+        return found
+
+    # Expansão depth=1
+    neighbors_1 = await _expand(seeds)
+    all_pids = seeds | neighbors_1
+
+    # Expansão depth=2 (vizinhos de vizinhos)
+    if depth >= 2 and neighbors_1:
+        neighbors_2 = await _expand(neighbors_1)
+        all_pids |= neighbors_2
+
+    # Cap total de nós para evitar resposta gigante
+    all_pids = set(list(all_pids)[:100])
+
+    # ── Buscar dados dos nós ──────────────────────────────────────────────────
+    player_rows = (await db.execute(
+        select(Player.id, Player.external_player_id, Player.risk_score, Player.risk_band, Player.pep_flag)
+        .where(Player.id.in_(all_pids), Player.tenant_id == tid)
+    )).all()
+
+    _SEV_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+    nodes: list[dict] = []
+    for pid_row, ext_id, risk_score, risk_band, pep_flag in player_rows:
+        nodes.append({
+            "id": str(pid_row),
+            "external_player_id": ext_id,
+            "risk_score": float(risk_score or 0),
+            "risk_band": risk_band or "LOW",
+            "pep_flag": bool(pep_flag),
+            "is_focal": str(pid_row) == player_id,
+            "cluster_risk": _SEV_ORDER.get(str(risk_band or "LOW").upper(), 0),
+        })
+
+    # Deduplicar arestas: manter a de maior event_count por (source, target, edge_type)
+    edge_key: dict[tuple, dict] = {}
+    for e in all_edges:
+        src, tgt = sorted([e["source"], e["target"]])  # normaliza direção
+        k = (src, tgt, e["edge_type"])
+        if k not in edge_key or e["event_count"] > edge_key[k]["event_count"]:
+            edge_key[k] = {**e, "source": src, "target": tgt}
+    deduped_edges = list(edge_key.values())
+
+    # ── Indicadores de cluster ────────────────────────────────────────────────
+    risk_bands_all = [n["risk_band"] for n in nodes if not n["is_focal"]]
+    max_cluster_risk = max(risk_bands_all, key=lambda b: _SEV_ORDER.get(b, 0), default="LOW") if risk_bands_all else "LOW"
+    has_pep = any(n["pep_flag"] for n in nodes if not n["is_focal"])
+    device_edges = sum(1 for e in deduped_edges if e["edge_type"] == "device")
+    bank_edges   = sum(1 for e in deduped_edges if e["edge_type"] == "bank_account")
+    ip_edges     = sum(1 for e in deduped_edges if e["edge_type"] == "ip")
+
+    # network_risk_score: pondera tamanho do cluster, max_risk e PEP
+    cluster_size = len(nodes) - 1  # excluindo focal
+    _risk_mult = {"LOW": 0.1, "MEDIUM": 0.3, "HIGH": 0.7, "CRITICAL": 1.0}
+    peer_risk = _risk_mult.get(max_cluster_risk, 0.1)
+    network_risk_score = round(
+        min(1.0, peer_risk + (0.1 if has_pep else 0) + min(0.2, cluster_size * 0.02)),
+        3,
+    )
+
+    return {
+        "focal_player_id": player_id,
+        "depth": depth,
+        "nodes": sorted(nodes, key=lambda n: (-n["risk_score"], n["id"])),
+        "edges": deduped_edges,
+        "cluster_summary": {
+            "total_nodes": len(nodes),
+            "total_edges": len(deduped_edges),
+            "peer_count": cluster_size,
+            "max_cluster_risk": max_cluster_risk,
+            "network_risk_score": network_risk_score,
+            "has_pep_connection": has_pep,
+            "shared_device_edges": device_edges,
+            "shared_bank_edges":   bank_edges,
+            "shared_ip_edges":     ip_edges,
+        },
+    }
 
 
 @router.get("/players/{player_id}/case-alert-history")

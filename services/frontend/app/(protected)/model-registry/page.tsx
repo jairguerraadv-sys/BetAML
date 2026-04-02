@@ -229,7 +229,8 @@ export default function ModelRegistryPage() {
       </div>
 
       {summary && (
-        <div className="grid gap-4 md:grid-cols-4">
+        <>
+          <div className="grid gap-4 md:grid-cols-4">
           <MetricCard
             title="Precisão estimada"
             value={pct(summary.totals.precision_estimated)}
@@ -303,6 +304,7 @@ export default function ModelRegistryPage() {
             </div>
           );
         })()}
+        </>
       )}
 
       {summary && summary.by_day.length > 0 && (

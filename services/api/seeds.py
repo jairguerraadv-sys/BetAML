@@ -135,6 +135,14 @@ DEFAULT_RULES = [
         "condition_dsl": "transaction.type == \"WITHDRAWAL\" and features.deposit_sum_24h >= params.min_deposit and ratio(features.withdrawal_sum_24h, features.deposit_sum_24h) >= params.ratio_threshold",
         "params": {"min_deposit": 1000, "ratio_threshold": "0.7"},
     },
+    {
+        "name": "Incompatibilidade renda/volume 30d",
+        "description": "Volume de depósitos nos últimos 30d incompatível com a renda mensal declarada (Res. COAF 40/2021 Art. 2 — indício de lavagem por volume atípico)",
+        "severity": "HIGH",
+        "scope": "TRANSACTION",
+        "condition_dsl": "transaction.type == \"DEPOSIT\" and player.declared_income_monthly != null and features.income_ratio_30d >= params.ratio_threshold",
+        "params": {"ratio_threshold": 3.0},
+    },
 ]
 
 TENANTS = [
@@ -447,10 +455,8 @@ async def seed(db: AsyncSession):
                 tenant_id=tenant.id,
                 name="Structuring + Spike Combinado",
                 description="Dispara quando structuring E spike de depósito ocorrem simultaneamente",
-                operator="AND",
                 logic="AND",
                 component_rule_ids=[structuring_id, spike_id],
-                child_rule_ids=[structuring_id, spike_id],
                 score_weights={structuring_id: 0.6, spike_id: 0.4},
                 min_score_threshold=0.70,
                 severity_mode="MAX",
@@ -464,10 +470,8 @@ async def seed(db: AsyncSession):
                 tenant_id=tenant.id,
                 name="Round-trip HIGH Confidence",
                 description="Round-tripping com alto score composto (regra + ML)",
-                operator="OR",
                 logic="OR",
                 component_rule_ids=[roundtrip_id],
-                child_rule_ids=[roundtrip_id],
                 score_weights={roundtrip_id: 1.0},
                 min_score_threshold=0.80,
                 severity_mode="FIXED",
