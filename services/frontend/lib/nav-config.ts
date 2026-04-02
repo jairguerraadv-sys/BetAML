@@ -98,6 +98,11 @@ export const NAV_BY_ROLE: Record<AppRole, NavSection[]> = {
   BetAML_SuperAdmin:    [SECTION_PLATAFORMA],
 };
 
+// Deployment mode vem de variável de ambiente build-time (NEXT_PUBLIC_DEPLOYMENT_MODE)
+export type DeploymentMode = 'saas' | 'onprem';
+export const DEPLOYMENT_MODE: DeploymentMode =
+  (process.env.NEXT_PUBLIC_DEPLOYMENT_MODE as DeploymentMode) ?? 'saas';
+
 // ── guarda de rota: caminho → papéis permitidos ───────────────────────────────
 export const ROUTE_ROLES: Array<{ pattern: RegExp; roles: AppRole[] }> = [
   // PLD — Analista e Gestor
@@ -128,14 +133,23 @@ export const ROUTE_ROLES: Array<{ pattern: RegExp; roles: AppRole[] }> = [
 /**
  * Retorna as seções de navegação para o conjunto de papéis do usuário.
  * Usuários com múltiplos papéis (ex: Analista + AdminTecnico) veem a união.
+ * Em modo on-prem, a seção "Plataforma BetAML" é suprimida pois o console
+ * multi-tenant não existe em instalações single-tenant.
  */
-export function getNavSections(userRoles: string[]): NavSection[] {
+export function getNavSections(
+  userRoles: string[],
+  deploymentMode: DeploymentMode = DEPLOYMENT_MODE,
+): NavSection[] {
   const seen = new Set<string>();
   const sections: NavSection[] = [];
 
   for (const role of userRoles as AppRole[]) {
     const roleSections = NAV_BY_ROLE[role] ?? [];
     for (const section of roleSections) {
+      // Suprimir seção de plataforma em on-prem
+      if (deploymentMode === 'onprem' && section === SECTION_PLATAFORMA) {
+        continue;
+      }
       if (!seen.has(section.label)) {
         seen.add(section.label);
         sections.push(section);

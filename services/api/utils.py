@@ -162,3 +162,58 @@ async def redis_rate_limit(
         raise
     except Exception as e:
         logger.warning("rate_limit_redis_error", error=str(e))
+
+
+# ── Multiplicadores por plano ──────────────────────────────────────────────────
+_PLAN_TIER_MULTIPLIER: dict[str, float] = {
+    "starter":      0.5,
+    "standard":     1.0,
+    "professional": 2.0,
+    "enterprise":   5.0,
+}
+
+
+async def redis_rate_limit_by_plan(
+    db: AsyncSession,
+    tenant_id: str,
+    bucket: str,
+    base_max_requests: int,
+    window_seconds: int = 60,
+) -> None:
+    """Rate limiting com multiplicadores por plano contratual do tenant.
+
+    Consulta `tenants.plan_tier` (cached by Redis para evitar round-trip a cada request)
+    e aplica o multiplicador sobre `base_max_requests`.
+
+    Tiers suportados: starter (0.5×), standard (1×), professional (2×), enterprise (5×).
+    """
+    from sqlalchemy import select as _select
+    from models import Tenant as _Tenant
+
+    # Tentar obter plan_tier do Redis (cache curta — 5 min)
+    r = await _get_rate_redis()
+    plan_tier: str | None = None
+    cache_key = f"betaml:plantier:{tenant_id}"
+    if r:
+        try:
+            plan_tier = await r.get(cache_key)
+        except Exception:
+            pass
+
+    if not plan_tier:
+        try:
+            result = await db.execute(
+                _select(_Tenant.plan_tier).where(_Tenant.id == tenant_id)
+            )
+            plan_tier = result.scalar_one_or_none() or "standard"
+            if r:
+                try:
+                    await r.set(cache_key, plan_tier, ex=300)
+                except Exception:
+                    pass
+        except Exception:
+            plan_tier = "standard"
+
+    multiplier = _PLAN_TIER_MULTIPLIER.get(plan_tier, 1.0)
+    effective_limit = max(1, int(base_max_requests * multiplier))
+    await redis_rate_limit(tenant_id, bucket, effective_limit, window_seconds)

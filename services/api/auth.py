@@ -338,6 +338,15 @@ async def validate_api_key(
 
     # Backward-compatible path for legacy keys without tenant hint.
     if api_key is None and not hinted_tenant:
+        import structlog as _structlog
+        _structlog.get_logger(__name__).warning(
+            "legacy_api_key_scan",
+            msg=(
+                "API key sem prefixo 'btml_' — usando scan O(N) em todos os tenants. "
+                "Migre para o formato v2 (btml_<tenant_uuid_hex32>_<secret>) antes de 2026-12-31. "
+                "Este path será removido na próxima versão major."
+            ),
+        )
         tenant_ids = (await db.execute(select(Tenant.id))).scalars().all()
         for tenant_id in tenant_ids:
             await _set_db_tenant_context(db, str(tenant_id))

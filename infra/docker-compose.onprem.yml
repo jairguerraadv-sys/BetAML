@@ -1,0 +1,79 @@
+# infra/docker-compose.onprem.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Override para deployment on-prem (single-tenant, infra do operador).
+#
+# USO:
+#   docker compose -f infra/docker-compose.yml \
+#                  -f infra/docker-compose.onprem.yml \
+#                  up -d
+#
+# Diferenças em relação ao compose padrão:
+#  - Remove observabilidade pesada (Grafana, Prometheus, AlertManager)
+#    que normalmente é responsabilidade do stack de infra do operador.
+#  - Remove Redpanda Console (UI de desenvolvimento).
+#  - Define DEPLOYMENT_MODE=onprem e NEXT_PUBLIC_DEPLOYMENT_MODE=onprem.
+#  - Define ENVIRONMENT=production (força validação de secrets).
+#  - Mantém todos os serviços core: postgres, redis, minio, clickhouse,
+#    redpanda, api, frontend, stream-processor, rules-engine, ml-service, ml-trainer.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ─── Serviços de observabilidade removidos em on-prem ──────────────────────
+  prometheus:
+    profiles: [saas-only]   # excluído por default no on-prem
+
+  alertmanager:
+    profiles: [saas-only]
+
+  grafana:
+    profiles: [saas-only]
+
+  redpanda-console:
+    profiles: [saas-only]
+
+  # ─── API: deployment mode on-prem ──────────────────────────────────────────
+  api:
+    environment:
+      DEPLOYMENT_MODE:    "onprem"
+      ENVIRONMENT:        "production"
+      # ONPREM_TENANT_ID deve ser setado no .env ou no comando:
+      #   ONPREM_TENANT_ID=<uuid> docker compose ... up
+      ONPREM_TENANT_ID:   ${ONPREM_TENANT_ID:?ONPREM_TENANT_ID is required in on-prem mode}
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+
+  # ─── Frontend: deployment mode on-prem ─────────────────────────────────────
+  frontend:
+    environment:
+      NEXT_PUBLIC_DEPLOYMENT_MODE: "onprem"
+      ENVIRONMENT:                 "production"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  # ─── Postgres: limites de produção on-prem ─────────────────────────────────
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+
+  # ─── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # ─── ML Trainer: um único tenant, sem CronJob K8s ─────────────────────────
+  ml-trainer:
+    environment:
+      ENVIRONMENT: "production"
+    restart: "no"   # on-prem: disparado externamente (cron do SO ou CI/CD)

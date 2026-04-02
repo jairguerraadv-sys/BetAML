@@ -29,6 +29,9 @@ class Tenant(Base):
     active               = Column(Boolean, nullable=False, default=True)
     settings             = Column(JSONB, nullable=False, default={})
     risk_score_threshold = Column(Numeric(5, 2), nullable=False, default=0.75)
+    # plan_tier define os multiplicadores de rate limit:
+    #   starter → 0.5×   standard → 1×   professional → 2×   enterprise → 5×
+    plan_tier            = Column(String(20), nullable=False, default="standard")
     created_at           = Column(DateTime(timezone=True), server_default=func.now())
     updated_at           = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

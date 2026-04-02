@@ -33,6 +33,8 @@ api:
     REDIS_URL: "redis://redis:6379/0"
     KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
     LOG_LEVEL: "INFO"
+    DEPLOYMENT_MODE: "saas"
+    ONPREM_TENANT_ID: ""
   # Reference to an existing secret that contains:
   #   DATABASE_URL, JWT_SECRET, PII_ENCRYPTION_KEY, MINIO_SECRET_KEY
   existingSecret: "betaml-secrets"
@@ -56,6 +58,7 @@ frontend:
       memory: 512Mi
   env:
     NEXT_PUBLIC_API_URL: ""   # e.g. https://api.betaml.io
+    NEXT_PUBLIC_DEPLOYMENT_MODE: "saas"
 
 ## ─── ML TRAINER ─────────────────────────────────────────────────────────────
 mlTrainer:

@@ -1,0 +1,101 @@
+# helm/betaml/values-onprem.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# Valores para deployment on-prem (single-tenant, infra do operador).
+# Use com: helm upgrade --install betaml ./helm/betaml \
+#              -f helm/betaml/values.yaml \
+#              -f helm/betaml/values-onprem.yaml \
+#              --set api.env.ONPREM_TENANT_ID=<uuid>
+# ─────────────────────────────────────────────────────────────────────────────
+
+global:
+  imageTag: ""                  # pin explícito em produção; vazio cai par chart default
+
+## ─── API ─────────────────────────────────────────────────────────────────────
+api:
+  replicaCount: 1
+  autoscaling:
+    enabled: false              # single-node: sem HPA
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  env:
+    DEPLOYMENT_MODE: "onprem"
+    ONPREM_TENANT_ID: ""        # OBRIGATÓRIO: setar no --set ou via secret
+    LOG_LEVEL: "INFO"
+
+## ─── FRONTEND ────────────────────────────────────────────────────────────────
+frontend:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    NEXT_PUBLIC_DEPLOYMENT_MODE: "onprem"
+
+## ─── ML TRAINER ──────────────────────────────────────────────────────────────
+mlTrainer:
+  enabled: true
+  schedule: "0 2 * * *"        # 02:00 local — único tenant, sem janela SaaS
+
+## ─── POSTGRES ─────────────────────────────────────────────────────────────────
+postgresql:
+  enabled: true                 # sempre true em on-prem (sem managed DB)
+  persistence:
+    enabled: true
+    size: 100Gi                 # mínimo conservador; ajustar com DBA do operador
+  primary:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+
+## ─── REDIS ───────────────────────────────────────────────────────────────────
+redis:
+  replicaCount: 1               # não há Sentinel em on-prem single-node
+  persistence:
+    enabled: true
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+## ─── INGRESS ─────────────────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    # Em on-prem com cert self-signed, remova cert-manager e configure manualmente
+    cert-manager.io/cluster-issuer: ""
+  hosts:
+    - host: betaml.local         # substituir pelo FQDN interno do operador
+      paths:
+        - path: /api
+          pathType: Prefix
+          backend: api
+        - path: /
+          pathType: Prefix
+          backend: frontend
+  tls: []                        # configurar com certificado interno do operador
+
+## ─── CONFIG MAP ──────────────────────────────────────────────────────────────
+config:
+  ENVIRONMENT: "production"
+  ALLOWED_ORIGINS: ""            # setar para o FQDN interno: "https://betaml.local"
+  MINIO_ENDPOINT: "minio:9000"
+  DEPLOYMENT_MODE: "onprem"

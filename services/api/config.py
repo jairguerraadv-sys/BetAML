@@ -27,6 +27,8 @@ Veja docs/security-secrets-management.md para guia completo.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
@@ -36,6 +38,15 @@ class Settings(BaseSettings):
     project_name: str = "BetAML"
     environment: str = "development"
     debug: bool = False
+
+    # Deployment mode
+    # saas    → multi-tenant SaaS hospedado pela BetAML (default)
+    # onprem  → single-tenant instalado na infra do operador;
+    #            exige ONPREM_TENANT_ID setado em não-dev.
+    deployment_mode: Literal["saas", "onprem"] = "saas"
+    # UUID do tenant pré-seed em deployments on-prem.
+    # Obrigatório quando deployment_mode=onprem e environment != development/test.
+    onprem_tenant_id: str | None = None
 
     # Database
     database_url: str = "postgresql://betaml:devpass@localhost:5432/betaml_dev"
@@ -119,6 +130,12 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "INTERNAL_WEBHOOK_SECRET must be changed from default in staging/production. "
                     "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
+                )
+            # On-prem: exige tenant pré-seed configurado
+            if self.deployment_mode == "onprem" and not self.onprem_tenant_id:
+                raise ValueError(
+                    "ONPREM_TENANT_ID must be set when DEPLOYMENT_MODE=onprem in staging/production. "
+                    "Set it to the UUID of the pre-seeded tenant."
                 )
         return self
 

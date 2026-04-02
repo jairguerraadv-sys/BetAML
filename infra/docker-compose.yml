@@ -40,6 +40,7 @@ services:
       - ./migration_v20.sql:/docker-entrypoint-initdb.d/20-migration.sql
       - ./migration_v21.sql:/docker-entrypoint-initdb.d/21-migration.sql
       - ./migration_v22.sql:/docker-entrypoint-initdb.d/22-migration.sql
+      - ./migration_v26.sql:/docker-entrypoint-initdb.d/26-migration.sql
     ports:
       - "5432:5432"
     healthcheck:
@@ -199,6 +200,8 @@ services:
       # o startup da API lançará RuntimeError e recusará subir.
       PII_ENCRYPTION_KEY:      ${PII_ENCRYPTION_KEY:-ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5}
       ENVIRONMENT:             ${ENVIRONMENT:-development}
+      DEPLOYMENT_MODE:         ${DEPLOYMENT_MODE:-saas}
+      ONPREM_TENANT_ID:        ${ONPREM_TENANT_ID:-}
       SANCTIONS_CSV_PATH:      /data/sanctions.csv
     ports:
       - "8000:8000"
@@ -324,9 +327,10 @@ services:
     container_name: betaml-frontend
     depends_on: [api]
     environment:
-      BACKEND_API_URL:         ${BACKEND_API_URL:-http://api:8000}
-      NEXT_PUBLIC_API_URL:     ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-      NEXT_PUBLIC_API_TIMEOUT: ${NEXT_PUBLIC_API_TIMEOUT:-30000}
+      BACKEND_API_URL:                ${BACKEND_API_URL:-http://api:8000}
+      NEXT_PUBLIC_API_URL:            ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_API_TIMEOUT:        ${NEXT_PUBLIC_API_TIMEOUT:-30000}
+      NEXT_PUBLIC_DEPLOYMENT_MODE:    ${DEPLOYMENT_MODE:-saas}
     ports:
       - "3000:3000"
     volumes:
