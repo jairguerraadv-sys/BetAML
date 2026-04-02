@@ -252,7 +252,7 @@ export default function MappingsPage() {
   const columns = useMemo(
     () => [
       { header: 'Nome', accessorKey: 'name' as keyof MappingListItem },
-      { header: 'Source', accessorKey: 'source_system' as keyof MappingListItem },
+      { header: 'Sistema de origem', accessorKey: 'source_system' as keyof MappingListItem },
       { header: 'Entidade', accessorKey: 'entity_type' as keyof MappingListItem },
       { header: 'Versão', accessorKey: 'version_number' as keyof MappingListItem },
       {
@@ -364,14 +364,14 @@ export default function MappingsPage() {
   return (
     <div className="space-y-6">
       <header className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h1 className="text-2xl font-semibold text-gray-900">MappingConfig Studio</h1>
+        <h1 className="text-2xl font-semibold text-gray-900">Configuração de Integrações</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Editor YAML/JSON com validação em tempo real, preview canônico, versionamento imutável e rollback.
+          Configure como os dados de cada sistema de origem são transformados em eventos PLD.
         </p>
       </header>
 
       <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-        <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Templates</p>
+        <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Integrações disponíveis</p>
         <div className="flex flex-wrap gap-2">
           {templates.map((tpl) => (
             <button
@@ -403,20 +403,20 @@ export default function MappingsPage() {
               />
             </div>
             <div>
-              <label htmlFor="mapping-source-system" className="mb-1 block text-xs font-medium text-gray-600">Source System</label>
+              <label htmlFor="mapping-source-system" className="mb-1 block text-xs font-medium text-gray-600">Sistema de origem</label>
               <input
                 id="mapping-source-system"
-                aria-label="Source system do mapping"
+                aria-label="Sistema de origem do mapping"
                 value={sourceSystem}
                 onChange={(e) => setSourceSystem(e.target.value)}
                 className="w-full rounded-lg border px-3 py-2 text-sm"
               />
             </div>
             <div>
-              <label htmlFor="mapping-entity-type" className="mb-1 block text-xs font-medium text-gray-600">Entity Type</label>
+              <label htmlFor="mapping-entity-type" className="mb-1 block text-xs font-medium text-gray-600">Tipo de dados</label>
               <input
                 id="mapping-entity-type"
-                aria-label="Entity type do mapping"
+                aria-label="Tipo de dados do mapping"
                 value={entityType}
                 onChange={(e) => setEntityType(e.target.value.toUpperCase())}
                 className="w-full rounded-lg border px-3 py-2 text-sm"
@@ -456,10 +456,10 @@ export default function MappingsPage() {
           </pre>
 
           <div>
-            <label htmlFor="mapping-change-notes" className="mb-1 block text-xs font-medium text-gray-600">Change notes</label>
+            <label htmlFor="mapping-change-notes" className="mb-1 block text-xs font-medium text-gray-600">Notas da alteração</label>
             <input
               id="mapping-change-notes"
-              aria-label="Change notes do mapping"
+              aria-label="Notas da alteração do mapping"
               value={changeNotes}
               onChange={(e) => setChangeNotes(e.target.value)}
               placeholder="Ex.: ajuste de enum para transaction_type"
@@ -471,10 +471,10 @@ export default function MappingsPage() {
             <button
               onClick={saveMapping}
               disabled={createMutation.isPending || versionMutation.isPending || !mappingName || !editorText}
-              aria-label={mode === 'create' ? 'Criar mapping' : 'Salvar nova versão do mapping'}
+              aria-label={mode === 'create' ? 'Criar integração' : 'Salvar nova versão da integração'}
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
             >
-              {mode === 'create' ? 'Criar Mapping' : 'Salvar Nova Versão'}
+              {mode === 'create' ? 'Criar Integração' : 'Salvar Nova Versão'}
             </button>
             <button
               onClick={() => {
@@ -494,7 +494,7 @@ export default function MappingsPage() {
           {activeTemplate && (
             <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
               <div>
-                <p className="text-sm font-semibold text-slate-900">Contrato do conector</p>
+                <p className="text-sm font-semibold text-slate-900">Formato esperado pelo conector</p>
                 <p className="text-xs text-slate-500">
                   {activeTemplate.payload_format} · {activeTemplate.content_type} · auth {activeTemplate.auth_mode}
                 </p>
@@ -506,7 +506,7 @@ export default function MappingsPage() {
               </div>
 
               <div>
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Campos esperados</p>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Campos obrigatórios</p>
                 <div className="max-h-32 space-y-1 overflow-auto rounded border border-slate-200 bg-white p-2">
                   {activeTemplate.input_schema.map((field) => (
                     <div key={field.name} className="text-xs text-slate-700">
@@ -519,7 +519,7 @@ export default function MappingsPage() {
               </div>
 
               <div>
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Payload de exemplo</p>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Exemplo de dado</p>
                 <pre className="max-h-36 overflow-auto rounded border border-slate-200 bg-slate-950 p-3 text-[11px] text-slate-200">
                   {activeTemplate.sample_payload}
                 </pre>
@@ -527,7 +527,7 @@ export default function MappingsPage() {
             </div>
           )}
 
-          <p className="text-sm font-semibold text-gray-800">Preview do Mapping</p>
+          <p className="text-sm font-semibold text-gray-800">Testar transformação</p>
           <textarea
             aria-label="Payload de exemplo para preview do mapping"
             value={sampleText}
@@ -546,7 +546,7 @@ export default function MappingsPage() {
             aria-label="Gerar preview"
             className="w-full rounded-lg bg-emerald-600 px-3 py-2 text-sm text-white disabled:opacity-50"
           >
-            {previewMutation.isPending ? 'Gerando preview...' : 'Gerar Preview'}
+            {previewMutation.isPending ? 'Testando...' : 'Testar transformação'}
           </button>
 
           {selected && (
@@ -556,14 +556,14 @@ export default function MappingsPage() {
                   const sampleObj = JSON.parse(sampleText) as Record<string, unknown>;
                   testSavedMappingMutation.mutate({ id: selected.id, sample: sampleObj });
                 } catch {
-                  setSavedMappingTestResult({ status: 'error', detail: 'JSON de amostra inválido para teste salvo' });
+                  setSavedMappingTestResult({ status: 'error', detail: 'JSON inválido' });
                 }
               }}
               disabled={testSavedMappingMutation.isPending}
               aria-label="Testar mapping salvo"
               className="w-full rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 disabled:opacity-50"
             >
-              {testSavedMappingMutation.isPending ? 'Testando mapping salvo...' : 'Testar Mapping Salvo'}
+              {testSavedMappingMutation.isPending ? 'Testando...' : 'Testar versão salva'}
             </button>
           )}
 
@@ -606,7 +606,7 @@ export default function MappingsPage() {
 
           {selected && (
             <div className="space-y-2 rounded-lg border border-gray-200 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Versões</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Histórico de versões</p>
               <div className="max-h-44 space-y-2 overflow-auto">
                 {versions.map((v: MappingVersion) => (
                   <div key={v.id} className="flex items-center justify-between rounded border px-2 py-1.5 text-xs">
@@ -617,14 +617,14 @@ export default function MappingsPage() {
                     {!v.is_current && (
                       <button
                         onClick={() => {
-                          if (window.confirm(`Criar nova versão ativa a partir da v${v.version_number}?`)) {
+                          if (window.confirm(`Restaurar versão v${v.version_number} como ativa?`)) {
                             rollbackMutation.mutate({ id: selected.id, version: v.version_number });
                           }
                         }}
-                        aria-label={`Rollback versão ${v.version_number} do mapping`}
+                        aria-label={`Restaurar versão ${v.version_number} como ativa`}
                         className="rounded bg-amber-100 px-2 py-1 text-amber-700"
                       >
-                        Rollback
+                        Restaurar
                       </button>
                     )}
                   </div>
