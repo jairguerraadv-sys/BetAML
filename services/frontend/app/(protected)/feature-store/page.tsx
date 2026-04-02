@@ -11,10 +11,10 @@ export default function FeatureStorePage() {
     <div className="space-y-6">
       <div className="flex items-center gap-2">
         <Database size={22} className="text-brand" />
-        <h1 className="text-2xl font-bold text-gray-900">Feature Store</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Diagnóstico de Apostadores</h1>
       </div>
       <p className="text-sm text-gray-500">
-        Consulte o perfil de features (históricas e em tempo real) de um jogador.
+        Consulte os indicadores de risco de um apostador pelo ID.
       </p>
       <form
         className="flex gap-3"
@@ -26,7 +26,7 @@ export default function FeatureStorePage() {
         <input
           value={playerId}
           onChange={(e) => setPlayerId(e.target.value)}
-          placeholder="Player ID (UUID)"
+          placeholder="ID do apostador"
           className="flex-1 rounded-lg border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
         />
         <button

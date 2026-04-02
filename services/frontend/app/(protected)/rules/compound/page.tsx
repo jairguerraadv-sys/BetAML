@@ -84,13 +84,13 @@ export default function CompoundRulesPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <GitBranch size={22} className="text-brand" />
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Regras Compostas</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Condições Compostas</h1>
         </div>
         <button
           onClick={() => setShowForm((v) => !v)}
           className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand/90"
         >
-          <Plus size={16} /> Nova Regra Composta
+          <Plus size={16} /> Nova Condição Composta
         </button>
       </div>
 
@@ -100,7 +100,7 @@ export default function CompoundRulesPage() {
           className="space-y-4 rounded-xl border border-brand/20 bg-brand/5 p-5 dark:bg-brand/10"
           onSubmit={(e) => { e.preventDefault(); create.mutate(); }}
         >
-          <h2 className="font-semibold text-gray-800 dark:text-white">Nova Regra Composta</h2>
+          <h2 className="font-semibold text-gray-800 dark:text-white">Nova Condição Composta</h2>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -133,25 +133,25 @@ export default function CompoundRulesPage() {
                 onChange={(e) => setOperator(e.target.value)}
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
               >
-                <option value="AND">AND</option>
-                <option value="OR">OR</option>
-                <option value="N_OF_M">N_OF_M</option>
+                <option value="AND">Todas devem disparar (E)</option>
+                <option value="OR">Qualquer uma dispara (OU)</option>
+                <option value="N_OF_M">Pelo menos N de M</option>
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Modo severidade</label>
+              <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Gravidade resultante</label>
               <select
                 value={severityMode}
                 onChange={(e) => setSeverityMode(e.target.value)}
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
               >
-                <option value="MAX">MAX</option>
-                <option value="FIXED">FIXED</option>
+                <option value="MAX">A mais grave das condições</option>
+                <option value="FIXED">Gravidade fixa definida abaixo</option>
               </select>
             </div>
             {operator === 'N_OF_M' && (
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">N mínimo</label>
+                <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Mínimo de condições (N)</label>
                 <input
                   type="number"
                   min="1"
@@ -169,10 +169,10 @@ export default function CompoundRulesPage() {
                   onChange={(e) => setFixedSeverity(e.target.value)}
                   className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                 >
-                  <option value="LOW">LOW</option>
-                  <option value="MEDIUM">MEDIUM</option>
-                  <option value="HIGH">HIGH</option>
-                  <option value="CRITICAL">CRITICAL</option>
+                  <option value="LOW">Baixo</option>
+                  <option value="MEDIUM">Médio</option>
+                  <option value="HIGH">Alto</option>
+                  <option value="CRITICAL">Crítico</option>
                 </select>
               </div>
             )}
@@ -181,7 +181,7 @@ export default function CompoundRulesPage() {
           {/* Rule checkboxes */}
           <div>
             <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">
-              Regras componentes ({selectedIds.length} selecionada{selectedIds.length !== 1 ? 's' : ''})
+              Condições componentes ({selectedIds.length} selecionada{selectedIds.length !== 1 ? 's' : ''})
             </label>
             {activeRules.length === 0 ? (
               <p className="text-xs text-gray-400">Nenhuma regra ativa disponível.</p>
@@ -238,7 +238,7 @@ export default function CompoundRulesPage() {
             <tr>
               <th className="px-4 py-3 text-left">Nome</th>
               <th className="px-4 py-3 text-left">Score Mín.</th>
-              <th className="px-4 py-3 text-left">Regras</th>
+              <th className="px-4 py-3 text-left">Condições</th>
               <th className="px-4 py-3 text-left">Lógica</th>
               <th className="px-4 py-3 text-left">Status</th>
               <th className="px-4 py-3 text-left">Criado em</th>
@@ -250,7 +250,7 @@ export default function CompoundRulesPage() {
               <tr><td colSpan={7} className="py-8 text-center text-gray-400">Carregando…</td></tr>
             )}
             {!isLoading && compoundRules.length === 0 && (
-              <tr><td colSpan={7} className="py-8 text-center text-gray-400">Nenhuma regra composta cadastrada</td></tr>
+              <tr><td colSpan={7} className="py-8 text-center text-gray-400">Nenhuma condição composta cadastrada</td></tr>
             )}
             {compoundRules.map((r: CompoundRule) => {
               const componentNames = (r.component_rule_ids ?? [])
@@ -265,7 +265,7 @@ export default function CompoundRulesPage() {
                   </td>
                   <td className="px-4 py-3">
                     <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-semibold dark:bg-gray-700 dark:text-gray-300">
-                      {r.logic ?? 'AND'}
+                      {{ AND: 'Todas (E)', OR: 'Qualquer (OU)', N_OF_M: 'Pelo menos N' }[r.logic ?? 'AND'] ?? (r.logic ?? 'AND')}
                     </span>
                   </td>
                   <td className="px-4 py-3">

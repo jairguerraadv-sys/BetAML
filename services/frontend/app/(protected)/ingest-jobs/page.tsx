@@ -116,14 +116,14 @@ export default function IngestJobsPage() {
 
   const columns = useMemo(() => [
     {
-      header: 'Job ID',
+      header: 'ID do Envio',
       accessorKey: 'id' as keyof IngestJob,
       cell: (v: unknown) => (
         <span className="font-mono text-xs text-gray-500">{String(v).slice(0, 8)}…</span>
       ),
     },
     {
-      header: 'Source System',
+      header: 'Sistema de origem',
       accessorKey: 'source_system' as keyof IngestJob,
     },
     {
@@ -198,7 +198,7 @@ export default function IngestJobsPage() {
         <input
           type="text"
           aria-label="Source system do filtro de ingest jobs"
-          placeholder="Source system…"
+          placeholder="Sistema de origem…"
           value={sourceSystem}
           onChange={(e) => { setSourceSystem(e.target.value); setOffset(0); }}
           className="rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
@@ -223,7 +223,7 @@ export default function IngestJobsPage() {
 
       <section className="grid gap-3 md:grid-cols-4">
         <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
-          <p className="text-xs uppercase tracking-wide text-gray-400">Jobs na página</p>
+          <p className="text-xs uppercase tracking-wide text-gray-400">Envios na página</p>
           <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">{summary.total}</p>
         </div>
         <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
@@ -267,7 +267,7 @@ export default function IngestJobsPage() {
               Quarentena aberta: {ingestStream.lastEvent.summary.unresolved_errors}
             </span>
             <span className="text-gray-500 dark:text-gray-400">
-              Rate limit: {ingestStream.lastEvent.summary.configured_rate_limit_per_min}/min
+              Limite de ingest\u00e3o: {ingestStream.lastEvent.summary.configured_rate_limit_per_min}/min
             </span>
             <span className="text-gray-500 dark:text-gray-400">
               WS ativos: {ingestStream.lastEvent.summary.ws_active_connections}
@@ -374,7 +374,7 @@ export default function IngestJobsPage() {
                 <>
                   <dl className="grid grid-cols-2 gap-3 text-sm">
                     <div>
-                      <dt className="text-xs text-gray-400">Source System</dt>
+                      <dt className="text-xs text-gray-400">Sistema de origem</dt>
                       <dd className="font-medium">{jobDetail.source_system}</dd>
                     </div>
                     <div>
@@ -386,7 +386,7 @@ export default function IngestJobsPage() {
                       <dd className="truncate text-xs">{jobDetail.file_name ?? '—'}</dd>
                     </div>
                     <div>
-                      <dt className="text-xs text-gray-400">Conector</dt>
+                      <dt className="text-xs text-gray-400">Tipo de integração</dt>
                       <dd>{jobDetail.connector_type ?? '—'}</dd>
                     </div>
                     <div>
@@ -410,7 +410,7 @@ export default function IngestJobsPage() {
                       <dd>{jobDetail.error_count}</dd>
                     </div>
                     <div className="col-span-2">
-                      <dt className="text-xs text-gray-400">Bronze path</dt>
+                      <dt className="text-xs text-gray-400">Caminho do arquivo</dt>
                       <dd className="truncate font-mono text-[11px] text-gray-500">{jobDetail.file_path ?? '—'}</dd>
                     </div>
                     <div>

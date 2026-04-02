@@ -113,7 +113,7 @@ export default function IngestErrorsPage() {
 
   const columns = useMemo(() => [
     {
-      header: 'Source',
+      header: 'Sistema de origem',
       accessorKey: 'source_system' as keyof IngestError,
     },
     {
@@ -136,7 +136,7 @@ export default function IngestErrorsPage() {
       ),
     },
     {
-      header: 'Payload',
+      header: 'Dados enviados',
       accessorKey: 'raw_payload' as keyof IngestError,
       cell: (v: unknown) => {
         const preview = String(v ?? '').replace(/\s+/g, ' ').trim();
@@ -252,7 +252,7 @@ export default function IngestErrorsPage() {
         <input
           type="text"
           aria-label="Source system do filtro de quarentena"
-          placeholder="Source system…"
+          placeholder="Sistema de origem…"
           value={sourceSystem}
           onChange={(e) => { setSourceSystem(e.target.value); setOffset(0); }}
           className="rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
@@ -379,7 +379,7 @@ export default function IngestErrorsPage() {
             <div className="flex-1 space-y-4 overflow-y-auto p-4">
               <dl className="grid grid-cols-2 gap-3 text-sm">
                 <div>
-                  <dt className="text-xs text-gray-400">Source</dt>
+                  <dt className="text-xs text-gray-400">Sistema de origem</dt>
                   <dd>{detailTarget.source_system}</dd>
                 </div>
                 <div>
@@ -408,7 +408,7 @@ export default function IngestErrorsPage() {
               </div>
 
               <div>
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Payload bruto</p>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Dados enviados</p>
                 <pre className="max-h-64 overflow-auto rounded-lg bg-gray-950 p-3 text-[11px] text-green-200">
                   {detailTarget.raw_payload}
                 </pre>
@@ -472,7 +472,7 @@ export default function IngestErrorsPage() {
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-gray-900">
             <div className="mb-4 flex items-start justify-between">
               <div>
-                <h2 className="text-lg font-semibold dark:text-white">Replay de payload corrigido</h2>
+                <h2 className="text-lg font-semibold dark:text-white">Reenviar registro corrigido</h2>
                 <p className="mt-0.5 font-mono text-xs text-gray-400">{replayTarget.id.slice(0, 8)}…</p>
               </div>
               <button onClick={() => setReplayTarget(null)}>
@@ -481,11 +481,11 @@ export default function IngestErrorsPage() {
             </div>
 
             <p className="mb-2 text-xs text-gray-500">
-              Edite o payload bruto abaixo e envie para reprocessamento. O erro original será marcado como resolvido e o payload será remapeado com a versão selecionada ou com a versão atual ativa.
+              Edite os dados abaixo e reenvie para reprocessamento. O registro com erro será arquivado e o novo será processado com a versão de integração selecionada.
             </p>
 
             <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Payload corrigido (JSON)
+              Registro corrigido (JSON)
             </label>
             <textarea
               aria-label="Payload corrigido do replay de ingestão"

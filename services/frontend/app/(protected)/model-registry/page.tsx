@@ -31,15 +31,15 @@ import {
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   champion: { label: 'Em produção', color: 'bg-green-100 text-green-700' },
   active: { label: 'Em produção', color: 'bg-green-100 text-green-700' },
-  challenger: { label: 'A/B challenger', color: 'bg-blue-100 text-blue-700' },
+  challenger: { label: 'Teste A/B', color: 'bg-blue-100 text-blue-700' },
   STAGING: { label: 'Pronto para teste', color: 'bg-yellow-100 text-yellow-700' },
   archived: { label: 'Arquivado', color: 'bg-gray-100 text-gray-600' },
 };
 
 const MODEL_TYPE_LABEL: Record<string, string> = {
   ANOMALY: 'Detecção de Anomalias',
-  StructuringDetector: 'Structuring Detector',
-  GraphClustering: 'Rede / Clusterização',
+  StructuringDetector: 'Detector de Estruturação',
+  GraphClustering: 'Rede de Vínculos',
   RecurrenceEstimator: 'Reincidência',
 };
 
@@ -83,7 +83,7 @@ function ABComparison({ metrics }: { metrics: ModelABMetrics }) {
     <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
       <div className="mb-3 flex items-center gap-2">
         <TrendingUp size={16} className="text-blue-600" />
-        <h2 className="text-sm font-semibold text-blue-900">Comparativo Champion vs Challenger</h2>
+        <h2 className="text-sm font-semibold text-blue-900">Comparativo: Modelo atual vs Modelo em teste</h2>
         <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-blue-700">
           janela {metrics.days_window}d
         </span>
@@ -91,7 +91,7 @@ function ABComparison({ metrics }: { metrics: ModelABMetrics }) {
 
       <div className="grid gap-3 md:grid-cols-2">
         <div className="rounded-lg bg-white p-3">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Champion</div>
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Modelo atual</div>
           <div className="grid grid-cols-3 gap-3 text-sm">
             <div>
               <div className="text-gray-500">Inferências</div>
@@ -109,7 +109,7 @@ function ABComparison({ metrics }: { metrics: ModelABMetrics }) {
         </div>
 
         <div className="rounded-lg bg-white p-3">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Challenger</div>
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Modelo em teste</div>
           <div className="grid grid-cols-3 gap-3 text-sm">
             <div>
               <div className="text-gray-500">Inferências</div>
@@ -135,8 +135,8 @@ function ABComparison({ metrics }: { metrics: ModelABMetrics }) {
               <XAxis dataKey="date" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip />
-              <Bar dataKey="champion_inferences" fill="#2563eb" radius={[4, 4, 0, 0]} name="Champion" />
-              <Bar dataKey="challenger_inferences" fill="#16a34a" radius={[4, 4, 0, 0]} name="Challenger" />
+              <Bar dataKey="champion_inferences" fill="#2563eb" radius={[4, 4, 0, 0]} name="Modelo atual" />
+              <Bar dataKey="challenger_inferences" fill="#16a34a" radius={[4, 4, 0, 0]} name="Modelo em teste" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -208,7 +208,7 @@ export default function ModelRegistryPage() {
             <h1 className="text-2xl font-bold text-gray-900">Modelos Analíticos</h1>
           </div>
           <p className="mt-1 text-sm text-gray-500">
-            Registry, A/B testing e performance do feedback loop supervisionado.
+            Desempenho dos modelos de análise comportamental e resultados do feedback dos analistas.
           </p>
         </div>
 
@@ -237,19 +237,19 @@ export default function ModelRegistryPage() {
             hint="TP / (TP + FP) considerando alertas rotulados no período."
           />
           <MetricCard
-            title="Falso positivo"
+            title="Falso alarme"
             value={pct(summary.totals.false_positive_rate)}
-            hint="FP / (TP + FP) dos alertas já revisados por analistas."
+            hint="Proporção de alertas revisados pelos analistas que não representavam risco real."
           />
           <MetricCard
-            title="Alertas rotulados"
+            title="Alertas avaliados"
             value={compact(summary.totals.labeled_alerts)}
-            hint="Quantidade de alertas com feedback manual disponível."
+            hint="Alertas que receberam feedback manual dos analistas no período."
           />
           <MetricCard
-            title="Tráfego challenger"
+            title="Tráfego no teste A/B"
             value={`${summary.challenger_split_pct}%`}
-            hint="Percentual configurado do tráfego enviado ao challenger via scoring por tenant."
+            hint="Percentual do tráfego enviado ao modelo em teste (A/B)."
           />
         </div>
 
@@ -262,7 +262,7 @@ export default function ModelRegistryPage() {
             <div className="flex items-start gap-3 rounded-xl border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800">
               <Info size={16} className="mt-0.5 flex-shrink-0 text-yellow-500" />
               <div>
-                <p className="font-semibold">Poucos alertas rotulados ({labeled})</p>
+                <p className="font-semibold">Poucos alertas avaliados ({labeled})</p>
                 <p className="text-yellow-700">Continue triando alertas para melhorar a precisão das estimativas. O modelo aprende com o feedback dos analistas.</p>
               </div>
             </div>
@@ -271,8 +271,8 @@ export default function ModelRegistryPage() {
             <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
               <AlertTriangle size={16} className="mt-0.5 flex-shrink-0 text-red-500" />
               <div>
-                <p className="font-semibold">Taxa de falso positivo elevada ({pct(fp)})</p>
-                <p className="text-red-700">Mais de 40% dos alertas revisados são falsos positivos. Considere ajustar os pesos de pontuação ou os thresholds das regras.</p>
+                <p className="font-semibold">Taxa de falso alarme elevada ({pct(fp)})</p>
+                <p className="text-red-700">Mais de 40% dos alertas revisados são falsos alarmes. Considere ajustar os pesos de pontuação ou calibrar a sensibilidade no menu Calibração.</p>
               </div>
             </div>
           );
@@ -280,8 +280,8 @@ export default function ModelRegistryPage() {
             <div className="flex items-start gap-3 rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
               <TrendingDown size={16} className="mt-0.5 flex-shrink-0 text-orange-500" />
               <div>
-                <p className="font-semibold">Atenção: FP rate em {pct(fp)}</p>
-                <p className="text-orange-700">Acima de 25% — revisite as regras com mais falsos positivos e ajuste sensibilidade se necessário.</p>
+                <p className="font-semibold">Atenção: falso alarme em {pct(fp)}</p>
+                <p className="text-orange-700">Acima de 25% — revisite as condições com mais falsos alarmes e ajuste a sensibilidade se necessário.</p>
               </div>
             </div>
           );
@@ -413,10 +413,10 @@ export default function ModelRegistryPage() {
                           <button
                             onClick={() => designate.mutate(model.id)}
                             disabled={designate.isPending}
-                            aria-label={`Designar challenger para modelo versão ${model.version}`}
+                            aria-label={`Ativar modelo versão ${model.version} como versão de teste`}
                             className="rounded-lg border border-blue-300 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-50"
                           >
-                            Designar challenger
+                            Ativar como versão de teste
                           </button>
                         )}
                         {(model.is_challenger || model.status === 'challenger') && (

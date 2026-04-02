@@ -47,7 +47,7 @@ const LABELS: Record<string, string> = {
   withdrawal_count_24h: 'Saques (24h)',
   withdrawal_sum_24h: 'Volume saques (24h)',
   withdrawal_sum_7d: 'Volume saques (7d)',
-  cashout_ratio_7d: 'Ratio saque (7d)',
+  cashout_ratio_7d: '% do saldo sacado (7d)',
   chargeback_count_30d: 'Chargebacks (30d)',
   chargeback_rate_30d: 'Taxa chargeback (30d)',
   night_activity_ratio: 'Atividade noturna',
@@ -56,12 +56,12 @@ const LABELS: Record<string, string> = {
   win_loss_ratio_30d: 'Win/Loss (30d)',
   unique_instruments_used_7d: 'Instrumentos únicos (7d)',
   avg_time_between_deposit_and_withdrawal_7d: 'Tempo méd. depósito->saque',
-  bonus_to_real_money_ratio_30d: 'Ratio bônus/dinheiro real (30d)',
+  bonus_to_real_money_ratio_30d: 'Bônus vs depósitos reais (30d)',
   inconsistent_currency_flag: 'Moeda inconsistente',
-  shared_device_score: 'Score device compartilhado',
-  shared_instrument_score: 'Score rede (instrumento)',
-  cluster_size: 'Tamanho do cluster',
-  cluster_id: 'Cluster ID',
+  shared_device_score: 'Dispositivos em comum',
+  shared_instrument_score: 'Chaves Pix/instrumentos em comum',
+  cluster_size: 'Apostadores no mesmo grupo',
+  cluster_id: 'Grupo de risco',
 };
 
 function fmt(key: string, val: unknown): string {
@@ -167,7 +167,7 @@ export default function FeatureDetailPage({ params }: Props) {
         <div className="flex items-center gap-2">
           <Database size={22} className="text-brand" />
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Feature Store</h1>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Diagnóstico do Apostador</h1>
             <p className="font-mono text-xs text-gray-400">{playerId}</p>
           </div>
         </div>
