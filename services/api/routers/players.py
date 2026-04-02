@@ -956,3 +956,159 @@ async def get_player_case_alert_history(
                     "status": a.status, "created_at": a.created_at} for a in alerts],
     }
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GAP-T1: Timeline narrativa do apostador
+# Junta transações + apostas + device events + alertas em blocos cronológicos.
+# ─────────────────────────────────────────────────────────────────────────────
+@router.get("/players/{player_id}/timeline")
+async def get_player_timeline(
+    player_id: str,
+    window_days: int = Query(90, ge=1, le=365),
+    include: str = Query("transactions,bets,devices,alerts", description="Tipos de eventos separados por vírgula"),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Linha do tempo cronológica do apostador com blocos por dia.
+
+    Parâmetros:
+    - window_days: janela retroativa em dias (padrão 90)
+    - include: tipos de evento desejados (transactions, bets, devices, alerts)
+    """
+    p = await db.get(Player, player_id)
+    if not p or p.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Player não encontrado")
+
+    since = _utcnow() - timedelta(days=window_days)
+    include_set = {s.strip().lower() for s in include.split(",")}
+
+    events: list[dict] = []
+
+    # ── Transações ──────────────────────────────────────────────────────────
+    if "transactions" in include_set:
+        txns = (await db.execute(
+            select(FinancialTransaction)
+            .where(
+                FinancialTransaction.tenant_id == current_user.tenant_id,
+                FinancialTransaction.player_id == player_id,
+                FinancialTransaction.occurred_at >= since,
+            )
+            .order_by(FinancialTransaction.occurred_at)
+        )).scalars().all()
+        for t in txns:
+            events.append({
+                "ts": t.occurred_at,
+                "type": "TRANSACTION",
+                "subtype": t.type,
+                "amount": float(t.amount) if t.amount is not None else None,
+                "currency": t.currency,
+                "method": t.payment_method,
+                "status": t.status,
+                "id": str(t.id),
+                "source_event_id": t.source_event_id,
+            })
+
+    # ── Apostas ─────────────────────────────────────────────────────────────
+    if "bets" in include_set:
+        bets = (await db.execute(
+            select(Bet)
+            .where(
+                Bet.tenant_id == current_user.tenant_id,
+                Bet.player_id == player_id,
+                Bet.occurred_at >= since,
+            )
+            .order_by(Bet.occurred_at)
+        )).scalars().all()
+        for b in bets:
+            events.append({
+                "ts": b.occurred_at,
+                "type": "BET",
+                "subtype": b.bet_type,
+                "amount": float(b.stake_amount) if b.stake_amount is not None else None,
+                "currency": b.currency,
+                "odds": float(b.odds) if b.odds is not None else None,
+                "potential_payout": float(b.potential_payout) if b.potential_payout is not None else None,
+                "settled_payout": float(b.actual_payout) if b.actual_payout is not None else None,
+                "sport": b.event_name,
+                "market": b.market_name,
+                "status": b.status,
+                "id": str(b.id),
+                "source_event_id": b.source_event_id,
+            })
+
+    # ── Device events ───────────────────────────────────────────────────────
+    if "devices" in include_set:
+        devs = (await db.execute(
+            select(DeviceEvent)
+            .where(
+                DeviceEvent.tenant_id == current_user.tenant_id,
+                DeviceEvent.player_id == player_id,
+                DeviceEvent.occurred_at >= since,
+            )
+            .order_by(DeviceEvent.occurred_at)
+        )).scalars().all()
+        for d in devs:
+            events.append({
+                "ts": d.occurred_at,
+                "type": "DEVICE_EVENT",
+                "subtype": d.action,
+                "device_id": d.device_id,
+                "country": d.country_code,
+                "id": str(d.id),
+                "source_event_id": d.source_event_id,
+            })
+
+    # ── Alertas ─────────────────────────────────────────────────────────────
+    if "alerts" in include_set:
+        alts = (await db.execute(
+            select(Alert)
+            .where(
+                Alert.tenant_id == current_user.tenant_id,
+                Alert.player_id == player_id,
+                Alert.created_at >= since,
+            )
+            .order_by(Alert.created_at)
+        )).scalars().all()
+        for a in alts:
+            events.append({
+                "ts": a.created_at,
+                "type": "ALERT",
+                "subtype": a.alert_type,
+                "severity": a.severity,
+                "title": a.title,
+                "composite_score": float(a.composite_score) if a.composite_score is not None else None,
+                "ingest_mode": a.ingest_mode,
+                "id": str(a.id),
+                "case_id": str(a.case_id) if a.case_id else None,
+            })
+
+    # Ordenar todos os eventos por timestamp e agrupar por dia
+    events.sort(key=lambda e: e["ts"] or _utcnow())
+    days: dict[str, list[dict]] = {}
+    for ev in events:
+        ts = ev["ts"]
+        day_key = ts.strftime("%Y-%m-%d") if ts else "unknown"
+        days.setdefault(day_key, []).append({
+            **ev,
+            "ts": ts.isoformat() if ts else None,
+        })
+
+    timeline = [
+        {"date": day, "event_count": len(blk), "events": blk}
+        for day, blk in sorted(days.items())
+    ]
+
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "GET_PLAYER_TIMELINE", "Player", player_id,
+    )
+    await db.flush()
+
+    return {
+        "player_id": player_id,
+        "window_days": window_days,
+        "since": since.isoformat(),
+        "total_events": len(events),
+        "timeline": timeline,
+    }
+

@@ -23,6 +23,46 @@ class EntityType(str, Enum):
     TRANSACTION = "TRANSACTION"
     BET = "BET"
     DEVICE_EVENT = "DEVICE_EVENT"
+    # Eventos adicionais exigidos pela Lei 14.790/2023 e Portaria SPA/MF 1.231/2024
+    KYC_EVENT = "KYC_EVENT"                          # onboarding, PEP, document, income
+    RESPONSIBLE_GAMBLING_EVENT = "RESPONSIBLE_GAMBLING_EVENT"  # autoexclusão SIGAP, limites
+    ACCOUNT_STATUS_CHANGE = "ACCOUNT_STATUS_CHANGE"  # bloquear/desbloquear por operador
+
+
+class KycEventSubtype(str, Enum):
+    ONBOARDING_COMPLETE  = "ONBOARDING_COMPLETE"
+    DOCUMENT_VERIFIED    = "DOCUMENT_VERIFIED"
+    DOCUMENT_REJECTED    = "DOCUMENT_REJECTED"
+    PEP_UPDATE           = "PEP_UPDATE"
+    INCOME_UPDATE        = "INCOME_UPDATE"
+    KYC_REVIEW_REQUESTED = "KYC_REVIEW_REQUESTED"
+
+
+class ResponsibleGamblingSubtype(str, Enum):
+    SELF_EXCLUSION_SIGAP    = "SELF_EXCLUSION_SIGAP"    # autoexclusão nacional (Portaria 1.231/2024)
+    SELF_EXCLUSION_OPERATOR = "SELF_EXCLUSION_OPERATOR" # autoexclusão voluntária no operador
+    DEPOSIT_LIMIT_SET       = "DEPOSIT_LIMIT_SET"
+    DEPOSIT_LIMIT_INCREASED = "DEPOSIT_LIMIT_INCREASED" # aumento requer cooling-off (Lei 14.790)
+    DEPOSIT_LIMIT_DECREASED = "DEPOSIT_LIMIT_DECREASED"
+    SESSION_LIMIT_SET       = "SESSION_LIMIT_SET"
+    COOLING_OFF             = "COOLING_OFF"
+    REALITY_CHECK           = "REALITY_CHECK"
+    EXCLUSION_LIFTED        = "EXCLUSION_LIFTED"
+
+
+class AccountStatusChangeSubtype(str, Enum):
+    BLOCKED_BY_OPERATOR   = "BLOCKED_BY_OPERATOR"
+    UNBLOCKED_BY_OPERATOR = "UNBLOCKED_BY_OPERATOR"
+    SUSPENDED             = "SUSPENDED"
+    REACTIVATED           = "REACTIVATED"
+    CLOSED_BY_PLAYER      = "CLOSED_BY_PLAYER"
+    CLOSED_BY_OPERATOR    = "CLOSED_BY_OPERATOR"
+
+
+class IngestMode(str, Enum):
+    INCREMENTAL = "incremental"   # evento em tempo real (padrão)
+    BACKFILL    = "backfill"       # importação histórica em massa (novo operador)
+    REPROCESS   = "reprocess"      # reprocessamento de job com falha existente
 
 
 class TransactionType(str, Enum):
@@ -78,6 +118,11 @@ class IngestMetadata(BaseModel):
     checksum: Optional[str] = None
     mapper_version: str = "1.0"
     schema_version: int = 1
+    # GAP-E2: modo de ingestão para que rules_engine e stream_processor possam diferenciar
+    # fluxos de tempo-real vs. importação histórica vs. reprocessamento.
+    ingest_mode: IngestMode = IngestMode.INCREMENTAL
+    # job de backfill que originou este evento (rastreabilidade de proveniência)
+    backfill_job_id: Optional[str] = None
 
 
 # ──────────────────────────────────────────────────
@@ -152,6 +197,50 @@ class DeviceEventPayload(BaseModel):
     occurred_at: datetime
 
 
+class KycEventPayload(BaseModel):
+    """Payload canônico para EntityType.KYC_EVENT (Lei 14.790/2023 art. 20)."""
+    player_id: str
+    player_cpf: Optional[str] = None
+    subtype: KycEventSubtype
+    provider: Optional[str] = None           # ex: "serpro", "denatran", "manual"
+    document_type: Optional[str] = None      # RG, CNH, PASSAPORTE
+    pep_flag: Optional[bool] = None          # se PEP_UPDATE, novo valor
+    income_declared: Optional[Decimal] = None  # se INCOME_UPDATE, novo valor
+    notes: Optional[str] = None
+    occurred_at: datetime
+
+
+class ResponsibleGamblingEventPayload(BaseModel):
+    """Payload canônico para EntityType.RESPONSIBLE_GAMBLING_EVENT.
+
+    Portaria SPA/MF 1.231/2024 — autoexclusão SIGAP e limites voluntários.
+    """
+    player_id: str
+    player_cpf: Optional[str] = None
+    subtype: ResponsibleGamblingSubtype
+    # Autoexclusão
+    exclusion_source: Optional[str] = None   # "SIGAP" | "BETAML" | "OPERATOR"
+    exclusion_scope: Optional[str] = None    # "NATIONAL" | "OPERATOR"
+    exclusion_duration_days: Optional[int] = None  # None = indefinido
+    # Limites de depósito
+    old_limit_daily: Optional[Decimal] = None
+    new_limit_daily: Optional[Decimal] = None
+    effective_at: Optional[datetime] = None  # para DEPOSIT_LIMIT_INCREASED: precisa cumprir cooling-off
+    occurred_at: datetime
+
+
+class AccountStatusChangePayload(BaseModel):
+    """Payload canônico para EntityType.ACCOUNT_STATUS_CHANGE."""
+    player_id: str
+    player_cpf: Optional[str] = None
+    subtype: AccountStatusChangeSubtype
+    reason: Optional[str] = None
+    operator_user_id: Optional[str] = None  # quem executou a ação
+    previous_status: Optional[str] = None
+    new_status: Optional[str] = None
+    occurred_at: datetime
+
+
 # ──────────────────────────────────────────────────
 # Canonical Event Envelope
 # ──────────────────────────────────────────────────
@@ -178,10 +267,13 @@ class CanonicalEvent(BaseModel):
     def validate_payload_shape(self) -> "CanonicalEvent":
         """Verifica que payload contém os campos mínimos esperados para o entity_type."""
         _REQUIRED: dict[str, set[str]] = {
-            "PLAYER":       {"external_player_id", "cpf"},
-            "TRANSACTION":  {"amount", "occurred_at"},
-            "BET":          {"stake_amount", "placed_at"},
-            "DEVICE_EVENT": {"device_id", "occurred_at"},
+            "PLAYER":                      {"external_player_id", "cpf"},
+            "TRANSACTION":                 {"amount", "occurred_at"},
+            "BET":                         {"stake_amount", "placed_at"},
+            "DEVICE_EVENT":                {"device_id", "occurred_at"},
+            "KYC_EVENT":                   {"player_id", "subtype", "occurred_at"},
+            "RESPONSIBLE_GAMBLING_EVENT":  {"player_id", "subtype", "occurred_at"},
+            "ACCOUNT_STATUS_CHANGE":       {"player_id", "subtype", "occurred_at"},
         }
         required = _REQUIRED.get(self.entity_type.value if hasattr(self.entity_type, 'value') else str(self.entity_type), set())
         missing = required - set(self.payload.keys())

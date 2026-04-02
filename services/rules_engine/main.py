@@ -631,6 +631,10 @@ async def publish_alert(
     final_severity = computed_severity if _severity_rank(computed_severity) > _severity_rank(base_severity) else base_severity
 
     alert_id = str(uuid.uuid4())
+    # GAP-R2/R3: propagar ingest_mode e backfill_job_id do envelope para o alerta
+    _ingest_meta = envelope.get("ingest_metadata") or {}
+    _ingest_mode = str(_ingest_meta.get("ingest_mode") or envelope.get("ingest_mode") or "incremental")
+    _backfill_job_id = _ingest_meta.get("backfill_job_id") or envelope.get("backfill_job_id")
     alert_msg = {
         "alert_id":       alert_id,
         "tenant_id":      tenant_id,
@@ -638,6 +642,8 @@ async def publish_alert(
         "alert_type":     "COMPOSITE" if (anomaly_score > 0 or rule.get("is_compound")) else "RULE",
         "severity":       final_severity,
         "title":          f"{rule['name']} — {player_id[:8]}",
+        "ingest_mode":    _ingest_mode,
+        "backfill_job_id": _backfill_job_id,
         "description":    f"Regra '{rule['name']}' disparada para player {player_id}",
         "rule_id":        None if rule.get("is_compound") else str(rule["id"]),
         "compound_rule_id": str(rule.get("compound_rule_id") or rule["id"]) if rule.get("is_compound") else None,
@@ -714,6 +720,8 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
 
     def _write(item: dict):
         alert = item["alert"]
+        ingest_mode    = alert.get("ingest_mode", "incremental")
+        backfill_job_id = alert.get("backfill_job_id")
         created_at = datetime.now(timezone.utc).replace(tzinfo=None)
         with engine.begin() as conn:
             # Define contexto do tenant para respeitar FORCE ROW LEVEL SECURITY
@@ -721,18 +729,23 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                 sa.text("SET LOCAL app.current_tenant = :tid"),
                 {"tid": alert["tenant_id"]},
             )
-            # Upsert alert
+            # GAP-R2: em modo backfill, registrar alerta mas NÃO gerar auto-case
+            # (evita poluição do dashboard com casos de importação histórica em massa).
+            # Em modo 'reprocess', criar caso normalmente — pode ter havido supressão anterior.
+            skip_auto_case = (ingest_mode == "backfill")
+
+            # Upsert alert — agora com ingest_mode + backfill_job_id (GAP-R3)
             conn.execute(sa.text("""
                 INSERT INTO alerts
                     (id, tenant_id, player_id, rule_id, compound_rule_id, alert_type, severity, status,
                      title, description, evidence, source_event_id, anomaly_score,
                      composite_score, score_breakdown, rule_weight, ml_weight,
-                     network_weight, created_at)
+                     network_weight, ingest_mode, backfill_job_id, created_at)
                 VALUES
                     (:id, :tenant_id, :player_id, :rule_id, :compound_rule_id, :alert_type, :severity, 'OPEN',
                      :title, :description, :evidence, :source_event_id, :anomaly_score,
                      :composite_score, CAST(:score_breakdown AS jsonb), :rule_weight,
-                     :ml_weight, :network_weight, :created_at)
+                     :ml_weight, :network_weight, :ingest_mode, :backfill_job_id, :created_at)
                 ON CONFLICT (id) DO NOTHING
             """), {
                 "id":             alert["alert_id"],
@@ -752,17 +765,20 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                 "rule_weight":    alert.get("rule_weight"),
                 "ml_weight":      alert.get("ml_weight"),
                 "network_weight": alert.get("network_weight"),
+                "ingest_mode":    ingest_mode,
+                "backfill_job_id": backfill_job_id or None,
                 "created_at":     created_at,
             })
 
             # Auto-case: alertas CRITICAL geram (ou reaproveitam) caso OPEN/IN_REVIEW do player.
-            if alert.get("severity") == "CRITICAL" and alert.get("player_id"):
+            # GAP-C2: skip em backfill + enriquecer caso existente em vez de criar duplicata
+            if alert.get("severity") == "CRITICAL" and alert.get("player_id") and not skip_auto_case:
                 existing_case = conn.execute(sa.text("""
                     SELECT id
                     FROM cases
                     WHERE tenant_id = :tenant_id
                       AND player_id = :player_id
-                      AND status IN ('OPEN', 'IN_REVIEW')
+                      AND status IN ('OPEN', 'IN_REVIEW', 'INVESTIGATING', 'PENDING_REVIEW')
                     ORDER BY created_at DESC
                     LIMIT 1
                 """), {
@@ -776,11 +792,11 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                         INSERT INTO cases (
                             id, tenant_id, player_id, title, description, status,
                             severity, priority, auto_created, auto_created_reason,
-                            source_alert_id, created_at, updated_at
+                            source_alert_id, ingest_mode, backfill_job_id, created_at, updated_at
                         ) VALUES (
                             :id, :tenant_id, :player_id, :title, :description, 'OPEN',
                             :severity, 'HIGH', true, :reason,
-                            :source_alert_id, :created_at, :created_at
+                            :source_alert_id, :ingest_mode, :backfill_job_id, :created_at, :created_at
                         )
                     """), {
                         "id": case_id,
@@ -791,6 +807,8 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                         "severity": alert["severity"],
                         "reason": f"rules_engine:auto_case alert_id={alert['alert_id']} severity={alert['severity']}",
                         "source_alert_id": alert["alert_id"],
+                        "ingest_mode": ingest_mode,
+                        "backfill_job_id": backfill_job_id or None,
                         "created_at": created_at,
                     })
                     conn.execute(sa.text("""
@@ -808,6 +826,27 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                             "alert_id": alert["alert_id"],
                             "severity": alert["severity"],
                             "rule_id": alert.get("rule_id"),
+                        }),
+                        "created_at": created_at,
+                    })
+                else:
+                    # GAP-C2: caso existente → enriquecer com CaseEvent em vez de criar duplicata
+                    conn.execute(sa.text("""
+                        INSERT INTO case_events (
+                            id, case_id, tenant_id, event_type, content, created_at
+                        ) VALUES (
+                            :id, :case_id, :tenant_id, :event_type, CAST(:content AS jsonb), :created_at
+                        )
+                    """), {
+                        "id": str(uuid.uuid4()),
+                        "case_id": case_id,
+                        "tenant_id": alert["tenant_id"],
+                        "event_type": "ALERT_LINKED_TO_EXISTING_CASE",
+                        "content": json.dumps({
+                            "alert_id": alert["alert_id"],
+                            "severity": alert["severity"],
+                            "rule_id": alert.get("rule_id"),
+                            "composite_score": alert.get("composite_score"),
                         }),
                         "created_at": created_at,
                     })

@@ -154,6 +154,9 @@ class IngestJob(Base):
     error_message      = Column(Text)
     error_sample       = Column(JSONB, default=[])
     reprocessed_from   = Column(UUID(as_uuid=False), ForeignKey("ingest_jobs.id"))
+    # GAP-E2: modo de ingestão para diferenciar incremental / backfill / reprocess
+    ingest_mode        = Column(String(20), nullable=False, default="incremental")
+    is_backfill        = Column(Boolean, nullable=False, default=False)
     created_by         = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     created_at         = Column(DateTime(timezone=True), server_default=func.now())
     updated_at         = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -338,6 +341,9 @@ class Alert(Base):
     network_weight   = Column(Numeric(4, 3), default=0.2)
     source_event_id  = Column(Text)
     case_id          = Column(UUID(as_uuid=False), ForeignKey("cases.id", use_alter=True, name="fk_alerts_case"))
+    # GAP-R3: rastreabilidade de proveniência para alertas gerados via backfill/reprocess
+    ingest_mode      = Column(String(20), nullable=False, default="incremental")
+    backfill_job_id  = Column(Text)     # preenchido quando ingest_mode = 'backfill' ou 'reprocess'
     label            = Column(String(20))
     label_note       = Column(Text)
     labeled_by       = Column(UUID(as_uuid=False), ForeignKey("users.id"))

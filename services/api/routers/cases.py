@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import AppRole, decrypt_pii, get_current_user, get_effective_roles, mask_cpf, require_roles, require_role, require_role_any, require_permission
 from database import get_db
-from models import Alert, Bet, Case, CaseEvent, FinancialTransaction, Notification, Player, ReportPackage, ScoringConfig, Tenant, User
+from models import Alert, Bet, Case, CaseEvent, DeviceEvent, FinancialTransaction, Notification, Player, ReportPackage, ScoringConfig, Tenant, User
 from repositories import CaseRepository
 from repositories.cases import get_case_repo
 from utils import redis_rate_limit, write_audit
@@ -1548,3 +1548,197 @@ async def lookup_case_entities(
         ]
 
     return {"alerts": alerts_payload, "transactions": tx_payload}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GAP-T2 + GAP-C1: Timeline narrativa do caso com janela de evidências
+# Retorna blocos cronológicos de transações + apostas + devices + alertas
+# cobrindo a janela de 90 dias ao redor da data de criação do caso.
+# Serve como insumo para preenchimento do dossiê COAF (Siscoaf 97).
+# ─────────────────────────────────────────────────────────────────────────────
+@router.get("/cases/{case_id}/timeline")
+async def get_case_timeline(
+    case_id: str,
+    window_days: int = Query(90, ge=1, le=365),
+    include: str = Query("transactions,bets,devices,alerts,case_events"),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Timeline de evidências do caso cobrindo a janela em torno da data de criação.
+
+    Diferentemente de /players/{id}/timeline (centrado no player, sem limite de caso),
+    este endpoint:
+    - ancora a janela na data de criação do caso (case.created_at)
+    - inclui case_events (audit trail do caso) junto com eventos do player
+    - retorna sumário de risk_score ao longo da janela (evolução do composite_score)
+    """
+    c = await db.get(Case, case_id)
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Caso não encontrado")
+    if not c.player_id:
+        raise HTTPException(422, "Caso sem player vinculado — timeline não disponível")
+
+    player_id = str(c.player_id)
+    # Janela centrada no caso: window_days antes + 7 dias após criação
+    case_created = c.created_at
+    window_start = case_created - timedelta(days=window_days)
+    window_end   = case_created + timedelta(days=7)
+
+    include_set = {s.strip().lower() for s in include.split(",")}
+    events: list[dict] = []
+
+    # ── Case events (audit trail) ────────────────────────────────────────────
+    if "case_events" in include_set:
+        cevs = (await db.execute(
+            select(CaseEvent)
+            .where(CaseEvent.case_id == case_id)
+            .order_by(CaseEvent.created_at)
+        )).scalars().all()
+        for ce in cevs:
+            events.append({
+                "ts": ce.created_at,
+                "type": "CASE_EVENT",
+                "subtype": ce.event_type,
+                "content": ce.content,
+                "id": str(ce.id),
+            })
+
+    # ── Alertas do player na janela ─────────────────────────────────────────
+    if "alerts" in include_set:
+        alts = (await db.execute(
+            select(Alert)
+            .where(
+                Alert.tenant_id == current_user.tenant_id,
+                Alert.player_id == player_id,
+                Alert.created_at >= window_start,
+                Alert.created_at <= window_end,
+            )
+            .order_by(Alert.created_at)
+        )).scalars().all()
+        for a in alts:
+            events.append({
+                "ts": a.created_at,
+                "type": "ALERT",
+                "subtype": a.alert_type,
+                "severity": a.severity,
+                "title": a.title,
+                "composite_score": float(a.composite_score) if a.composite_score is not None else None,
+                "ingest_mode": a.ingest_mode,
+                "is_case_alert": str(a.case_id) == case_id if a.case_id else False,
+                "id": str(a.id),
+            })
+
+    # ── Transações do player na janela ──────────────────────────────────────
+    if "transactions" in include_set:
+        txns = (await db.execute(
+            select(FinancialTransaction)
+            .where(
+                FinancialTransaction.tenant_id == current_user.tenant_id,
+                FinancialTransaction.player_id == player_id,
+                FinancialTransaction.occurred_at >= window_start,
+                FinancialTransaction.occurred_at <= window_end,
+            )
+            .order_by(FinancialTransaction.occurred_at)
+        )).scalars().all()
+        for t in txns:
+            events.append({
+                "ts": t.occurred_at,
+                "type": "TRANSACTION",
+                "subtype": t.type,
+                "amount": float(t.amount) if t.amount is not None else None,
+                "currency": t.currency,
+                "method": t.payment_method,
+                "status": t.status,
+                "id": str(t.id),
+            })
+
+    # ── Apostas do player na janela ─────────────────────────────────────────
+    if "bets" in include_set:
+        bets = (await db.execute(
+            select(Bet)
+            .where(
+                Bet.tenant_id == current_user.tenant_id,
+                Bet.player_id == player_id,
+                Bet.occurred_at >= window_start,
+                Bet.occurred_at <= window_end,
+            )
+            .order_by(Bet.occurred_at)
+        )).scalars().all()
+        for b in bets:
+            events.append({
+                "ts": b.occurred_at,
+                "type": "BET",
+                "subtype": b.bet_type,
+                "amount": float(b.stake_amount) if b.stake_amount is not None else None,
+                "odds": float(b.odds) if b.odds is not None else None,
+                "settled_payout": float(b.actual_payout) if b.actual_payout is not None else None,
+                "sport": b.event_name,
+                "status": b.status,
+                "id": str(b.id),
+            })
+
+    # ── Device events do player na janela ───────────────────────────────────
+    if "devices" in include_set:
+        devs = (await db.execute(
+            select(DeviceEvent)
+            .where(
+                DeviceEvent.tenant_id == current_user.tenant_id,
+                DeviceEvent.player_id == player_id,
+                DeviceEvent.occurred_at >= window_start,
+                DeviceEvent.occurred_at <= window_end,
+            )
+            .order_by(DeviceEvent.occurred_at)
+        )).scalars().all()
+        for d in devs:
+            events.append({
+                "ts": d.occurred_at,
+                "type": "DEVICE_EVENT",
+                "subtype": d.action,
+                "device_id": d.device_id,
+                "country": d.country_code,
+                "id": str(d.id),
+            })
+
+    # Ordenar e agrupar por dia
+    events.sort(key=lambda e: e["ts"] or datetime.now(UTC))
+    days: dict[str, list[dict]] = {}
+    for ev in events:
+        ts = ev["ts"]
+        day_key = ts.strftime("%Y-%m-%d") if ts else "unknown"
+        days.setdefault(day_key, []).append({**ev, "ts": ts.isoformat() if ts else None})
+
+    # Sumarizar evolução do risk score ao longo da janela (GAP-C1)
+    score_series = [
+        {"ts": ev["ts"].isoformat() if ev["ts"] else None, "composite_score": ev["composite_score"]}
+        for ev in events
+        if ev["type"] == "ALERT" and ev.get("composite_score") is not None
+    ]
+
+    # Totais por tipo para o cabeçalho do dossiê
+    type_counts: dict[str, int] = {}
+    for ev in events:
+        type_counts[ev["type"]] = type_counts.get(ev["type"], 0) + 1
+
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "GET_CASE_TIMELINE", "Case", case_id,
+    )
+    await db.flush()
+
+    return {
+        "case_id": case_id,
+        "player_id": player_id,
+        "window_start": window_start.isoformat(),
+        "window_end": window_end.isoformat(),
+        "window_days": window_days,
+        "total_events": len(events),
+        "event_summary": type_counts,
+        "score_series": score_series,
+        "backfill_job_id": getattr(c, "backfill_job_id", None),
+        "ingest_mode": getattr(c, "ingest_mode", "incremental"),
+        "timeline": [
+            {"date": day, "event_count": len(blk), "events": blk}
+            for day, blk in sorted(days.items())
+        ],
+    }
+

@@ -160,3 +160,34 @@ ENGINE = MergeTree()
 PARTITION BY (tenant_id, toYYYYMM(log_date))
 ORDER BY (tenant_id, created_at, rule_id)
 TTL created_at + INTERVAL 90 DAY;
+
+-- ──────────────────────────────────────────────────
+-- GAP-T3: Eventos KYC e Jogo Responsável (OLAP)
+-- Necessário pela Lei 14.790/2023 e Portaria SPA/MF 1.231/2024
+-- ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS betaml.player_kyc_events (
+    event_id        String,
+    tenant_id       String,
+    player_id       String,
+    source_event_id String,
+    entity_type     LowCardinality(String),  -- KYC_EVENT | RESPONSIBLE_GAMBLING_EVENT | ACCOUNT_STATUS_CHANGE
+    subtype         LowCardinality(String),  -- valores de KycEventSubtype / ResponsibleGamblingSubtype etc.
+    provider        String DEFAULT '',       -- 'serpro', 'denatran', 'manual', 'SIGAP'
+    document_type   String DEFAULT '',       -- RG, CNH, PASSAPORTE
+    pep_flag        Nullable(UInt8),
+    income_declared Nullable(Decimal(18,2)),
+    exclusion_source String DEFAULT '',      -- 'SIGAP' | 'BETAML' | 'OPERATOR'
+    exclusion_scope  String DEFAULT '',      -- 'NATIONAL' | 'OPERATOR'
+    exclusion_duration_days Nullable(Int32),
+    old_limit_daily  Nullable(Decimal(18,2)),
+    new_limit_daily  Nullable(Decimal(18,2)),
+    reason           String DEFAULT '',
+    occurred_at      DateTime,
+    event_date       Date DEFAULT toDate(occurred_at),
+    ingest_mode      LowCardinality(String) DEFAULT 'incremental',
+    created_at       DateTime DEFAULT now()
+)
+ENGINE = MergeTree()
+PARTITION BY (tenant_id, toYYYYMM(event_date))
+ORDER BY (tenant_id, player_id, occurred_at, entity_type)
+TTL occurred_at + INTERVAL 730 DAY;  -- 2 anos (requisito regulatório)
