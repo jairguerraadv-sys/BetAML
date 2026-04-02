@@ -71,6 +71,7 @@ def test_build_envelope_has_event_id():
         source_system="BackofficeAlpha",
         entity_type="TRANSACTION",
         payload={"amount": 100},
+        raw_payload={"amount": 100},
         source_event_id="se-1",
     )
     # Must be a valid UUID
@@ -84,6 +85,7 @@ def test_build_envelope_required_fields():
         source_system="SportsBook",
         entity_type="BET",
         payload={"bet_id": "B-1"},
+        raw_payload={"bet_id": "B-1"},
         source_event_id="se-2",
     )
     assert env["tenant_id"] == "t1"
@@ -101,6 +103,7 @@ def test_build_envelope_ingest_metadata_keys():
         source_system="BackofficeAlpha",
         entity_type="TRANSACTION",
         payload={},
+        raw_payload={},
         source_event_id="se-3",
     )
     meta = env["ingest_metadata"]
@@ -116,6 +119,7 @@ def test_build_envelope_with_extra_metadata():
         source_system="CasinoEngine",
         entity_type="TRANSACTION",
         payload={},
+        raw_payload={},
         source_event_id="se-4",
         ingest_metadata={"connector": "gamma", "batch_id": "b-99"},
     )
@@ -130,6 +134,7 @@ def test_build_envelope_mapping_config_id_none_by_default():
         source_system="BackofficeAlpha",
         entity_type="TRANSACTION",
         payload={},
+        raw_payload={},
         source_event_id="se-5",
     )
     assert env["mapping_config_id"] is None
@@ -360,7 +365,7 @@ async def test_ingest_batch_applies_explicit_mapping_before_publish():
     sent_payload = mock_producer.send.await_args_list[0].args[1]
     assert sent_payload["mapping_config_id"] == "map-batch-1"
     assert sent_payload["payload"]["external_player_id"] == "P-77"
-    assert sent_payload["payload"]["amount"] == 55.25
+    assert sent_payload["payload"]["amount"] == "55.25"
     assert sent_payload["raw_payload"]["customer_id"] == "P-77"
 
 

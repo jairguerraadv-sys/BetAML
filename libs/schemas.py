@@ -10,7 +10,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 _UTC = timezone.utc
 
@@ -60,6 +60,13 @@ class BetChannel(str, Enum):
     TERMINAL = "TERMINAL"
 
 
+class PlayerStatus(str, Enum):
+    ACTIVE              = "ACTIVE"           # cadastro ativo e válido
+    BLOCKED             = "BLOCKED"          # bloqueio administrativo
+    SELF_EXCLUDED       = "SELF_EXCLUDED"    # autoexclusão SIGAP (Portaria 1.231/2024)
+    PENDING_KYC         = "PENDING_KYC"      # aguardando verificação de identidade
+
+
 # ──────────────────────────────────────────────────
 # Ingest metadata
 # ──────────────────────────────────────────────────
@@ -83,6 +90,7 @@ class PlayerPayload(BaseModel):
     name: str
     birth_date: Optional[str] = None
     pep_flag: bool = False
+    status: PlayerStatus = PlayerStatus.ACTIVE     # ciclo de vida do apostador (Portaria 1.231/2024)
     declared_income_monthly: Optional[Decimal] = None
     profession: Optional[str] = None
     email: Optional[str] = None
@@ -165,6 +173,23 @@ class CanonicalEvent(BaseModel):
     def validate_uuid(cls, v: str) -> str:
         uuid.UUID(v)
         return v
+
+    @model_validator(mode="after")
+    def validate_payload_shape(self) -> "CanonicalEvent":
+        """Verifica que payload contém os campos mínimos esperados para o entity_type."""
+        _REQUIRED: dict[str, set[str]] = {
+            "PLAYER":       {"external_player_id", "cpf"},
+            "TRANSACTION":  {"amount", "occurred_at"},
+            "BET":          {"stake_amount", "placed_at"},
+            "DEVICE_EVENT": {"device_id", "occurred_at"},
+        }
+        required = _REQUIRED.get(self.entity_type.value if hasattr(self.entity_type, 'value') else str(self.entity_type), set())
+        missing = required - set(self.payload.keys())
+        if missing:
+            raise ValueError(
+                f"payload para entity_type={self.entity_type!r} está faltando campos obrigatórios: {sorted(missing)}"
+            )
+        return self
 
 
 # ──────────────────────────────────────────────────

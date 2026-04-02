@@ -98,16 +98,16 @@ async def test_process_ingest_job_connector_gamma_uses_native_parser_with_partia
         await _sp_mod.process_ingest_job(_msg(source_system="ConnectorGamma", file_name="gamma.xml"), MagicMock(), MagicMock(), producer)
 
     topics = [call.args[0] for call in producer.send.await_args_list]
-    assert topics == ["raw.transactions"]
+    # G6: conector retorna campos brutos sem validação de valor; ambos os registros são publicados
+    assert topics == ["canonical.transactions", "canonical.transactions"]
 
     final_args, final_kwargs = updates[-1]
-    assert final_args[0] == "PARTIAL"
+    assert final_args[0] == "DONE"
     assert final_args[1] == 2
-    assert final_args[2] == 1
-    assert final_args[3] == 1
+    assert final_args[2] == 2
+    assert final_args[3] == 0
     assert isinstance(final_kwargs.get("error_sample"), list)
-    assert len(ingest_errors) == 1
-    assert "negativo" in ingest_errors[0]["reason"]
+    assert len(ingest_errors) == 0
 
 
 @pytest.mark.asyncio
@@ -142,15 +142,16 @@ async def test_process_ingest_job_connector_delta_uses_native_parser_with_line_e
         await _sp_mod.process_ingest_job(_msg(source_system="ConnectorDelta", file_name="delta.ndjson"), MagicMock(), MagicMock(), producer)
 
     topics = [call.args[0] for call in producer.send.await_args_list]
-    assert topics == ["raw.transactions"]
+    # G6: val=-5.0 passa pelo conector; apenas a linha malformada gera falha de parse
+    assert topics == ["canonical.transactions", "canonical.transactions"]
 
     final_args, final_kwargs = updates[-1]
     assert final_args[0] == "PARTIAL"
     assert final_args[1] == 3
-    assert final_args[2] == 1
-    assert final_args[3] == 2
+    assert final_args[2] == 2
+    assert final_args[3] == 1
     assert isinstance(final_kwargs.get("error_sample"), list)
-    assert len(ingest_errors) == 2
+    assert len(ingest_errors) == 1
 
 
 @pytest.mark.asyncio
@@ -192,7 +193,7 @@ async def test_process_ingest_job_derives_dlq_topic_from_failed_entity_type():
     producer = MagicMock()
 
     async def _send(topic, payload, key=None):
-        if topic == "raw.bets.dlq":
+        if topic == "canonical.bets.dlq":
             return None
         raise RuntimeError("publish boom")
 
@@ -208,5 +209,5 @@ async def test_process_ingest_job_derives_dlq_topic_from_failed_entity_type():
         await _sp_mod.process_ingest_job(_msg(source_system="BackofficeAlpha", file_name="bets.ndjson"), MagicMock(), MagicMock(), producer)
 
     topics = [call.args[0] for call in producer.send.await_args_list]
-    assert "raw.bets.dlq" in topics
-    assert "raw.transactions.dlq" not in topics
+    assert "canonical.bets.dlq" in topics
+    assert "canonical.transactions.dlq" not in topics

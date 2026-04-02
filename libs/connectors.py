@@ -198,36 +198,28 @@ class ConnectorGamma(BaseConnector):
                 continue
             try:
                 flat = self._flatten(child)
-                normalized = _canonicalize_record(flat)
-                schema = _ConnectorRecordSchema.model_validate(normalized)
-                records.append({**flat, **schema.model_dump()})
+                records.append(flat)
             except Exception as exc:  # noqa: BLE001
                 errors.append({"line": line, "reason": str(exc), "raw": ET.tostring(child, encoding="unicode")[:300]})
 
         return ParseResult(records, line, len(errors), errors)
 
     def _flatten(self, el: ET.Element) -> dict[str, Any]:
-        """Flatten element children to canonical dict. Unmapped fields keep their raw key."""
+        """Retorna campos XML brutos sem renomear. MappingEngine é responsável pela normalização."""
         result: dict[str, Any] = {}
         for child in el:
             ctag = child.tag.split("}")[-1]
             if len(list(child)):
                 for subchild in child:
                     stag = subchild.tag.split("}")[-1]
-                    path = f"{ctag}.{stag}"
-                    canon = self.FIELD_MAP.get(path)
-                    key = canon if canon else path
-                    result[key] = subchild.text
+                    result[f"{ctag}.{stag}"] = subchild.text
             else:
-                canon = self.FIELD_MAP.get(ctag)
                 val: Any = child.text
-                # coerce Amount.currency from attribute
+                # extrai atributo currency de Amount (ex.: <Amount currency="BRL">500.00</Amount>)
                 if ctag == "Amount":
-                    result[self.FIELD_MAP.get("Amount.currency", "currency")] = child.get("currency", "BRL")
-                # store under canonical name AND original tag name
-                result[canon if canon else ctag] = val
-        # defaults
-        result.setdefault("currency", "BRL")
+                    result["Amount.currency"] = child.get("currency", "BRL")
+                result[ctag] = val
+        result.setdefault("Amount.currency", "BRL")
         result.setdefault("source_system", self.source_system)
         return result
 
@@ -268,6 +260,7 @@ class ConnectorDelta(BaseConnector):
 
         records: list[dict] = []
         errors:  list[dict] = []
+        line_num = 0
 
         for line_num, line in enumerate(raw.splitlines(), 1):
             line = line.strip()
@@ -275,23 +268,17 @@ class ConnectorDelta(BaseConnector):
                 continue
             try:
                 obj = json.loads(line)
-                mapped = self._map(obj)
-                normalized = _canonicalize_record(mapped)
-                schema = _ConnectorRecordSchema.model_validate(normalized)
-                records.append({**mapped, **schema.model_dump()})
+                records.append(self._map(obj))
             except (json.JSONDecodeError, Exception) as exc:  # noqa: BLE001
                 errors.append({"line": line_num, "reason": str(exc), "raw": line[:300]})
 
         return ParseResult(records, line_num if raw.strip() else 0, len(errors), errors)  # type: ignore[possibly-undefined]
 
     def _map(self, obj: dict) -> dict:
+        """Retorna campos JSON brutos sem renomear. MappingEngine é responsável pela normalização."""
         result: dict[str, Any] = {"source_system": self.source_system}
-        for src_key, canon_key in self.FIELD_MAP.items():
-            if src_key in obj:
-                result[canon_key] = obj[src_key]
-        # Pass through ALL original fields (preserves raw keys alongside canonical)
         for k, v in obj.items():
-            result.setdefault(k, v)
+            result[k] = v
         result.setdefault("currency", "BRL")
         return result
 
@@ -387,23 +374,17 @@ class ConnectorEpsilon(BaseConnector):
 
         for i, evt in enumerate(events):
             try:
-                mapped = self._map(evt)
-                normalized = _canonicalize_record(mapped)
-                schema = _ConnectorRecordSchema.model_validate(normalized)
-                records.append({**mapped, **schema.model_dump()})
+                records.append(self._map(evt))
             except Exception as exc:  # noqa: BLE001
                 errors.append({"line": i + 1, "reason": str(exc), "raw": json.dumps(evt)[:300]})
 
         return ParseResult(records, len(events), len(errors), errors)
 
     def _map(self, obj: dict) -> dict:
+        """Retorna campos JSON brutos sem renomear. MappingEngine é responsável pela normalização."""
         result: dict[str, Any] = {"source_system": self.source_system}
-        for src_key, canon_key in self.FIELD_MAP.items():
-            if src_key in obj:
-                result[canon_key] = obj[src_key]
-        # Pass through ALL original fields (raw keys alongside canonical)
         for k, v in obj.items():
-            result.setdefault(k, v)
+            result[k] = v
         result.setdefault("currency", "BRL")
         return result
 

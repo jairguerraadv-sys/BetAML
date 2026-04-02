@@ -68,8 +68,10 @@ def test_alpha_txn_copies_basic_fields(alpha_txn_raw):
 def test_alpha_txn_coerce_amount(alpha_txn_raw):
     mapping = get_default_mapping("BackofficeAlpha", "TRANSACTION")
     out = MappingEngine(mapping).apply(alpha_txn_raw)
-    assert isinstance(out["amount"], float)
-    assert abs(out["amount"] - 1500.50) < 0.01
+    # G4: coerceDecimal retorna str para preservar precisão BRL
+    assert isinstance(out["amount"], str)
+    from decimal import Decimal
+    assert Decimal(out["amount"]) == Decimal("1500.50")
 
 def test_alpha_txn_uppercase_type(alpha_txn_raw):
     mapping = get_default_mapping("BackofficeAlpha", "TRANSACTION")
@@ -107,7 +109,10 @@ def test_alpha_player_lowercase_email(alpha_player_raw):
 def test_alpha_player_coerce_income(alpha_player_raw):
     mapping = get_default_mapping("BackofficeAlpha", "PLAYER")
     out = MappingEngine(mapping).apply(alpha_player_raw)
-    assert isinstance(out.get("declared_income_monthly"), float)
+    # G4: coerceDecimal retorna str para preservar precisão BRL
+    assert isinstance(out.get("declared_income_monthly"), str)
+    from decimal import Decimal
+    assert Decimal(out["declared_income_monthly"]) > 0
 
 
 # ── BackofficeBeta TRANSACTION ────────────────────────────────────────────────
@@ -121,8 +126,10 @@ def test_beta_txn_copies_fields(beta_txn_raw):
 def test_beta_txn_amount_float(beta_txn_raw):
     mapping = get_default_mapping("BackofficeBeta", "TRANSACTION")
     out = MappingEngine(mapping).apply(beta_txn_raw)
-    assert isinstance(out.get("amount"), float)
-    assert abs(out["amount"] - 800.0) < 0.01
+    # G4: coerceDecimal retorna str para preservar precisão BRL
+    assert isinstance(out.get("amount"), str)
+    from decimal import Decimal
+    assert Decimal(out["amount"]) == Decimal("800.00")
 
 
 # ── Mapping missing fields ────────────────────────────────────────────────────

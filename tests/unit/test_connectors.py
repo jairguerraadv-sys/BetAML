@@ -56,7 +56,8 @@ def test_gamma_record_fields():
     rec = result.records[0]
     assert rec["id"] == "TX001"
     assert rec["player_id"] == "P001"
-    assert rec["amount"] == 250.0
+    # G6: conector retorna valores XML brutos (strings); coerção fica a cargo do MappingEngine
+    assert rec["amount"] == "250.00"
 
 
 def test_gamma_invalid_xml():
@@ -163,15 +164,17 @@ def test_epsilon_parses_records():
     ep = ConnectorEpsilon(secret=SECRET)
     result = ep.parse(PAYLOAD, headers={"x-epsilon-signature": SIG})
     assert result.records[0]["event_id"] == "evt-1"
-    assert result.records[0]["external_player_id"] == "P001"
+    # G6: conector retorna campos JSON brutos; 'player_id' é o campo original
+    assert result.records[0]["player_id"] == "P001"
 
 
 def test_delta_missing_required_fields_goes_to_error():
     dd = ConnectorDelta()
-    # missing event timestamp and event type
+    # G6: conectores retornam campos brutos sem validação; registros incompletos
+    # são retornados normalmente — validação ocorre no MappingEngine
     result = dd.parse(b'{"id":"TX-BAD","player_id":"P001","amount":10}')
-    assert result.success is False
-    assert result.failed >= 1
+    assert result.success is True  # parse não falha; MappingEngine valida depois
+    assert len(result.records) == 1
 
 
 # ── get_connector factory ─────────────────────────────────────────────────────

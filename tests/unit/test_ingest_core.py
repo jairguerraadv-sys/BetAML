@@ -279,11 +279,11 @@ async def test_ingest_event_applies_explicit_mapping_before_publish():
     assert "event_id" in result
     assert sent_messages
     topic, payload, key = sent_messages[0]
-    assert topic == "raw.transactions"
+    assert topic == "canonical.transactions"
     assert key == "evt-map-1"
     assert payload["mapping_config_id"] == "map-explicit-1"
     assert payload["payload"]["external_player_id"] == "P-1"
-    assert payload["payload"]["amount"] == 100.5
+    assert payload["payload"]["amount"] == "100.50"
     assert payload["raw_payload"]["customer_id"] == "P-1"
 
 
@@ -485,11 +485,11 @@ async def test_ingest_websocket_applies_explicit_mapping_before_publish():
 
     assert sent_messages
     topic, payload, key = sent_messages[0]
-    assert topic == "raw.transactions"
+    assert topic == "canonical.transactions"
     assert key == "evt-ws-1"
     assert payload["mapping_config_id"] == "map-ws-1"
     assert payload["payload"]["external_player_id"] == "P-900"
-    assert payload["payload"]["amount"] == 77.1
+    assert payload["payload"]["amount"] == "77.10"
     assert payload["raw_payload"]["customer_id"] == "P-900"
     assert any(msg.get("status") == "queued" for msg in websocket.sent)
 
@@ -569,11 +569,11 @@ async def test_replay_ingest_error_applies_resolved_mapping_before_publish():
     assert err.error_detail["replay"]["apply_mapping"] is True
     assert sent_messages
     topic, payload, key = sent_messages[0]
-    assert topic == "raw.transactions"
+    assert topic == "canonical.transactions"
     assert key == "evt-replay-1"
     assert payload["mapping_config_id"] == "map-v3"
     assert payload["payload"]["external_player_id"] == "CPF-001"
-    assert payload["payload"]["amount"] == 321.5
+    assert payload["payload"]["amount"] == "321.5"
     assert payload["raw_payload"]["customer_id"] == "CPF-001"
 
 
@@ -768,7 +768,7 @@ async def test_ingest_epsilon_webhook_applies_resolved_mapping_before_publish():
 
     assert result["status"] == "accepted"
     call = producer.send.await_args_list[0]
-    assert call.args[0] == "raw.transactions"
+    assert call.args[0] == "canonical.transactions"
     payload = call.args[1]
     assert payload["mapping_config_id"] == "map-v2"
     assert payload["payload"]["player_cpf"] == "p1"

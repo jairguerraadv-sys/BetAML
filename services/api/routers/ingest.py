@@ -365,6 +365,7 @@ def _build_envelope(
     source_system: str,
     entity_type: str,
     payload: dict[str, Any],
+    raw_payload: dict[str, Any],
     source_event_id: str,
     mapping_config_id: str | None = None,
     ingest_metadata: dict[str, Any] | None = None,
@@ -381,7 +382,7 @@ def _build_envelope(
         "entity_type": entity_type,
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "payload": payload,
-        "raw_payload": payload,
+        "raw_payload": raw_payload,
         "mapping_config_id": mapping_config_id,
         "ingest_metadata": {
             "received_at": datetime.now(timezone.utc).isoformat(),
@@ -621,13 +622,13 @@ async def ingest_event(
         source_system=body.source_system,
         entity_type=body.entity_type,
         payload=mapped_payload,
+        raw_payload=body.payload,
         source_event_id=source_event_id,
         mapping_config_id=effective_mapping_id,
     )
-    envelope["raw_payload"] = body.payload
     producer = await get_producer()
     if producer:
-        topic = f"raw.{body.entity_type.lower()}s"
+        topic = f"canonical.{body.entity_type.lower()}s"
         ok = await _publish_with_retries(
             producer=producer,
             topic=topic,
@@ -719,12 +720,12 @@ async def ingest_batch(
             source_system=body.source_system,
             entity_type=body.entity_type,
             payload=mapped_payload,
+            raw_payload=body.payload,
             source_event_id=source_event_id,
             mapping_config_id=effective_mapping_id,
         )
-        envelope["raw_payload"] = body.payload
         if producer:
-            topic = f"raw.{body.entity_type.lower()}s"
+            topic = f"canonical.{body.entity_type.lower()}s"
             ok = await _publish_with_retries(
                 producer=producer,
                 topic=topic,
@@ -971,15 +972,15 @@ async def ingest_epsilon_webhook(
             source_system="ConnectorEpsilon",
             entity_type="TRANSACTION",
             payload=mapped_rec,
+            raw_payload=rec,
             source_event_id=source_event_id,
             mapping_config_id=mapping_config_id,
             ingest_metadata={"channel": "webhook", "webhook": "epsilon", "job_id": job_pk},
         )
-        envelope["raw_payload"] = rec
         if producer:
             ok = await _publish_with_retries(
                 producer=producer,
-                topic="raw.transactions",
+                topic="canonical.transactions",
                 payload=envelope,
                 key=source_event_id,
                 tenant_id=principal.tenant_id,
@@ -1258,6 +1259,7 @@ async def replay_ingest_error(
         source_system=str(err.source_system),
         entity_type=entity_type,
         payload=mapped_payload,
+        raw_payload=body.corrected_payload,
         source_event_id=source_event_id,
         mapping_config_id=effective_mapping_id,
         ingest_metadata={
@@ -1267,8 +1269,7 @@ async def replay_ingest_error(
             "original_line_number": err.line_number,
         },
     )
-    envelope["raw_payload"] = body.corrected_payload
-    topic = f"raw.{entity_type.lower()}s"
+    topic = f"canonical.{entity_type.lower()}s"
     ok = await _publish_with_retries(
         producer=producer,
         topic=topic,
@@ -1476,12 +1477,12 @@ async def ingest_websocket(websocket: WebSocket):
                     source_system=item.source_system,
                     entity_type=item.entity_type,
                     payload=mapped_payload,
+                    raw_payload=item.payload,
                     source_event_id=source_event_id,
                     mapping_config_id=effective_mapping_id,
                     ingest_metadata={"channel": "websocket"},
                 )
-                envelope["raw_payload"] = item.payload
-                topic = f"raw.{item.entity_type.lower()}s"
+                topic = f"canonical.{item.entity_type.lower()}s"
                 ok = await _publish_with_retries(
                     producer=producer,
                     topic=topic,
@@ -1649,12 +1650,12 @@ async def parse_connector_payload(
             source_system=source_system,
             entity_type=entity_type,
             payload=mapped_rec,
+            raw_payload=rec,
             source_event_id=source_event_id,
             mapping_config_id=effective_mapping_id,
             ingest_metadata={"channel": "connector-parse", "job_id": job_pk},
         )
-        envelope["raw_payload"] = rec
-        topic = f"raw.{entity_type.lower()}s"
+        topic = f"canonical.{entity_type.lower()}s"
         if producer:
             ok = await _publish_with_retries(
                 producer=producer,

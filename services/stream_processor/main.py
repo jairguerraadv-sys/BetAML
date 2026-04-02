@@ -50,9 +50,6 @@ CH_DB          = os.getenv("CLICKHOUSE_DB", "betaml")
 METRICS_PORT   = int(os.getenv("METRICS_PORT", "8003"))
 
 TOPICS = [
-    "raw.transactions",
-    "raw.bets",
-    "raw.device_events",
     "canonical.transactions",
     "canonical.bets",
     "canonical.device_events",
@@ -1518,7 +1515,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                         "channel": "connector-reprocess",
                     },
                 }
-                topic = f"raw.{entity_type}s"
+                topic = f"canonical.{entity_type}s"
                 ok = await _publish_with_retries(
                     topic,
                     envelope,
@@ -1638,7 +1635,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                     "raw_payload": row_data,
                     "ingest_metadata": {"job_id": job_id, "source": "file"},
                 }
-                topic = f"raw.{entity_type}s"
+                topic = f"canonical.{entity_type}s"
                 ok = await _publish_with_retries(
                     topic,
                     envelope,
@@ -1672,7 +1669,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                     row_data.get("entity_type")
                     or (mapping_cfg.get("entity_type", "transaction") if mapping_cfg else "transaction")
                 ).upper()
-                target_topic = f"raw.{error_entity_type.lower()}s"
+                target_topic = f"canonical.{error_entity_type.lower()}s"
                 if len(error_sample) < 10:
                     error_sample.append({"line": idx, "reason": reason, "raw": row_data})
 
@@ -1780,13 +1777,7 @@ async def main():
                 if isinstance(highwater, int) and isinstance(offset, int):
                     CONSUMER_LAG.labels(group_id="stream-processor", topic=topic).set(max(highwater - offset - 1, 0))
 
-                if topic == "raw.transactions":
-                    await process_raw_transaction(value, producer)
-                elif topic == "raw.bets":
-                    await process_raw_bet(value, producer)
-                elif topic == "raw.device_events":
-                    await process_raw_device_event(value, producer)
-                elif topic == "canonical.transactions":
+                if topic == "canonical.transactions":
                     await process_transaction(value, redis_client, ch_client, producer)
                 elif topic == "canonical.bets":
                     await process_bet(value, redis_client, ch_client, producer)
