@@ -53,6 +53,10 @@ TOPICS = [
     "canonical.transactions",
     "canonical.bets",
     "canonical.device_events",
+    # GAP-stream: novos tópicos para eventos de ciclo de vida do player
+    "canonical.kyc_events",
+    "canonical.responsible_gambling_events",
+    "canonical.account_status_changes",
     "ingest.jobs",
     "ingest.jobs.reprocess",
 ]
@@ -1107,13 +1111,17 @@ async def process_transaction(msg_value: dict, redis_client, ch_client, producer
         current_event={"is_new_instrument": is_new_instrument},
     )
 
-    # Publish features.player_daily
-    await producer.send("features.player_daily", {
-        "tenant_id": tenant_id,
-        "player_id": player_id,
-        "features": features,
-        "source_event_id": msg_value.get("event_id"),
-    })
+    # GAP-stream: backfill não dispara features em tempo real (evita sobrecarga de writes
+    # durante importação histórica em massa e não contamina baseline incremental).
+    _ingest_mode = (msg_value.get("ingest_metadata") or {}).get("ingest_mode") or msg_value.get("ingest_mode") or "incremental"
+    if _ingest_mode != "backfill":
+        # Publish features.player_daily
+        await producer.send("features.player_daily", {
+            "tenant_id": tenant_id,
+            "player_id": player_id,
+            "features": features,
+            "source_event_id": msg_value.get("event_id"),
+        })
 
     # Insert to ClickHouse transactions table
     try:
@@ -1240,6 +1248,268 @@ async def process_device_event(msg_value: dict, redis_client, ch_client, produce
         logger.warning("oltp_insert_device_event_failed", error=str(e))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GAP-stream: handlers para entidades de ciclo de vida do player
+# KYC_EVENT | RESPONSIBLE_GAMBLING_EVENT | ACCOUNT_STATUS_CHANGE
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def process_kyc_event(msg_value: dict, redis_client, ch_client, producer) -> None:
+    """Processa canonical.kyc_events → ClickHouse + OLTP."""
+    tenant_id = msg_value.get("tenant_id")
+    payload   = msg_value.get("payload", {})
+    player_id = payload.get("player_id") or payload.get("playerId")
+    if not tenant_id or not player_id:
+        return
+
+    try:
+        await asyncio.to_thread(_ch_insert_kyc_event, ch_client, msg_value, payload)
+    except Exception as exc:
+        logger.warning("ch_insert_kyc_event_failed", error=str(exc))
+
+    try:
+        await asyncio.to_thread(_persist_kyc_event_oltp, msg_value, payload)
+    except Exception as exc:
+        logger.warning("oltp_persist_kyc_event_failed", error=str(exc))
+
+
+async def process_responsible_gambling_event(msg_value: dict, redis_client, ch_client, producer) -> None:
+    """Processa canonical.responsible_gambling_events → ClickHouse + OLTP.
+
+    Auto-exclusão SIGAP/SPA (Portaria 1.143/2024 art. 9°): subtype
+    SELF_EXCLUSION_SIGAP ou SELF_EXCLUSION_OPERATOR → SUSPENDED no Postgres.
+    """
+    tenant_id = msg_value.get("tenant_id")
+    payload   = msg_value.get("payload", {})
+    player_id = payload.get("player_id") or payload.get("playerId")
+    if not tenant_id or not player_id:
+        return
+
+    try:
+        await asyncio.to_thread(_ch_insert_kyc_event, ch_client, msg_value, payload)
+    except Exception as exc:
+        logger.warning("ch_insert_rg_event_failed", error=str(exc))
+
+    subtype = str(payload.get("subtype", "")).upper()
+    if subtype in {"SELF_EXCLUSION_SIGAP", "SELF_EXCLUSION_OPERATOR", "COOLING_OFF"}:
+        try:
+            await asyncio.to_thread(_suspend_player_oltp, tenant_id, player_id, subtype)
+        except Exception as exc:
+            logger.warning("oltp_suspend_player_failed", player_id=player_id, error=str(exc))
+
+    try:
+        await asyncio.to_thread(_persist_kyc_event_oltp, msg_value, payload)
+    except Exception as exc:
+        logger.warning("oltp_persist_rg_event_failed", error=str(exc))
+
+
+async def process_account_status_change(msg_value: dict, redis_client, ch_client, producer) -> None:
+    """Processa canonical.account_status_changes → ClickHouse + OLTP (atualiza players.status)."""
+    tenant_id = msg_value.get("tenant_id")
+    payload   = msg_value.get("payload", {})
+    player_id = payload.get("player_id") or payload.get("playerId")
+    if not tenant_id or not player_id:
+        return
+
+    try:
+        await asyncio.to_thread(_ch_insert_kyc_event, ch_client, msg_value, payload)
+    except Exception as exc:
+        logger.warning("ch_insert_account_status_failed", error=str(exc))
+
+    new_status = payload.get("new_status")
+    if new_status:
+        try:
+            await asyncio.to_thread(_update_player_status_oltp, tenant_id, player_id, new_status)
+        except Exception as exc:
+            logger.warning("oltp_update_player_status_failed", player_id=player_id, error=str(exc))
+
+    try:
+        await asyncio.to_thread(_persist_kyc_event_oltp, msg_value, payload)
+    except Exception as exc:
+        logger.warning("oltp_persist_account_status_failed", error=str(exc))
+
+
+# ────────────────────────────────────────────────────────────
+# ClickHouse helper — betaml.player_kyc_events
+# Cobre KYC_EVENT, RESPONSIBLE_GAMBLING_EVENT, ACCOUNT_STATUS_CHANGE
+# ────────────────────────────────────────────────────────────
+
+def _ch_insert_kyc_event(ch_client, envelope: dict, payload: dict) -> None:
+    try:
+        occurred_at = _to_naive_utc_datetime(payload.get("occurred_at", _iso_now()))
+    except Exception:
+        occurred_at = _now_naive_utc()
+
+    _ingest_meta = envelope.get("ingest_metadata") or {}
+    row = {
+        "event_id":        envelope.get("event_id", str(uuid.uuid4())),
+        "tenant_id":       envelope.get("tenant_id", ""),
+        "source_system":   envelope.get("source_system", ""),
+        "player_id":       payload.get("player_id", ""),
+        "entity_type":     str(envelope.get("entity_type", "")).upper(),
+        "subtype":         str(payload.get("subtype", "")).upper(),
+        "provider":        payload.get("provider", ""),
+        "document_type":   payload.get("document_type", ""),
+        "pep_flag":        bool(payload.get("pep_flag", False)),
+        "income_declared": float(payload.get("income_declared") or 0),
+        "exclusion_source":         payload.get("exclusion_source", ""),
+        "exclusion_scope":          payload.get("exclusion_scope", ""),
+        "exclusion_duration_days":  int(payload.get("exclusion_duration_days") or 0),
+        "old_deposit_limit":        float(payload.get("old_deposit_limit") or 0),
+        "new_deposit_limit":        float(payload.get("new_deposit_limit") or 0),
+        "previous_status":          payload.get("previous_status", ""),
+        "new_status":               payload.get("new_status", ""),
+        "reason":                   payload.get("reason", ""),
+        "ingest_mode":    str(_ingest_meta.get("ingest_mode") or envelope.get("ingest_mode") or "incremental"),
+        "backfill_job_id": str(_ingest_meta.get("backfill_job_id") or envelope.get("backfill_job_id") or ""),
+        "occurred_at": occurred_at,
+        "event_date":  occurred_at.date(),
+        "created_at":  _now_naive_utc(),
+    }
+    ch_client.insert_dict("betaml.player_kyc_events", [row])
+
+
+# ────────────────────────────────────────────────────────────
+# OLTP helpers — KYC/RG/AccountStatus
+# ────────────────────────────────────────────────────────────
+
+def _persist_kyc_event_oltp(envelope: dict, payload: dict) -> None:
+    """Persiste evento KYC/RG/AccountStatus na tabela player_kyc_events do Postgres."""
+    import sqlalchemy as sa
+
+    db_url = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@postgres:5432/betaml_dev")
+    sync_url = db_url.replace("postgresql://", "postgresql+psycopg2://")
+    tenant_id = envelope.get("tenant_id", "")
+
+    try:
+        occurred_at = _to_naive_utc_datetime(payload.get("occurred_at", _iso_now()))
+    except Exception:
+        occurred_at = _now_naive_utc()
+
+    _ingest_meta = envelope.get("ingest_metadata") or {}
+    engine = sa.create_engine(sync_url, pool_pre_ping=True)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text("SELECT set_config('app.current_tenant', :tid, true)"),
+                {"tid": str(tenant_id)},
+            )
+            conn.execute(
+                sa.text(
+                    """
+                    INSERT INTO player_kyc_events (
+                        id, tenant_id, player_id, entity_type, subtype,
+                        provider, document_type, pep_flag, income_declared,
+                        exclusion_source, exclusion_scope, exclusion_duration_days,
+                        old_deposit_limit, new_deposit_limit,
+                        previous_status, new_status, reason,
+                        ingest_mode, backfill_job_id,
+                        occurred_at, created_at
+                    ) VALUES (
+                        :id, :tenant_id, :player_id, :entity_type, :subtype,
+                        :provider, :document_type, :pep_flag, :income_declared,
+                        :exclusion_source, :exclusion_scope, :exclusion_duration_days,
+                        :old_deposit_limit, :new_deposit_limit,
+                        :previous_status, :new_status, :reason,
+                        :ingest_mode, :backfill_job_id,
+                        :occurred_at, NOW()
+                    )
+                    ON CONFLICT (id) DO NOTHING
+                    """
+                ),
+                {
+                    "id": envelope.get("event_id") or str(uuid.uuid4()),
+                    "tenant_id": tenant_id,
+                    "player_id": payload.get("player_id", ""),
+                    "entity_type": str(envelope.get("entity_type", "")).upper(),
+                    "subtype": str(payload.get("subtype", "")).upper(),
+                    "provider": payload.get("provider") or "",
+                    "document_type": payload.get("document_type") or "",
+                    "pep_flag": bool(payload.get("pep_flag", False)),
+                    "income_declared": float(payload.get("income_declared") or 0),
+                    "exclusion_source": payload.get("exclusion_source") or "",
+                    "exclusion_scope": payload.get("exclusion_scope") or "",
+                    "exclusion_duration_days": int(payload.get("exclusion_duration_days") or 0),
+                    "old_deposit_limit": float(payload.get("old_deposit_limit") or 0),
+                    "new_deposit_limit": float(payload.get("new_deposit_limit") or 0),
+                    "previous_status": payload.get("previous_status") or "",
+                    "new_status": payload.get("new_status") or "",
+                    "reason": payload.get("reason") or "",
+                    "ingest_mode": str(_ingest_meta.get("ingest_mode") or envelope.get("ingest_mode") or "incremental"),
+                    "backfill_job_id": str(_ingest_meta.get("backfill_job_id") or envelope.get("backfill_job_id") or ""),
+                    "occurred_at": occurred_at,
+                },
+            )
+    finally:
+        engine.dispose()
+
+
+def _suspend_player_oltp(tenant_id: str, player_id: str, reason: str) -> None:
+    """Marca player como SUSPENDED (auto-exclusão — Lei 14.790/2023 art. 13)."""
+    import sqlalchemy as sa
+
+    db_url = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@postgres:5432/betaml_dev")
+    sync_url = db_url.replace("postgresql://", "postgresql+psycopg2://")
+    engine = sa.create_engine(sync_url, pool_pre_ping=True)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text("SELECT set_config('app.current_tenant', :tid, true)"),
+                {"tid": str(tenant_id)},
+            )
+            conn.execute(
+                sa.text(
+                    """
+                    UPDATE players
+                    SET status = 'SUSPENDED',
+                        updated_at = NOW()
+                    WHERE id = :player_id
+                      AND tenant_id = :tenant_id
+                      AND status NOT IN ('SUSPENDED', 'CLOSED_BY_OPERATOR')
+                    """
+                ),
+                {"player_id": player_id, "tenant_id": tenant_id},
+            )
+    finally:
+        engine.dispose()
+    logger.info("player_suspended_auto_exclusion", tenant_id=tenant_id, player_id=player_id, reason=reason)
+
+
+def _update_player_status_oltp(tenant_id: str, player_id: str, new_status: str) -> None:
+    """Atualiza players.status a partir de AccountStatusChange canônico."""
+    import sqlalchemy as sa
+
+    _ALLOWED = {
+        "ACTIVE", "BLOCKED_BY_OPERATOR", "SUSPENDED", "REACTIVATED",
+        "CLOSED_BY_PLAYER", "CLOSED_BY_OPERATOR",
+    }
+    if new_status.upper() not in _ALLOWED:
+        return
+
+    db_url = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@postgres:5432/betaml_dev")
+    sync_url = db_url.replace("postgresql://", "postgresql+psycopg2://")
+    engine = sa.create_engine(sync_url, pool_pre_ping=True)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text("SELECT set_config('app.current_tenant', :tid, true)"),
+                {"tid": str(tenant_id)},
+            )
+            conn.execute(
+                sa.text(
+                    """
+                    UPDATE players
+                    SET status = :new_status,
+                        updated_at = NOW()
+                    WHERE id = :player_id
+                      AND tenant_id = :tenant_id
+                    """
+                ),
+                {"player_id": player_id, "tenant_id": tenant_id, "new_status": new_status.upper()},
+            )
+    finally:
+        engine.dispose()
+
+
 async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer) -> None:
     """
     Consome mensagem de ingest.jobs:
@@ -1262,6 +1532,9 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
     mapping_config_id = msg_value.get("mapping_version_id") or msg_value.get("mapping_config_id")
     file_name = msg_value.get("file_name", "")
     file_path = msg_value.get("file_path")
+    # GAP-stream: propagar ingest_mode para todos os envelopes publicados
+    ingest_mode = str(msg_value.get("ingest_mode") or "incremental")
+    backfill_job_id = msg_value.get("backfill_job_id")
 
     if not job_id or not tenant_id:
         logger.warning("ingest_job_missing_fields", msg=msg_value)
@@ -1513,6 +1786,8 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                         "job_id": job_id,
                         "source": "file",
                         "channel": "connector-reprocess",
+                        "ingest_mode": ingest_mode,
+                        "backfill_job_id": backfill_job_id,
                     },
                 }
                 topic = f"canonical.{entity_type}s"
@@ -1633,7 +1908,12 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                     "occurred_at": datetime.now(timezone.utc).isoformat(),
                     "payload": payload,
                     "raw_payload": row_data,
-                    "ingest_metadata": {"job_id": job_id, "source": "file"},
+                    "ingest_metadata": {
+                        "job_id": job_id,
+                        "source": "file",
+                        "ingest_mode": ingest_mode,
+                        "backfill_job_id": backfill_job_id,
+                    },
                 }
                 topic = f"canonical.{entity_type}s"
                 ok = await _publish_with_retries(
@@ -1783,6 +2063,13 @@ async def main():
                     await process_bet(value, redis_client, ch_client, producer)
                 elif topic == "canonical.device_events":
                     await process_device_event(value, redis_client, ch_client, producer)
+                # GAP-stream: novos tópicos de ciclo de vida do player
+                elif topic == "canonical.kyc_events":
+                    await process_kyc_event(value, redis_client, ch_client, producer)
+                elif topic == "canonical.responsible_gambling_events":
+                    await process_responsible_gambling_event(value, redis_client, ch_client, producer)
+                elif topic == "canonical.account_status_changes":
+                    await process_account_status_change(value, redis_client, ch_client, producer)
                 elif topic == "ingest.jobs":
                     await process_ingest_job(value, redis_client, ch_client, producer)
                 elif topic == "ingest.jobs.reprocess":

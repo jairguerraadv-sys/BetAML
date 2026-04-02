@@ -1390,6 +1390,121 @@ async def reprocess_job(
     return {"job_id": new_job.id, "status": "QUEUED"}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GAP-C3: POST /ingest/backfill
+# Semântica diferente de /reprocess:
+#   reprocess  = job existente com falha → reprocessar arquivo Bronze já armazenado
+#   backfill   = importação histórica em massa de novo operador → NÃO gerar auto-case,
+#                NÃO gerar alertas em tempo real; apenas persistir + calcular features.
+# ─────────────────────────────────────────────────────────────────────────────
+class BackfillRequest(BaseModel):
+    source_system: str
+    file_reference: str        # object key (MinIO) de arquivo já enviado ao lakehouse Bronze
+    mapping_config_id: Optional[str] = None
+    date_range_start: Optional[str] = None  # ISO date — para rastreabilidade
+    date_range_end: Optional[str] = None
+    reason: str = "historical_import"
+    suppress_alerts: bool = True            # padrão: não gerar alertas em tempo real no backfill
+
+
+@router.post("/ingest/backfill", status_code=202)
+async def start_backfill(
+    body: BackfillRequest,
+    current_user: User = Depends(require_roles("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Inicia importação histórica em massa (backfill).
+
+    Diferenças em relação ao reprocessamento normal:
+    - Cria IngestJob com ingest_mode='backfill' e is_backfill=True
+    - Publica no tópico ingest.jobs (mesmo worker), mas com ingest_mode=backfill no envelope
+    - O stream_processor e rules_engine lêem ingest_mode e suprimem criação de casos/alertas
+    - Ideal para onboarding de novo operador com histórico de meses/anos de dados
+    """
+    if body.source_system not in ALLOWED_SOURCE_SYSTEMS:
+        raise HTTPException(400, f"source_system '{body.source_system}' não reconhecido")
+
+    mapping_version_id: str | None = None
+    if body.mapping_config_id:
+        mc = await db.get(MappingConfig, body.mapping_config_id)
+        if not mc or mc.tenant_id != current_user.tenant_id:
+            raise HTTPException(404, "mapping_config_id inválido para este tenant")
+        mapping_version_id = str(mc.id)
+    else:
+        mapping_version_id, _ = await _resolve_effective_mapping_config(
+            db,
+            tenant_id=current_user.tenant_id,
+            source_system=body.source_system,
+            entity_type="TRANSACTION",
+        )
+
+    producer = await get_producer()
+    if not producer:
+        raise HTTPException(503, "Kafka indisponível para backfill")
+
+    job = IngestJob(
+        tenant_id=current_user.tenant_id,
+        source_system=body.source_system,
+        mapping_config_id=mapping_version_id,
+        mapping_version_id=mapping_version_id,
+        file_name=body.file_reference.split("/")[-1],
+        file_path=body.file_reference,
+        status="QUEUED",
+        ingest_mode="backfill",
+        is_backfill=True,
+        created_by=current_user.id,
+        error_message=f"backfill_reason={body.reason}",
+    )
+    db.add(job)
+    await db.commit()
+    job_id = str(job.id)
+
+    msg = {
+        "job_id": job_id,
+        "tenant_id": current_user.tenant_id,
+        "source_system": body.source_system,
+        "mapping_config_id": mapping_version_id,
+        "mapping_version_id": mapping_version_id,
+        "file_name": job.file_name,
+        "file_path": body.file_reference,
+        # GAP-C3: informar o stream_processor e rules_engine sobre o modo
+        "ingest_mode": "backfill",
+        "backfill_job_id": job_id,
+        "suppress_alerts": body.suppress_alerts,
+        "date_range_start": body.date_range_start,
+        "date_range_end": body.date_range_end,
+    }
+    ok = await _publish_with_retries(
+        producer=producer,
+        topic="ingest.jobs",
+        payload=msg,
+        key=job_id,
+        tenant_id=str(current_user.tenant_id),
+        source_system=body.source_system,
+        context={"endpoint": "/ingest/backfill", "job_id": job_id},
+    )
+    if not ok:
+        job.status = "FAILED"
+        job.error_message = "enqueue_failed_after_retries"
+        await db.commit()
+        raise HTTPException(503, "Falha ao enfileirar backfill após retries; enviado para DLQ")
+
+    logger.info(
+        "backfill_job_queued",
+        job_id=job_id,
+        tenant_id=current_user.tenant_id,
+        source_system=body.source_system,
+        file_reference=body.file_reference,
+        suppress_alerts=body.suppress_alerts,
+    )
+    return {
+        "job_id": job_id,
+        "status": "QUEUED",
+        "ingest_mode": "backfill",
+        "suppress_alerts": body.suppress_alerts,
+    }
+
+
 @router.websocket("/ingest/ws")
 async def ingest_websocket(websocket: WebSocket):
     """Canal websocket para ingestão contínua com backpressure por fila limitada."""
