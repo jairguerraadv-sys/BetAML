@@ -33,9 +33,9 @@ interface ExampleCase {
 const EXAMPLES: ExampleCase[] = [
   {
     id: 'ex-001',
-    title: 'Fracionamento por Lotérica',
-    pattern: 'Fracionamento de depósito',
-    tags: ['Fracionamento', 'Espécie', 'Risco Alto'],
+    title: 'Fracionamento via Pix (Smurfing Digital)',
+    pattern: 'Estruturação de depósitos via Pix',
+    tags: ['Fracionamento', 'Pix', 'Risco Alto'],
     priority: 'HIGH',
     profile: {
       name: 'Carlos Mendonça da Silva (fictício)',
@@ -44,27 +44,27 @@ const EXAMPLES: ExampleCase[] = [
       monthlyIncome: 'R$ 3.200',
     },
     flagReason:
-      'O sistema detectou 11 depósitos em espécie de R$ 2.900 cada, realizados em 3 dias consecutivos em 4 agências distintas, totalizando R$ 31.900.',
+      'O sistema detectou 14 depósitos Pix de R$\u00a0950 cada em 48 horas, provenientes de 8 chaves Pix distintas (CPF e e-mail), totalizando R$\u00a013.300. Todos abaixo do limiar de R$\u00a01.000 que historicamente atrai atenção dos controles internos do operador.',
     analysisSteps: [
-      'Verificar se há justificativa econômica para múltiplos depósitos parcelados.',
-      'Consultar histórico: cliente realizava, em média, 1 depósito/mês antes deste período.',
-      'Cruzar horários: todos os depósitos ocorreram entre 10h e 12h — padrão incomum para autônomo.',
-      'Verificar carteira de assinantes ou nota fiscal de vendas para justificar o volume.',
+      'Verificar as chaves Pix originárias: pertencem a terceiros sem relação comprovada com o apostador.',
+      'Consultar histórico: apostador realizava em média 1 depósito/mês de R$\u00a0200 nos 12 meses anteriores.',
+      'Analisar horários: depósitos distribuídos entre 23h e 6h — janela que evita equipes de monitoramento.',
+      'Verificar se os CPFs das chaves Pix de origem aparecem em outras investigações da plataforma.',
     ],
     redFlags: [
-      'Valor unitário logo abaixo do limite de R$ 3.000 que exige declaração complementar.',
-      'Diversificação de agências sem relação com o endereço do cliente.',
-      'Ausência de histórico de depósitos similares nos últimos 24 meses.',
+      'Valor unitário consistentemente abaixo de R$\u00a01.000 — padrão clássico de estruturação (art. 11, Lei 9.613/1998).',
+      'Origem em múltiplas chaves Pix de terceiros sem relação comprovada com o apostador.',
+      'Horário concentrado na madrugada, fora do padrão comportamental anterior.',
     ],
     mitigatingFactors: [
-      'Cliente possui cadastro há 7 anos sem ocorrências anteriores.',
-      'Renda compatível com atividade informal de pequeno varejo.',
+      'Apostador possui cadastro há 3 anos sem ocorrências PLD anteriores.',
+      'Renda declarada poderia justificar parte do volume em contexto diferente.',
     ],
     decision: 'REPORTED',
     decisionRationale:
-      'Após análise, a combinação de fracionamento abaixo do limiar de declaração, dispersão geográfica e ausência de justificativa documental caracteriza indício de ocultação de origem. Comunicado ao COAF.',
+      'A combinação de fracionamento abaixo do limiar de atenção, origem em múltiplas chaves de terceiros e horário atípico configura estruturação (smurfing digital via Pix). Comunicado ao COAF nos termos da Portaria SPA/MF 1.143/2024.',
     lesson:
-      'Quando o valor por transação se mantém consistentemente abaixo de um limiar regulatório e o cliente não apresenta justificativa crível, aplica-se a tipologia de "estruturação" (smurfing).',
+      'No ambiente de apostas online, o equivalente ao "smurfing" bancário é o fracionamento via múltiplas chaves Pix de terceiros. O indicador-chave é o valor sistematicamente abaixo de um limiar perceptível combinado com origens diversas.',
   },
   {
     id: 'ex-002',
@@ -102,9 +102,9 @@ const EXAMPLES: ExampleCase[] = [
   },
   {
     id: 'ex-003',
-    title: 'Saque em Espécie em Viagem Internacional',
-    pattern: 'Saques em espécie no exterior',
-    tags: ['Espécie', 'Internacional', 'Apostas'],
+    title: 'Saques Pix para Contas Suspeitas',
+    pattern: 'Saques em rápida sucessão para contas não relacionadas',
+    tags: ['Layering', 'Pix', 'Contas Mulá'],
     priority: 'MEDIUM',
     profile: {
       name: 'Fernanda Queiroz Leal (fictícia)',
@@ -113,28 +113,27 @@ const EXAMPLES: ExampleCase[] = [
       monthlyIncome: 'R$ 8.500',
     },
     flagReason:
-      'Cliente realizou 7 saques em ATMs em Buenos Aires e Santiago totalizando USD 8.400 em 10 dias, tendo declarado la viagem como "turismo".',
+      'A apostadora realizou 8 saques via Pix para 5 chaves CPF/CNPJ diferentes em menos de 6 horas, logo após depositar R$\u00a018.000. Nenhuma das contas de destino possui relacionamento anterior com ela.',
     analysisSteps: [
-      'Cruzar com extrato de cartão: nenhuma compra de passagem ou hotel consta no cartão.',
-      'Verificar se cliente possui conta no exterior ou declaração ao BACEN de ativos externos.',
-      'Consultar histórico de viagens: esta é a primeira movimentação internacional em 5 anos.',
-      'Verificar se há indício de jogo: cliente tem alertas anteriores ligados a apostas esportivas online.',
+      'Identificar as chaves Pix de destino: 4 CPFs cadastrados há menos de 30 dias no Bacen.',
+      'Verificar se os destinatários aparecem em outras investigações: 2 CPFs com ligação a casos de lavagem.',
+      'Checar padrão após o saque: conta da apostadora ficou com saldo residual < R$\u00a050 — conta usada como passagem.',
+      'Solicitar extrato completo dos últimos 6 meses para verificar recorrência.',
     ],
     redFlags: [
-      'Valor acumulado ultrapassa limite de USD 5.000 sem declaração à Receita.',
-      'Saques excluivamente em espécie sem consumo registrado no destino.',
-      'Padrão inconsistente com renda e histórico comportamental.',
+      'Contas de destino com data de abertura muito recente e sem movimentação prévia.',
+      'Volume total retirado em 6 horas representou 96% do depósito — conta de passagem.',
+      'Ausência de qualquer relação entre apostadora e beneficiários identificada no CRM.',
     ],
     mitigatingFactors: [
-      'Cliente sem histórico de inadimplência ou ocorrências graves.',
-      'Declarou viagem com antecedência na central de relacionamento.',
-      'Parte do valor pode ser compatível com gastos turísticos de classe média.',
+      'Apostadora sem histórico de inadimplência ou ocorrências graves.',
+      'Parte do volume pode ser compatível com transferência familiar não declarada.',
     ],
     decision: 'INVESTIGATING',
     decisionRationale:
-      'Caso não é conclusivo. Solicitou-se ao gerente de relacionamento o contato com a cliente para esclarecimentos antes da decisão final. O prazo de investigação é de 15 dias úteis.',
+      'Caso não é conclusivo. Solicitou-se à equipe de KYC contato com a apostadora para esclarecimentos antes da decisão final sobre comunicação ao COAF. O prazo de investigação é de 15 dias úteis.',
     lesson:
-      'Nem todo saque no exterior é lavagem. A fase de investigação existe para coletar contexto adicional. Use a aba "Decisão" para registrar cada passo antes de comunicar.',
+      'Saques Pix em rápida sucessão para múltiplas contas recém-abertas são o equivalente eletrônico da \"conta mula\". A fase de investigação existe para coletar contexto adicional antes de comunicar.',
   },
   {
     id: 'ex-004',
@@ -151,17 +150,17 @@ const EXAMPLES: ExampleCase[] = [
     flagReason:
       'Depósito único de R$ 380.000 em conta com histórico médio de R$ 2.000/mês gerou alerta de alta variação.',
     analysisSteps: [
-      'Contato com cliente via gerente de conta: informou recebimento de herança.',
+      'Contato com apostador via equipe de KYC/Compliance: informou recebimento de herança.',
       'Solicitação de documentação: escritura de inventário e certidão de formal de partilha apresentados.',
       'Verificação do inventariante: advogado regularmente inscrito na OAB.',
       'Origem dos recursos: conta do espólio em outro banco, com comprovante de TED.',
     ],
     redFlags: [
-      'Variação brusca no volume para o perfil cadastral do cliente.',
+      'Variação brusca no volume para o perfil cadastral do apostador.',
     ],
     mitigatingFactors: [
       'Documentação completa e consistente apresentada voluntariamente.',
-      'Cliente com 15 anos de relacionamento sem ocorrências.',
+      'Apostador com 15 anos de relacionamento sem ocorrências.',
       'Origem dos recursos rastreável e compatível com herança declarada.',
     ],
     decision: 'CLOSED',
@@ -232,7 +231,7 @@ function ExampleCard({ ex }: { ex: ExampleCase }) {
           {/* Perfil fictício */}
           <section>
             <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">
-              <User size={12} /> Perfil do cliente (fictício)
+              <User size={12} /> Perfil do apostador (fictício)
             </h3>
             <div className="mt-2 grid grid-cols-2 gap-2 rounded-lg border border-dashed border-gray-200 bg-gray-50 p-3 text-xs text-gray-700 md:grid-cols-4">
               <div><span className="block text-gray-400">Nome</span>{ex.profile.name}</div>

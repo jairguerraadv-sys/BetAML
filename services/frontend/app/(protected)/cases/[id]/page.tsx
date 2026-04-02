@@ -323,7 +323,7 @@ function TabOverview({ c }: { c: CaseDetail }) {
               </div>
             </div>
             <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Transações do cliente</p>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Transações do apostador</p>
               <div className="space-y-2">
                 {(lookup?.transactions ?? []).map((tx) => (
                   <div key={tx.id} className="flex items-center justify-between rounded-lg border border-gray-100 px-3 py-2 text-xs">
@@ -398,7 +398,7 @@ function TabProfile({ playerId }: { playerId: string | undefined }) {
   if (!playerId) return (
     <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 py-16 text-center">
       <User size={32} className="mx-auto mb-3 text-gray-300" />
-      <p className="text-sm text-gray-400">Nenhum cliente vinculado a este caso.</p>
+      <p className="text-sm text-gray-400">Nenhum apostador vinculado a este caso.</p>
     </div>
   );
 
@@ -456,7 +456,7 @@ function TabProfile({ playerId }: { playerId: string | undefined }) {
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h3 className="mb-2 text-sm font-semibold text-gray-700">Compatibilidade Econômica</h3>
           <p className="mb-3 text-xs text-gray-500">
-            Compara o volume de depósitos dos últimos 30 dias com a renda declarada do cliente.
+            Compara o volume de depósitos dos últimos 30 dias com a renda declarada do apostador.
           </p>
           <div className="mb-3 flex items-center gap-3">
             <span className={`rounded-full px-3 py-1 text-xs font-bold ${ECON_CLS[econ.tier]}`}>
@@ -778,7 +778,7 @@ function TabNetwork({ playerId }: { playerId: string | undefined }) {
   if (!playerId) return (
     <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 py-16 text-center">
       <Network size={32} className="mx-auto mb-3 text-gray-300" />
-      <p className="text-sm text-gray-400">Nenhum cliente vinculado a este caso.</p>
+      <p className="text-sm text-gray-400">Nenhum apostador vinculado a este caso.</p>
     </div>
   );
 
@@ -792,7 +792,7 @@ function TabNetwork({ playerId }: { playerId: string | undefined }) {
           <Network size={14} /> O que é a rede de vínculos?
         </h3>
         <p className="text-xs text-blue-700 leading-relaxed">
-          O sistema rastreia clientes que compartilham o mesmo dispositivo ou conta bancária.
+          O sistema rastreia apostadores que compartilham o mesmo dispositivo ou chave Pix/conta.
           Vínculos não indicam ilicitude por si só, mas são relevantes para avaliar se há
           coordenação entre contas no esquema investigado.
         </p>
@@ -812,7 +812,7 @@ function TabNetwork({ playerId }: { playerId: string | undefined }) {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-gray-100 text-left text-gray-400">
-                    <th className="pb-2 pr-4">ID do cliente vinculado</th>
+                    <th className="pb-2 pr-4">ID do apostador vinculado</th>
                     <th className="pb-2 pr-4">Tipo de vínculo</th>
                     <th className="pb-2">Identificador compartilhado</th>
                   </tr>
@@ -835,7 +835,7 @@ function TabNetwork({ playerId }: { playerId: string | undefined }) {
                               ? 'bg-orange-100 text-orange-700'
                               : 'bg-blue-100 text-blue-700'
                           }`}>
-                            {link.type === 'device' ? '📱 Dispositivo' : '🏦 Conta bancária'}
+                            {link.type === 'device' ? '📱 Dispositivo' : '🏦 Conta/PIX'}
                           </span>
                         </td>
                         <td className="py-2 font-mono text-gray-500">
@@ -854,7 +854,7 @@ function TabNetwork({ playerId }: { playerId: string | undefined }) {
           <Network size={32} className="mx-auto mb-3 text-gray-300" />
           <p className="text-sm font-medium text-gray-500">Nenhum vínculo encontrado</p>
           <p className="mt-1 text-xs text-gray-400">
-            Este cliente não compartilha dispositivo ou conta bancária com outros clientes no sistema.
+            Este apostador não compartilha dispositivo ou chave Pix/conta com outros apostadores no sistema.
           </p>
         </div>
       )}
@@ -925,7 +925,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
         </p>
         <div className="space-y-2">
           {[
-            'Verifiquei o perfil cadastral e histórico do cliente',
+            'Verifiquei o perfil cadastral e histórico do apostador',
             'Analisei as movimentações e apostas no período suspeito',
             'Avaliei se o volume é compatível com a renda declarada',
             'Verifiquei possível exposição a PEP ou jurisdição de risco',
@@ -1017,7 +1017,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                 rows={5}
                 value={narrative}
                 onChange={(e) => setNarrative(e.target.value)}
-                placeholder="Descreva de forma objetiva: o que foi detectado, quais padrões são suspeitos e por quê a operação/cliente merece (ou não) ser reportada..."
+                placeholder="Descreva de forma objetiva: o que foi detectado, quais padrões são suspeitos e por quê a operação/apostador merece (ou não) ser reportada..."
                 className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
               />
             </div>

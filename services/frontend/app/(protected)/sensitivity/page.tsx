@@ -196,7 +196,7 @@ export default function SensitivityPage() {
           <div>
             <p className="font-semibold">Como interpretar os limiares</p>
             <p className="mt-1 text-blue-800">
-              O sistema calcula um <strong>score de 0 a 100</strong> para cada cliente combinando regras,
+              O sistema calcula um <strong>score de 0 a 100</strong> para cada apostador combinando regras,
               ML e análise de rede. Alertas são gerados quando o score supera o limiar da faixa correspondente.
               Limiares menores → mais alertas (maior recall). Limiares maiores → menos alertas (maior precisão).
             </p>
@@ -208,11 +208,11 @@ export default function SensitivityPage() {
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <h2 className="mb-1 text-base font-bold text-gray-800">Pesos por componente de score
           <ContextualHelp title="Como funcionam os pesos?" side="right">
-            <p className="mb-1">O score final de um cliente é calculado pela média ponderada de três componentes:</p>
+            <p className="mb-1">O score final de um apostador é calculado pela média ponderada de três componentes:</p>
             <ul className="space-y-1 pl-2">
               <li>• <strong>Regras:</strong> condições determinísticas (ex: "depósitos acima de R$50k em 24h")</li>
-              <li>• <strong>ML:</strong> modelos treinados no histórico do próprio cliente</li>
-              <li>• <strong>Rede:</strong> vínculos com outros clientes via dispositivo ou conta bancária</li>
+              <li>• <strong>ML:</strong> modelos treinados no histórico do próprio apostador</li>
+              <li>• <strong>Rede:</strong> vínculos com outros apostadores via dispositivo ou chave Pix/conta</li>
             </ul>
             <p className="mt-2 text-gray-500">A soma deve ser sempre 100%. Se você aumenta um, precisa reduzir outro.</p>
           </ContextualHelp>

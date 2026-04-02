@@ -5,7 +5,7 @@
  *
  * 4 passos para conduzir o analista do alerta à decisão:
  *   1. O que aconteceu?  — resumo do alerta em linguagem simples + evidências
- *   2. Quem é o cliente? — perfil, risco, PEP e compatibilidade econômica
+ *   2. Quem é o apostador? — perfil, risco, PEP e compatibilidade econômica
  *   3. Como o dinheiro se moveu? — transações e apostas relacionadas
  *   4. Qual é a sua conclusão? — triagem + opção de abrir caso formal
  */
@@ -48,12 +48,12 @@ import {
 // ── Dicionários de tradução ──────────────────────────────────────────────────
 
 const TYPE_EXPLAIN: Record<string, string> = {
-  VELOCITY:       'Movimentação em velocidade incompatível com o perfil do cliente',
+  VELOCITY:       'Movimentação em velocidade incompatível com o perfil do apostador',
   STRUCTURING:    'Múltiplas operações menores para evitar controles (fracionamento)',
   ML_ANOMALY:     'Comportamento divergente do histórico detectado pelo sistema de IA',
   PEP_EXPOSURE:   'Envolvimento com pessoa politicamente exposta ou jurisdição de risco',
   MULTI_ACCOUNT:  'Uso de múltiplas contas ou dispositivos em curto intervalo',
-  HIGH_RISK_CUST: 'Cliente classificado como perfil de alto risco',
+  HIGH_RISK_CUST: 'Apostador classificado como perfil de alto risco',
   COMPOSITE:      'Combinação de múltiplos fatores de risco detectados simultaneamente',
 };
 
@@ -121,7 +121,7 @@ function fmtBRL(v: number) {
 
 const STEPS = [
   { id: 1, label: 'O alerta',       icon: AlertTriangle },
-  { id: 2, label: 'O cliente',      icon: User },
+  { id: 2, label: 'O apostador',    icon: User },
   { id: 3, label: 'Movimentações',  icon: ArrowRightLeft },
   { id: 4, label: 'Sua decisão',    icon: Gavel },
 ];
@@ -298,7 +298,7 @@ function StepAlert({
   );
 }
 
-// ── Step 2: O cliente ────────────────────────────────────────────────────────
+// ── Step 2: O apostador ─────────────────────────────────────────────────────
 
 function StepPlayer({
   player,
@@ -310,7 +310,7 @@ function StepPlayer({
   if (!player) {
     return (
       <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 py-16 text-center text-sm text-gray-400">
-        Nenhum cliente vinculado a este alerta.
+        Nenhum apostador vinculado a este alerta.
       </div>
     );
   }
@@ -318,7 +318,7 @@ function StepPlayer({
   return (
     <div className="space-y-5">
       {/* Identificação */}
-      <Card title="Identificação do cliente" icon={User}>
+      <Card title="Identificação do apostador" icon={User}>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
           <div>
             <p className="text-xs text-gray-400">ID externo</p>

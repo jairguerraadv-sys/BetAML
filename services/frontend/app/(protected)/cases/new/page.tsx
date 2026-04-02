@@ -29,7 +29,7 @@ export default function NewCasePage() {
     <div className="mx-auto max-w-2xl space-y-4">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Novo Caso</h1>
-        <p className="text-sm text-gray-500">Abra uma investigação manual para um alerta ou cliente.</p>
+        <p className="text-sm text-gray-500">Abra uma investigação manual para um alerta ou apostador.</p>
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm space-y-4">
