@@ -233,16 +233,16 @@ export default function ReportsPage() {
             </div>
           )}
 
-          {/* Top clientes */}
+          {/* Top apostadores */}
           {report.top_players_by_risk.length > 0 && (
             <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
               <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">
-                <Users size={14} /> Top Clientes por Risco Médio
+                <Users size={14} /> Top Apostadores por Risco Médio
               </h3>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 text-xs text-gray-400">
-                    <th className="pb-2 text-left">Cliente (ID externo)</th>
+                    <th className="pb-2 text-left">Apostador (ID externo)</th>
                     <th className="pb-2 text-right">Score médio</th>
                   </tr>
                 </thead>

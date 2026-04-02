@@ -41,12 +41,12 @@ const SEV_STYLES: Record<string, { card: string; badge: string; dot: string }> =
 };
 
 const TYPE_EXPLAIN: Record<string, string> = {
-  VELOCITY:       'Movimentação em velocidade incompatível com o perfil do cliente',
+  VELOCITY:       'Movimentação em velocidade incompatível com o perfil do apostador',
   STRUCTURING:    'Padrão de múltiplas operações menores para evitar controles',
   ML_ANOMALY:     'Comportamento divergente do padrão histórico detectado pelo sistema',
   PEP_EXPOSURE:   'Envolvimento com pessoa politicamente exposta ou jurisdição de risco',
   MULTI_ACCOUNT:  'Uso de múltiplas contas ou dispositivos em curto período',
-  HIGH_RISK_CUST: 'Cliente classificado como perfil de alto risco',
+  HIGH_RISK_CUST: 'Apostador classificado como perfil de alto risco',
   COMPOSITE:      'Combinação de múltiplos fatores de risco detectados simultaneamente',
 };
 

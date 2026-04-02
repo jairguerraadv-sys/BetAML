@@ -102,7 +102,7 @@ STRUCTURING_COLS = [
 # Graph / DBSCAN uses only network features
 GRAPH_COLS = [
     "shared_device_count", "shared_instrument_score",
-    "unique_instruments_7d", "multi_currency_flag",
+    "unique_instruments_7d", "inconsistent_currency_flag",
 ]
 
 # Cache de modelos carregados por tenant
@@ -983,7 +983,7 @@ def train_graph(req: TrainRequest):
         rng.integers(0, 20, n).astype(float),  # shared_device_count
         rng.random(n),                           # shared_instrument_score
         rng.integers(1, 10, n).astype(float),   # unique_instruments_7d
-        rng.integers(0, 2, n).astype(float),    # multi_currency_flag
+        rng.integers(0, 2, n).astype(float),    # inconsistent_currency_flag
     ])
     X = StandardScaler().fit_transform(X)
 

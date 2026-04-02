@@ -251,7 +251,7 @@ async def get_player_feature_history(
         "shared_device_count", "shared_bank_count", "chargeback_count_30d",
         "deposit_velocity", "unique_instruments_7d", "night_activity_ratio",
         "weekend_activity_ratio", "avg_odds_bet_7d", "win_loss_ratio_30d",
-        "avg_dep_to_wdraw_hours", "multi_currency_flag", "chargeback_rate_30d",
+        "avg_dep_to_wdraw_hours", "inconsistent_currency_flag", "chargeback_rate_30d",
         "bonus_to_real_ratio_30d", "cashout_ratio_7d", "shared_instrument_score",
         "feature_version",
         "computed_at",
@@ -807,7 +807,7 @@ async def get_player_network(
                 for src in pid_set:
                     all_edges.append({
                         "source": src, "target": p2,
-                        "edge_type": "bank_account",
+                        "edge_type": "payment_account",
                         "shared_hash_prefix": bh[:12] + "…",
                         "event_count": int(ev_cnt),
                         "weight": min(1.0, round(ev_cnt / 5, 2)),

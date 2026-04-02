@@ -22,7 +22,8 @@ type PositionedNode = {
 
 const colorByLinkType: Record<string, string> = {
   device: '#f97316',
-  bank_account: '#2563eb',
+  payment_account: '#2563eb',
+  bank_account: '#2563eb',   // alias retrocompatível
 };
 
 function shortId(value: string): string {
@@ -105,7 +106,7 @@ export default function PlayerNetworkGraph({ playerId, relatedPlayers }: GraphPr
 
             {satellites.map((node) => {
               const dominantType = node.links[0]?.type ?? 'device';
-              const fill = dominantType === 'bank_account' ? '#1d4ed8' : '#ea580c';
+              const fill = (dominantType === 'payment_account' || dominantType === 'bank_account') ? '#1d4ed8' : '#ea580c';
               return (
                 <g key={node.id}>
                   <circle cx={node.x} cy={node.y} r="22" fill={fill} opacity="0.92" />
@@ -122,7 +123,7 @@ export default function PlayerNetworkGraph({ playerId, relatedPlayers }: GraphPr
               <span className="inline-block h-2 w-2 rounded-full bg-orange-500" /> device compartilhado
             </span>
             <span className="inline-flex items-center gap-1 text-gray-600">
-              <span className="inline-block h-2 w-2 rounded-full bg-blue-700" /> conta bancária compartilhada
+              <span className="inline-block h-2 w-2 rounded-full bg-blue-700" /> conta / Pix compartilhado
             </span>
           </div>
         </>

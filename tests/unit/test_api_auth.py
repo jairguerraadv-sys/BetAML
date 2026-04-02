@@ -332,7 +332,7 @@ class TestFeatureComputation:
             ]
         }
         feats = compute_features_offline("PLY-001", history)
-        assert feats["multi_currency_flag"] is True
+        assert feats["inconsistent_currency_flag"] is True
 
     def test_chargeback_rate(self):
         from services.stream_processor.main import compute_features_offline  # type: ignore

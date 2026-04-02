@@ -33,7 +33,7 @@ const GROUPS = [
   },
   {
     label: 'Rede & Risco',
-    keys: ['multi_currency_flag', 'shared_device_score', 'shared_instrument_score', 'cluster_size', 'cluster_id'],
+    keys: ['inconsistent_currency_flag', 'shared_device_score', 'shared_instrument_score', 'cluster_size', 'cluster_id'],
   },
 ];
 
@@ -57,7 +57,7 @@ const LABELS: Record<string, string> = {
   unique_instruments_used_7d: 'Instrumentos únicos (7d)',
   avg_time_between_deposit_and_withdrawal_7d: 'Tempo méd. depósito->saque',
   bonus_to_real_money_ratio_30d: 'Ratio bônus/dinheiro real (30d)',
-  multi_currency_flag: 'Multi-moeda',
+  inconsistent_currency_flag: 'Moeda inconsistente',
   shared_device_score: 'Score device compartilhado',
   shared_instrument_score: 'Score rede (instrumento)',
   cluster_size: 'Tamanho do cluster',

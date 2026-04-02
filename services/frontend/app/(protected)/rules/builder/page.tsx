@@ -49,16 +49,18 @@ const FIELDS: FieldDef[] = [
   { key: 'features.deposit_sum_30d',               label: 'Volume depósitos (30d)',         type: 'number', unit: 'R$',         hint: 'Soma dos depósitos nos últimos 30 dias' },
   { key: 'features.deposit_count_24h',             label: 'Depósitos em 24h',               type: 'number', unit: 'N',          hint: 'Indicador de estruturação/smurfing' },
   { key: 'features.withdrawal_sum_7d',             label: 'Volume saques (7d)',              type: 'number', unit: 'R$' },
-  { key: 'features.chargeback_count_30d',          label: 'Chargebacks (30d)',              type: 'number', unit: 'N' },
+  { key: 'features.chargeback_count_30d',          label: 'Estornos/contestações (30d)',    type: 'number', unit: 'N',          hint: 'Contagem de estornos Pix ou reversões administrativas nos últimos 30d' },
   { key: 'features.avg_deposit_to_withdrawal_hours', label: 'Tempo médio depósito→saque',   type: 'number', unit: 'horas',      hint: 'Valores baixos indicam layering' },
   { key: 'features.shared_device_count',           label: 'Dispositivos compartilhados',    type: 'number', unit: 'N' },
   { key: 'features.unique_instruments_7d',         label: 'Instrumentos únicos (7d)',        type: 'number', unit: 'N' },
-  { key: 'features.cashout_ratio_7d',              label: 'Ratio saque (7d)',               type: 'number', unit: '0–1' },
-  { key: 'features.cluster_size',                  label: 'Tamanho do cluster',             type: 'number', unit: 'N' },
+  { key: 'features.cashout_ratio_7d',              label: '% do saldo sacado (7d)',          type: 'number', unit: '0–1' },
+  { key: 'features.cluster_size',                  label: 'Apostadores no mesmo grupo',     type: 'number', unit: 'N' },
   { key: 'player.risk_score',                      label: 'Score de risco',                 type: 'number', unit: '0–100' },
   { key: 'player.pep_flag',                        label: 'É PEP',                          type: 'select', options: ['true', 'false'] },
   { key: 'transaction.amount',                     label: 'Valor da transação',             type: 'number', unit: 'R$' },
-  { key: 'transaction.type',                       label: 'Tipo de transação',              type: 'select', options: ['DEPOSIT', 'WITHDRAWAL', 'CHARGEBACK', 'BONUS'] },
+  { key: 'features.bonus_to_real_ratio_30d',       label: 'Bônus vs depósitos reais (30d)', type: 'number', unit: '0–1',        hint: 'Proporção de créditos de bônus sobre depósitos reais' },
+  { key: 'player.self_exclusion_flag',             label: 'Autoexclusão ativa',             type: 'select', options: ['true', 'false'], hint: 'Apostador registrado no SIGAP com autoexclusão vigente (Portaria 1.231/2024)' },
+  { key: 'transaction.type',                       label: 'Tipo de transação',              type: 'select', options: ['DEPOSIT', 'WITHDRAWAL', 'REVERSAL', 'BONUS', 'CASHOUT', 'FREE_BET'] },
 ];
 
 const OPERATORS: { value: Operator; label: string; types: FieldType[] }[] = [
@@ -121,6 +123,26 @@ const TEMPLATES: RuleTemplate[] = [
     conditions: [
       { field: 'features.cashout_ratio_7d',  operator: 'gte', value: '0.9' },
       { field: 'features.deposit_sum_30d',   operator: 'gte', value: '10000' },
+    ],
+  },
+  {
+    id: 'bonus_abuse',
+    name: 'Abuso de Bônus / Free Bets',
+    description: 'Uso intensivo de bônus e free bets para movimentar saldo sem risco real — possível evasão via apostas',
+    icon: '🎁', tag: 'Bônus Abuse', severity: 'MEDIUM', scope: 'PLAYER',
+    conditions: [
+      { field: 'features.bonus_to_real_ratio_30d', operator: 'gte', value: '0.7' },
+      { field: 'features.cashout_ratio_7d',        operator: 'gte', value: '0.8' },
+    ],
+  },
+  {
+    id: 'self_exclusion_active',
+    name: 'Aposta com Autoexclusão Ativa',
+    description: 'Apostador com autoexclusão registrada realizando apostas — violação Portaria 1.231/2024 (jogo responsável)',
+    icon: '🚫', tag: 'Jogo Responsável', severity: 'CRITICAL', scope: 'PLAYER',
+    conditions: [
+      { field: 'player.self_exclusion_flag', operator: 'eq',  value: 'true' },
+      { field: 'player.risk_score',          operator: 'gte', value: '0' },
     ],
   },
 ];

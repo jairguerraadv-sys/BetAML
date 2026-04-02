@@ -26,11 +26,14 @@ class EntityType(str, Enum):
 
 
 class TransactionType(str, Enum):
-    DEPOSIT = "DEPOSIT"
+    DEPOSIT    = "DEPOSIT"
     WITHDRAWAL = "WITHDRAWAL"
-    CHARGEBACK = "CHARGEBACK"
-    BONUS = "BONUS"
+    REVERSAL   = "REVERSAL"    # estorno Pix / devolução administrativa (era CHARGEBACK)
+    BONUS      = "BONUS"
+    FREE_BET   = "FREE_BET"    # crédito de bônus sem valor real (Portaria 1.143/2024)
+    CASHOUT    = "CASHOUT"     # resgate antecipado de aposta em aberto
     ADJUSTMENT = "ADJUSTMENT"
+    CHARGEBACK = "CHARGEBACK"  # DEPRECATED — alias para REVERSAL; mantido para retrocompatibilidade
 
 
 class TransactionStatus(str, Enum):
@@ -41,11 +44,14 @@ class TransactionStatus(str, Enum):
 
 
 class PaymentMethod(str, Enum):
-    PIX = "PIX"
-    TED = "TED"
-    CARD = "CARD"
-    WALLET = "WALLET"
-    OTHER = "OTHER"
+    PIX         = "PIX"
+    TED         = "TED"
+    DEBIT       = "DEBIT"        # débito direto em conta corrente
+    CARD_DEBIT  = "CARD_DEBIT"   # cartão de débito (permitido para depósito)
+    CARD_CREDIT = "CARD_CREDIT"  # cartão de crédito — PROIBIDO para depósito (art. 5º Portaria 1.143/2024)
+    WALLET      = "WALLET"       # carteira de pagamento regulada
+    OTHER       = "OTHER"
+    CARD        = "CARD"         # DEPRECATED — alias mapeado para CARD_DEBIT na ingestão
 
 
 class BetChannel(str, Enum):
@@ -83,6 +89,8 @@ class PlayerPayload(BaseModel):
     phone: Optional[str] = None
     nationality: Optional[str] = "BR"
     registration_date: Optional[datetime] = None
+    self_exclusion_flag: bool = False              # autoexclusão ativa no cadastro SIGAP (Portaria 1.231/2024)
+    deposit_limit_daily: Optional[Decimal] = None  # limite de depósito diário declarado no KYC
 
 
 class PaymentInstrument(BaseModel):
@@ -800,10 +808,10 @@ class PlayerFeaturesV2(PlayerFeatures):
     avg_odds_bet_7d: Optional[Decimal] = None
     win_loss_ratio_30d: Optional[Decimal] = None
     avg_deposit_to_withdrawal_hours: Optional[Decimal] = None  # avg hours
-    multi_currency_flag: bool = False
-    chargeback_rate_30d: Decimal = Decimal("0")       # chargebacks / deposits
-    bonus_to_real_ratio_30d: Decimal = Decimal("0")   # bonus_credited / deposits
-    cashout_ratio_7d: Decimal = Decimal("0")          # withdrawals / deposits
+    inconsistent_currency_flag: bool = False       # transação em moeda diferente de BRL — anomalia de dado (era multi_currency_flag)
+    chargeback_rate_30d: Decimal = Decimal("0")     # taxa de estornos/reversões nos últimos 30d
+    bonus_to_real_ratio_30d: Decimal = Decimal("0") # proporção bônus/depósito real (indicador de abuso de bônus)
+    cashout_ratio_7d: Decimal = Decimal("0")         # proporção saques/depósitos em 7d (indicador de round-trip)
 
     # Network features (graph)
     cluster_id: Optional[str] = None

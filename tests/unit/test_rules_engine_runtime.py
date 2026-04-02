@@ -35,7 +35,7 @@ def test_load_features_coerces_bool_int_and_float():
     redis.hgetall.return_value = {
         "feature_version": "2",
         "shared_device_score": "0.4",
-        "multi_currency_flag": "true",
+        "inconsistent_currency_flag": "true",
         "cluster_id": "cluster:abc",
     }
 
@@ -43,7 +43,7 @@ def test_load_features_coerces_bool_int_and_float():
 
     assert features["feature_version"] == 2
     assert features["shared_device_score"] == 0.4
-    assert features["multi_currency_flag"] is True
+    assert features["inconsistent_currency_flag"] is True
     assert features["cluster_id"] == "cluster:abc"
 
 

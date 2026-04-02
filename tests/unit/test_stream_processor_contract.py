@@ -133,7 +133,7 @@ def _make_features(tenant_id="tenant-a", player_id="player-001"):
         "avg_odds_bet_7d": 2.1,
         "win_loss_ratio_30d": 0.55,
         "avg_deposit_to_withdrawal_hours": 48.0,
-        "multi_currency_flag": False,
+        "inconsistent_currency_flag": False,
         "chargeback_rate_30d": 0.0,
         "bonus_to_real_ratio_30d": 0.05,
         "cashout_ratio_7d": 0.2,

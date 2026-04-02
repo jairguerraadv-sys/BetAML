@@ -144,7 +144,7 @@ window_count('DEPOSIT', 24) >= 5 AND window_sum('DEPOSIT', 24) > 40000
 night_activity_ratio > 0.8 AND txn_count_30d > 100
 
 # Multi-moeda + alto volume
-multi_currency_flag == true AND txn_amount_7d > 50000
+inconsistent_currency_flag == true AND txn_amount_7d > 50000
 
 # Jogador em lista de restrição
 is_in_list(player_id, 'BLOCKLIST') == true
@@ -191,7 +191,7 @@ Em **Feature Store**, consulte o perfil de features de qualquer jogador:
 | Volume | deposit_count_1h/24h/7d/90d, deposit_sum_24h/30d/90d |
 | Depósitos/Saques | withdrawal_count_24h/7d/90d, withdrawal_sum_24h/30d/90d, deposit_velocity |
 | Comportamento | night_activity_ratio, weekend_activity_ratio, avg_odds_bet_7d, win_loss_ratio_30d, avg_time_between_deposit_and_withdrawal_7d |
-| Rede | shared_instrument_score, shared_device_score, cluster_id, cluster_size, unique_instruments_7d, multi_currency_flag |
+| Rede | shared_instrument_score, shared_device_score, cluster_id, cluster_size, unique_instruments_7d, inconsistent_currency_flag |
 
 ### Fontes Consultadas pela Plataforma
 

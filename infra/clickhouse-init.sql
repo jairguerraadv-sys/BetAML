@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS betaml.player_features_daily (
     avg_odds_bet_7d         Decimal(10,4),
     win_loss_ratio_30d      Decimal(10,4),
     avg_dep_to_wdraw_hours  Decimal(10,4),
-    multi_currency_flag     UInt8,
+    inconsistent_currency_flag UInt8,
     chargeback_rate_30d     Decimal(10,4),
     bonus_to_real_ratio_30d Decimal(10,4),
     cashout_ratio_7d        Decimal(10,4),

@@ -593,6 +593,23 @@ async def ingest_event(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(400, f"Falha ao aplicar mapping no evento: {exc}") from exc
 
+    # Rejeição de CARD_CREDIT para depósitos — Portaria SPA/MF 1.143/2024 art. 5º
+    if body.entity_type == "TRANSACTION" and mapped_payload.get("method") == "CARD_CREDIT":
+        db.add(IngestError(
+            tenant_id=principal.tenant_id,
+            source_system=body.source_system,
+            entity_type="TRANSACTION",
+            raw_payload=json.dumps(body.payload, ensure_ascii=False, default=str),
+            error_reason="PAYMENT_METHOD_NOT_ALLOWED",
+            error_detail={
+                "method": "CARD_CREDIT",
+                "rule": "Portaria SPA/MF 1.143/2024 art. 5 — cartão de crédito proibido para depósito em apostas reguladas",
+            },
+            resolved=False,
+        ))
+        await db.commit()
+        return {"event_id": str(uuid.uuid4()), "status": "quarantined", "reason": "PAYMENT_METHOD_NOT_ALLOWED"}
+
     source_event_id = str(
         mapped_payload.get("event_id")
         or body.source_event_id
@@ -673,6 +690,23 @@ async def ingest_batch(
                     "reason": f"mapping inválido: {exc}",
                 })
                 continue
+
+        # Rejeição de CARD_CREDIT para depósitos — Portaria SPA/MF 1.143/2024 art. 5º
+        if body.entity_type == "TRANSACTION" and mapped_payload.get("method") == "CARD_CREDIT":
+            db.add(IngestError(
+                tenant_id=principal.tenant_id,
+                source_system=body.source_system,
+                entity_type="TRANSACTION",
+                raw_payload=json.dumps(body.payload, ensure_ascii=False, default=str),
+                error_reason="PAYMENT_METHOD_NOT_ALLOWED",
+                error_detail={
+                    "method": "CARD_CREDIT",
+                    "rule": "Portaria SPA/MF 1.143/2024 art. 5 — cartão de crédito proibido para depósito em apostas reguladas",
+                },
+                resolved=False,
+            ))
+            results.append({"status": "quarantined", "reason": "PAYMENT_METHOD_NOT_ALLOWED"})
+            continue
 
         source_event_id = str(
             mapped_payload.get("event_id")

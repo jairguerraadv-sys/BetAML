@@ -31,9 +31,9 @@ const SCOPE_LABEL: Record<string, string> = {
 function fpBadge(rate?: number | null) {
   if (rate == null) return null;
   const pct = rate * 100;
-  if (pct <= 15) return { cls: 'bg-green-50 text-green-700 border-green-200', icon: <ShieldCheck size={12} />, label: `FP ${pct.toFixed(0)}%` };
-  if (pct <= 35) return { cls: 'bg-yellow-50 text-yellow-700 border-yellow-200', icon: <ShieldAlert size={12} />, label: `FP ${pct.toFixed(0)}%` };
-  return { cls: 'bg-red-50 text-red-700 border-red-200', icon: <ShieldOff size={12} />, label: `FP ${pct.toFixed(0)}%` };
+  if (pct <= 15) return { cls: 'bg-green-50 text-green-700 border-green-200', icon: <ShieldCheck size={12} />, label: `${pct.toFixed(0)}% falsos alarmes` };
+  if (pct <= 35) return { cls: 'bg-yellow-50 text-yellow-700 border-yellow-200', icon: <ShieldAlert size={12} />, label: `${pct.toFixed(0)}% falsos alarmes` };
+  return { cls: 'bg-red-50 text-red-700 border-red-200', icon: <ShieldOff size={12} />, label: `${pct.toFixed(0)}% falsos alarmes` };
 }
 
 function pct(value?: number | null) {
@@ -88,7 +88,7 @@ function RuleCard({
           {/* Row 3 — metadata */}
           <div className="mt-2 flex flex-wrap gap-3 text-xs text-gray-400">
             <span>v{rule.version}</span>
-            <span>Peso {rule.weight ?? 0.5}</span>
+            <span>Influência: {((rule.weight ?? 0.5) * 100).toFixed(0)}%</span>
             {perf && (
               <>
                 <span className="text-green-600 font-medium">Precisão {pct(perf.precision_estimated)}</span>
@@ -102,7 +102,7 @@ function RuleCard({
       {/* Expandable DSL */}
       {expanded && (
         <div className="border-t border-gray-100 bg-gray-50 px-5 py-3 dark:border-gray-700 dark:bg-gray-800">
-          <p className="mb-1 text-xs font-medium text-gray-500">Condição DSL</p>
+          <p className="mb-1 text-xs font-medium text-gray-500">Lógica da condição (técnico)</p>
           <pre className="overflow-x-auto font-mono text-xs text-gray-600 dark:text-gray-300 leading-relaxed">
             {rule.condition_dsl}
           </pre>
@@ -116,7 +116,7 @@ function RuleCard({
           className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600"
         >
           {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-          {expanded ? 'Ocultar DSL' : 'Ver DSL'}
+          {expanded ? 'Ocultar lógica técnica' : 'Ver lógica técnica'}
         </button>
         <div className="flex items-center gap-2">
           <Link
@@ -129,7 +129,7 @@ function RuleCard({
             onClick={() => onSimulate(rule)}
             className="flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand/90"
           >
-            <FlaskConical size={12} /> Simular
+            <FlaskConical size={12} /> Testar
           </button>
         </div>
       </div>
@@ -227,16 +227,16 @@ export default function RulesPage() {
       {/* Header */}
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Regras de Detecção</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Condições de Risco</h1>
           <p className="mt-1 text-sm text-gray-500">
-            {rules.length} regra{rules.length !== 1 ? 's' : ''} — clique em <strong>Simular</strong> para testar com histórico real.
+            {rules.length} condição{rules.length !== 1 ? 'ões' : ''} — clique em <strong>Testar</strong> para simular com histórico real.
           </p>
         </div>
         <Link
           href="/rules/builder"
           className="flex items-center gap-2 rounded-xl bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand/90 self-start"
         >
-          <Plus size={15} /> Nova regra
+          <Plus size={15} /> Nova condição
         </Link>
       </div>
 
@@ -246,10 +246,10 @@ export default function RulesPage() {
           <AlertTriangle size={16} className="mt-0.5 flex-shrink-0 text-orange-500" />
           <div>
             <p className="font-semibold">
-              {highFpRules.length} regra{highFpRules.length > 1 ? 's com' : ' com'} taxa de falso positivo acima de 35%
+              {highFpRules.length} condição{highFpRules.length > 1 ? 'ões com' : ' com'} taxa de falso alarme acima de 35%
             </p>
             <p className="mt-0.5 text-orange-700">
-              {highFpRules.map((r) => r.name).join(', ')} — considere ajustar os thresholds ou desativar.
+              {highFpRules.map((r) => r.name).join(', ')} — sugerimos revisar ou desativar estas condições.
             </p>
           </div>
         </div>
@@ -278,11 +278,11 @@ export default function RulesPage() {
         <div className="rounded-xl border border-dashed border-gray-200 py-16 text-center dark:border-gray-700">
           <ShieldOff size={32} className="mx-auto mb-3 text-gray-300" />
           <p className="text-sm text-gray-500">
-            {search ? 'Nenhuma regra encontrada para esta busca.' : 'Nenhuma regra cadastrada ainda.'}
+            {search ? 'Nenhuma condição encontrada para esta busca.' : 'Nenhuma condição cadastrada ainda.'}
           </p>
           {!search && (
             <Link href="/rules/builder" className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white">
-              <Plus size={14} /> Criar primeira regra
+              <Plus size={14} /> Criar primeira condição
             </Link>
           )}
         </div>
@@ -301,7 +301,7 @@ export default function RulesPage() {
               <div>
                 <h2 className="text-lg font-semibold">{selected.name}</h2>
                 <p className="text-xs text-gray-400">
-                  Escopo: {selected.scope} · v{selected.version} · peso {selected.weight ?? 0.5}
+                  Âmbito: {SCOPE_LABEL[selected.scope] ?? selected.scope} · Versão {selected.version} · Influência: {((selected.weight ?? 0.5) * 100).toFixed(0)}%
                 </p>
               </div>
               <button onClick={() => setSelected(null)} className="rounded-lg border px-3 py-1.5 text-sm">
@@ -311,7 +311,7 @@ export default function RulesPage() {
 
             <div className="mb-4 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">Condição DSL</label>
+                <label className="mb-1 block text-xs font-medium text-gray-600">Lógica da condição (técnico)</label>
                 <pre className="overflow-x-auto rounded-lg bg-gray-50 p-3 text-xs dark:bg-gray-800">
                   {selected.condition_dsl}
                 </pre>
@@ -336,7 +336,7 @@ export default function RulesPage() {
                 {simMode === 'manual' ? (
                   <>
                     <label className="mb-1 block text-xs font-medium text-gray-600">
-                      JSON de contexto
+                      Parâmetros de teste (JSON)
                     </label>
                     <textarea
                       rows={7}
@@ -359,12 +359,12 @@ export default function RulesPage() {
                       </div>
                     </div>
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-gray-600">Player IDs</label>
+                      <label className="mb-1 block text-xs font-medium text-gray-600">IDs dos apostadores (opcional)</label>
                       <input
                         value={playerIds}
                         onChange={(e) => setPlayerIds(e.target.value)}
                         className="w-full rounded-lg border px-3 py-2 text-sm dark:bg-gray-800"
-                        placeholder="player-1, player-2"
+                        placeholder="apostador-1, apostador-2"
                       />
                     </div>
                   </div>
@@ -375,7 +375,7 @@ export default function RulesPage() {
                   disabled={simulate.isPending}
                   className="mt-4 w-full rounded-lg bg-brand py-2 text-sm text-white disabled:opacity-50"
                 >
-                  {simulate.isPending ? 'Simulando...' : 'Executar simulação'}
+                  {simulate.isPending ? 'Testando...' : 'Testar com este histórico'}
                 </button>
               </div>
             </div>
@@ -388,7 +388,7 @@ export default function RulesPage() {
                     <p className="mt-1 text-xl font-semibold">{simResult.total_alerts ?? simResult.matches}</p>
                   </div>
                   <div className="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
-                    <p className="text-xs text-gray-400">Players</p>
+                    <p className="text-xs text-gray-400">Apostadores</p>
                     <p className="mt-1 text-xl font-semibold">{simResult.players?.length ?? 0}</p>
                   </div>
                   <div className="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
@@ -400,7 +400,7 @@ export default function RulesPage() {
                     <p className="mt-1 text-xl font-semibold">{pct(simResult.recall_estimated)}</p>
                   </div>
                   <div className="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
-                    <p className="text-xs text-gray-400">Falso positivo est.</p>
+                    <p className="text-xs text-gray-400">Falso alarme est.</p>
                     <p className="mt-1 text-xl font-semibold">{pct(simResult.false_positive_estimated)}</p>
                   </div>
                 </div>
@@ -424,7 +424,7 @@ export default function RulesPage() {
 
                 {simMode === 'manual' && simResult.results.length > 0 && (
                   <div className="rounded-xl border border-gray-100 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-                    <h3 className="mb-3 text-sm font-semibold">Resultados do payload manual</h3>
+                    <h3 className="mb-3 text-sm font-semibold">Resultados do teste manual</h3>
                     <div className="space-y-2">
                       {simResult.results.map((result, idx) => (
                         <div key={idx} className={`rounded-lg border px-3 py-2 text-sm ${result.matched ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'}`}>

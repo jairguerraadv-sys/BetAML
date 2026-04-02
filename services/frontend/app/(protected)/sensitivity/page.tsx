@@ -181,11 +181,11 @@ export default function SensitivityPage() {
       <div>
         <div className="flex items-center gap-2">
           <SlidersHorizontal size={22} className="text-brand" />
-          <h1 className="text-2xl font-bold text-gray-900">Ajustes de Sensibilidade</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Calibração de Sensibilidade</h1>
         </div>
         <p className="mt-1 text-sm text-gray-500">
-          Calibre o volume e a precisão dos alertas sem precisar editar código.
-          Use o botão "Simular impacto" para ver quantos alertas cada cenário geraria nos últimos 30 dias.
+          Controle quantos alertas o sistema gera por dia e com que urgência.
+          Use “Simular impacto” para ver o efeito de qualquer ajuste antes de salvar.
         </p>
       </div>
 
@@ -206,15 +206,15 @@ export default function SensitivityPage() {
 
       {/* Pesos dos componentes */}
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-1 text-base font-bold text-gray-800">Pesos por componente de score
-          <ContextualHelp title="Como funcionam os pesos?" side="right">
-            <p className="mb-1">O score final de um apostador é calculado pela média ponderada de três componentes:</p>
+        <h2 className="mb-1 text-base font-bold text-gray-800">Como o sistema avalia o risco
+          <ContextualHelp title="O que cada componente significa?" side="right">
+            <p className="mb-1">A pontuação de risco combina três perspectivas:</p>
             <ul className="space-y-1 pl-2">
-              <li>• <strong>Regras:</strong> condições determinísticas (ex: "depósitos acima de R$50k em 24h")</li>
-              <li>• <strong>ML:</strong> modelos treinados no histórico do próprio apostador</li>
-              <li>• <strong>Rede:</strong> vínculos com outros apostadores via dispositivo ou chave Pix/conta</li>
+              <li>• <strong>Condições de risco:</strong> regras definidas pelo time de PLD (ex: “depósitos acima de R$ 50k em 24h”)</li>
+              <li>• <strong>Análise de comportamento:</strong> desvios do padrão histórico do próprio apostador</li>
+              <li>• <strong>Rede de vínculos:</strong> conexões com outros apostadores via dispositivo ou chave Pix</li>
             </ul>
-            <p className="mt-2 text-gray-500">A soma deve ser sempre 100%. Se você aumenta um, precisa reduzir outro.</p>
+            <p className="mt-2 text-gray-500">A soma deve ser sempre 100%. Se você aumenta um componente, precisa reduzir outro.</p>
           </ContextualHelp>
         </h2>
         <p className="mb-4 text-xs text-gray-500">
@@ -225,20 +225,20 @@ export default function SensitivityPage() {
         </p>
         <div className="space-y-5">
           <WeightSlider
-            label="Regras Determinísticas"
-            desc="Peso das regras DSL cadastradas (ex: velocity, structuring). Mais alto = regras têm mais influência."
+            label="Condições de risco cadastradas"
+            desc="Quanto as regras de PLD definidas pelo seu time pesam. Mais alto = condições cadastradas têm mais influência no score."
             value={form.rule_weight ?? 0.4}
             onChange={update('rule_weight')}
           />
           <WeightSlider
-            label="Modelos de Machine Learning"
-            desc="Peso dos modelos IsolationForest, GBM e kNN. Mais alto = comportamento histórico tem mais influência."
+            label="Análise de comportamento (IA)"
+            desc="Quanto os desvios do padrão histórico do apostador pesam. Mais alto = comportamento incomum tem mais influência."
             value={form.ml_weight ?? 0.4}
             onChange={update('ml_weight')}
           />
           <WeightSlider
-            label="Análise de Rede e Vínculos"
-            desc="Peso do graph clustering (contas e dispositivos compartilhados). Mais alto = conexões suspeitas têm mais influência."
+            label="Rede de vínculos"
+            desc="Quanto as conexões com outros apostadores (dispositivos, chaves Pix compartilhadas) pesam. Mais alto = rede suspeita tem mais influência."
             value={form.network_weight ?? 0.2}
             onChange={update('network_weight')}
           />
@@ -252,31 +252,31 @@ export default function SensitivityPage() {
 
       {/* Limiares de severidade */}
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-1 text-base font-bold text-gray-800">Limiares de severidade (score 0-100)
-          <ContextualHelp title="O que são os limiares?" side="right">
-            <p className="mb-1">Definem a nota de corte para cada categoria de alerta:</p>
+        <h2 className="mb-1 text-base font-bold text-gray-800">Faixas de risco
+          <ContextualHelp title="O que são as faixas de risco?" side="right">
+            <p className="mb-1">Definem a partir de qual pontuação (0–100) um alerta é classificado em cada categoria:</p>
             <ul className="space-y-1 pl-2">
-              <li>• <strong>Abaixar</strong> o limiar → mais alertas gerados (mais rigoroso)</li>
-              <li>• <strong>Elevar</strong> o limiar → menos alertas (mais seletivo)</li>
+              <li>• <strong>Abaixar</strong> o valor → mais alertas gerados (sistema mais rigoroso)</li>
+              <li>• <strong>Elevar</strong> o valor → menos alertas (sistema mais seletivo)</li>
             </ul>
-            <p className="mt-2 text-gray-500">Use "Simular impacto" para ver quantos alertas cada ajuste geraria antes de salvar.</p>
+            <p className="mt-2 text-gray-500">Use “Simular impacto” para ver quantos alertas cada ajuste geraria antes de salvar.</p>
           </ContextualHelp>
         </h2>
         <p className="mb-4 text-xs text-gray-500">
-          Define em qual faixa do score um alerta é classificado como Baixo, Médio, Alto ou Crítico.
+          Quanto menor o valor, mais alertas são gerados para aquela categoria. Clique em “Simular impacto” após ajustar.
         </p>
         <div className="space-y-5">
           <ThresholdSlider
-            label="Limiar Baixo"
-            desc="Score mínimo para gerar um alerta de severidade BAIXA."
+            label="Risco Baixo — a partir de"
+            desc="Pontuação mínima para gerar um alerta de baixa prioridade. Sugerido: 30–40."
             value={form.low_threshold ?? 30}
             min={10} max={(form.medium_threshold ?? 60) - 1}
             onChange={update('low_threshold')}
             colorClass="bg-green-100 text-green-700"
           />
           <ThresholdSlider
-            label="Limiar Médio"
-            desc="Score mínimo para classificar como MÉDIO (acima deste = alerta amarelo)."
+            label="Risco Médio — a partir de"
+            desc="Pontuação mínima para classificar o alerta como prioridade média (amarelo). Sugerido: 55–65."
             value={form.medium_threshold ?? 60}
             min={(form.low_threshold ?? 30) + 1}
             max={(form.high_threshold ?? 80) - 1}
@@ -284,8 +284,8 @@ export default function SensitivityPage() {
             colorClass="bg-yellow-100 text-yellow-700"
           />
           <ThresholdSlider
-            label="Limiar Alto"
-            desc="Score mínimo para ALTO risco — caso aberto automaticamente."
+            label="Risco Alto — a partir de"
+            desc="Pontuação mínima para alto risco. Casos podem ser abertos automaticamente acima deste valor. Sugerido: 75–85."
             value={form.high_threshold ?? 80}
             min={(form.medium_threshold ?? 60) + 1}
             max={(form.critical_threshold ?? 95) - 1}
@@ -293,8 +293,8 @@ export default function SensitivityPage() {
             colorClass="bg-orange-100 text-orange-700"
           />
           <ThresholdSlider
-            label="Limiar Crítico"
-            desc="Score mínimo para CRÍTICO — SLA de 4 horas e escalonamento obrigatório."
+            label="Risco Crítico — a partir de"
+            desc="Pontuação mínima para alertas críticos. SLA reduzido e escalonamento obrigatório. Sugerido: 90–95."
             value={form.critical_threshold ?? 95}
             min={(form.high_threshold ?? 80) + 1}
             max={99}

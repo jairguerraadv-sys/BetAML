@@ -109,21 +109,21 @@ def test_weekend_activity_ratio_range():
     assert 0.0 <= feats["weekend_activity_ratio"] <= 1.0
 
 
-# ── Multi-currency flag ───────────────────────────────────────────────────────
+# ── Inconsistent currency flag ───────────────────────────────────────────────
 
-def test_multi_currency_flag_true():
+def test_inconsistent_currency_flag_true():
     txns = [
         _make_txn(currency="BRL"),
         _make_txn(currency="USD"),
     ]
     feats = compute_features("P1", _history(txns))
-    assert feats["multi_currency_flag"] is True
+    assert feats["inconsistent_currency_flag"] is True
 
 
-def test_multi_currency_flag_false():
+def test_inconsistent_currency_flag_false():
     txns = [_make_txn(currency="BRL") for _ in range(5)]
     feats = compute_features("P1", _history(txns))
-    assert feats["multi_currency_flag"] is False
+    assert feats["inconsistent_currency_flag"] is False
 
 
 # ── Win/loss ratio ────────────────────────────────────────────────────────────

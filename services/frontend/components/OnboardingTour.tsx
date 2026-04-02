@@ -34,7 +34,7 @@ const STEPS: TourStep[] = [
     title: 'Monitor de Alertas',
     description:
       'É aqui que o dia começa. Você verá alertas organizados por prioridade: Crítico, Alto, Médio e Baixo. ' +
-      'Cada card explica, em duas ou três linhas, por que o sistema sinalizou aquele cliente.',
+      'Cada card explica, em duas ou três linhas, por que o sistema sinalizou aquele apostador.',
     hint: 'Ação rápida: "Abrir caso" transforma um alerta em investigação formal.',
     href: '/alerts',
     linkLabel: 'Ir para Monitor de Alertas',
@@ -45,7 +45,7 @@ const STEPS: TourStep[] = [
     icon: FolderOpen,
     title: 'Casos em Investigação',
     description:
-      'Cada caso reúne tudo num só lugar: resumo da suspeita, perfil do cliente, movimentações, ' +
+      'Cada caso reúne tudo num só lugar: resumo da suspeita, perfil do apostador, movimentações, ' +
       'vínculos com outras pessoas e o espaço para sua decisão final.',
     hint: 'Use a barra de anotações no rodapé para registrar observações enquanto lê o dossiê.',
     href: '/cases',
