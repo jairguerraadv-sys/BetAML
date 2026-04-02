@@ -14,12 +14,14 @@ import { useTheme } from './ThemeProvider';
 import { useLocale } from '@/lib/i18n';
 import { logout as apiLogout } from '@/lib/api';
 import { useUser } from '@/contexts/UserContext';
+import OnboardingTour from './OnboardingTour';
 
 // ── Jornadas principais do analista ──────────────────────────────────────────
 const MAIN_NAV = [
   { href: '/dashboard',   label: 'Painel Diário',          icon: LayoutDashboard, tooltip: 'Resumo do dia: alertas, casos pendentes e KPIs' },
   { href: '/alerts',      label: 'Monitor de Alertas',     icon: AlertTriangle,   tooltip: 'Fila de alertas por prioridade para triagem' },
   { href: '/cases',       label: 'Casos em Investigação',  icon: FolderOpen,      tooltip: 'Gerencie investigações em andamento' },
+  { href: '/cases/examples', label: 'Casos Exemplares',    icon: BookOpen,        tooltip: 'Casos fictícios para treinamento e referência' },
   { href: '/sensitivity', label: 'Ajustes de Sensibilidade', icon: SlidersHorizontal, tooltip: 'Calibre o volume e precisão dos alertas' },
   { href: '/reports',     label: 'Relatórios Reguladores', icon: FileBarChart2,   tooltip: 'Gere dossiês e relatórios para COAF/BACEN' },
   { href: '/notifications', label: 'Notificações',         icon: Bell,            tooltip: 'Alertas enviados para você' },
@@ -88,6 +90,7 @@ export default function Sidebar() {
   }, [pathname]);
 
   const canSeeAdvanced = ADVANCED_ROLES.includes(role);
+  const [showTour, setShowTour] = useState(false);
 
   async function logout() {
     await apiLogout();
@@ -181,6 +184,14 @@ export default function Sidebar() {
           <span>{locale === 'pt-BR' ? 'PT-BR' : 'EN-US'}</span>
         </button>
         <button
+          onClick={() => setShowTour(true)}
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 transition-colors dark:text-gray-400 dark:hover:bg-gray-800"
+          title="Reabrir tour guiado de onboarding"
+        >
+          <HelpCircle size={15} />
+          Tour de onboarding
+        </button>
+        <button
           onClick={logout}
           className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 transition-colors dark:text-gray-400 dark:hover:bg-gray-800"
         >
@@ -188,6 +199,7 @@ export default function Sidebar() {
           Sair da conta
         </button>
       </div>
+      {showTour && <OnboardingTour forceOpen onClose={() => setShowTour(false)} />}
     </aside>
   );
 }

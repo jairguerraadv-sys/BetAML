@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Optional
+import uuid
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -94,9 +95,94 @@ async def list_rules(
     ]
 
 
+class PreviewDslRequest(BaseModel):
+    condition_dsl: str
+    severity: str = "MEDIUM"
+    scope: str = "TRANSACTION"
+    days: int = Field(default=30, ge=1, le=90)
+
+
+@router.post("/rules/preview-dsl")
+async def preview_dsl(
+    body: PreviewDslRequest,
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pré-visualiza quantos eventos uma DSL matcharia nos últimos N dias,
+    sem criar a regra permanentemente no banco."""
+    from libs.dsl_parser import eval_dsl, validate_dsl
+    from collections import defaultdict as _dd
+
+    macros = await _tenant_macros(db, current_user.tenant_id)
+
+    ok, msg = validate_dsl(body.condition_dsl, macros=macros)
+    if not ok:
+        raise HTTPException(400, detail=f"DSL inválida: {msg}")
+
+    since = datetime.now(UTC) - timedelta(days=body.days)
+
+    # Busca alertas já existentes que matcham a DSL reavaliada
+    alert_stmt = (
+        select(Alert)
+        .where(
+            Alert.tenant_id == current_user.tenant_id,
+            Alert.created_at >= since,
+        )
+        .limit(3000)
+    )
+    alerts = (await db.execute(alert_stmt)).scalars().all()
+
+    match_count = 0
+    player_ids: set[str] = set()
+    timeline_counts: _dd[str, int] = _dd(int)
+    errors = 0
+
+    for alert in alerts:
+        try:
+            ctx = {
+                "transaction": {
+                    "amount": 0,
+                    "type": "UNKNOWN",
+                },
+                "bet": {},
+                "player": {
+                    "risk_score": float(alert.composite_score or alert.anomaly_score or 0),
+                },
+                "features": alert.evidence or {},
+                "params": {},
+            }
+            matched = eval_dsl(body.condition_dsl, ctx, macros=macros)
+        except Exception:
+            errors += 1
+            continue
+        if matched:
+            match_count += 1
+            if alert.player_id:
+                player_ids.add(str(alert.player_id))
+            timeline_counts[alert.created_at.date().isoformat()] += 1
+
+    return {
+        "rule_id": None,
+        "results": [],
+        "matches": match_count,
+        "total_alerts": match_count,
+        "players": sorted(player_ids),
+        "false_positive_estimated": None,
+        "precision_estimated": None,
+        "recall_estimated": None,
+        "performance_score": None,
+        "timeline": [
+            {"date": k, "alerts": v}
+            for k, v in sorted(timeline_counts.items())
+        ],
+        "evaluated": len(alerts),
+        "errors": errors,
+        "days": body.days,
+    }
+
+
 @router.post("/rules", status_code=201)
-async def create_rule(
-    body: RuleCreate,
+async def create_rule(    body: RuleCreate,
     current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
     db: AsyncSession = Depends(get_db),
 ):

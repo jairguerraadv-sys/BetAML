@@ -7,6 +7,7 @@ import {
   AlertTriangle, Eye, FolderPlus, X, ChevronRight,
   Clock, Filter, RefreshCw, HelpCircle, Glasses, Search,
 } from 'lucide-react';
+import ContextualHelp from '@/components/ContextualHelp';
 
 // ── Tradução de termos técnicos ────────────────────────────────────────────────
 const SEV_PT: Record<string, string> = {
@@ -119,8 +120,17 @@ function AlertCard({
             <span>{explain}</span>
           </p>
           {alert.anomaly_score != null && (
-            <p className="mt-1 text-[10px] text-gray-400">
+            <p className="mt-1 text-[10px] text-gray-400 flex items-center gap-0.5">
               Pontuação de risco: <span className="font-semibold text-gray-600">{(alert.anomaly_score * 100).toFixed(0)}%</span>
+              <ContextualHelp title="O que é a Pontuação de Risco?" side="right">
+                <p className="mb-1">Número de 0 a 100 calculado combinando:</p>
+                <ul className="space-y-0.5 pl-2">
+                  <li>• Regras determinísticas (ex: velocidade, estruturação)</li>
+                  <li>• Modelos de machine learning (padrão histórico)</li>
+                  <li>• Análise de vínculos (dispositivos, contas compartilhadas)</li>
+                </ul>
+                <p className="mt-2 text-gray-500">Valores acima de 80 são considerados ALTO. Acima de 95, CRÍTICO.</p>
+              </ContextualHelp>
             </p>
           )}
         </div>
@@ -261,6 +271,17 @@ export default function AlertsPage() {
           <h1 className="text-2xl font-bold text-gray-900">Monitor de Alertas</h1>
           <p className="mt-0.5 text-sm text-gray-500">
             Fila de situações que precisam da sua avaliação, ordenadas por prioridade.
+            <ContextualHelp title="Como funciona a fila?" side="right">
+              <p className="mb-2">Alertas são gerados automaticamente quando o sistema detecta comportamento suspeito. Eles chegam aqui prontos para triagem.</p>
+              <p className="mb-2"><strong>Prioridades:</strong></p>
+              <ul className="space-y-1 pl-2">
+                <li>🔴 <strong>Crítico</strong> — ação imediata, SLA de 4h</li>
+                <li>🟠 <strong>Alto</strong> — prioritário, SLA de 8h</li>
+                <li>🟡 <strong>Médio</strong> — análise no dia, SLA de 24h</li>
+                <li>🟢 <strong>Baixo</strong> — informativo, SLA de 72h</li>
+              </ul>
+              <p className="mt-2 text-gray-500">Alertas com SLA vencido aparecem com borda vermelha.</p>
+            </ContextualHelp>
           </p>
         </div>
         <div className="flex items-center gap-2">

@@ -3,6 +3,7 @@ import Sidebar from '@/components/Sidebar';
 import GlobalSearch from '@/components/GlobalSearch';
 import { ThemeProvider } from '@/components/ThemeProvider';
 import MaintenanceBanner from '@/components/MaintenanceBanner';
+import OnboardingTour from '@/components/OnboardingTour';
 
 export default function ProtectedLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -16,6 +17,7 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
           </main>
         </div>
         <GlobalSearch />
+        <OnboardingTour />
       </div>
     </ThemeProvider>
   );

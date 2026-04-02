@@ -1,7 +1,7 @@
 'use client';
 import { useState, useCallback } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { api, validateDsl, createRule, simulateRule, SimulateRuleResult } from '@/lib/api';
+import { api, validateDsl, createRule, simulateRule, previewDsl, SimulateRuleResult } from '@/lib/api';
 import {
   Plus, Trash2, Play, Save, Copy, ChevronDown, ChevronRight,
   AlertTriangle, Info, CheckCircle2, X, ToggleLeft, ToggleRight,
@@ -245,6 +245,9 @@ export default function RuleBuilderPage() {
   const [saved, setSaved]             = useState(false);
   const [impactResult, setImpactResult] = useState<SimulateRuleResult | null>(null);
   const [impactLoading, setImpactLoading] = useState(false);
+  const [previewResult, setPreviewResult] = useState<(SimulateRuleResult & { evaluated?: number; days?: number }) | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const dsl = buildDsl(conditions, joinOp);
 
@@ -482,14 +485,39 @@ export default function RuleBuilderPage() {
 
         {/* Ações */}
         <div className="flex items-center justify-between px-6 py-4">
-          <button
-            onClick={() => validateMutation.mutate()}
-            disabled={!isValid || validateMutation.isPending}
-            className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-600 dark:text-gray-300"
-          >
-            <Play size={15} />
-            {validateMutation.isPending ? 'Validando...' : 'Validar DSL'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => validateMutation.mutate()}
+              disabled={!isValid || validateMutation.isPending}
+              className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-600 dark:text-gray-300"
+            >
+              <Play size={15} />
+              {validateMutation.isPending ? 'Validando...' : 'Validar DSL'}
+            </button>
+            <button
+              onClick={async () => {
+                if (!isValid) return;
+                setPreviewLoading(true);
+                setPreviewError(null);
+                setPreviewResult(null);
+                try {
+                  const result = await previewDsl(dsl, severity, scope, 30);
+                  setPreviewResult(result);
+                } catch (err: unknown) {
+                  const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Erro ao simular.';
+                  setPreviewError(msg);
+                } finally {
+                  setPreviewLoading(false);
+                }
+              }}
+              disabled={!isValid || previewLoading}
+              className="flex items-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-40"
+              title="Simula quantos alertas esta regra teria gerado nos últimos 30 dias, sem publicar"
+            >
+              <Target size={15} />
+              {previewLoading ? 'Simulando…' : 'Simular antes de publicar'}
+            </button>
+          </div>
 
           <div className="flex items-center gap-3">
             {saved && (
@@ -513,6 +541,71 @@ export default function RuleBuilderPage() {
           </div>
         </div>
       </div>
+
+      {/* Preview antes de publicar */}
+      {(previewLoading || previewResult || previewError) && (
+        <div className="overflow-hidden rounded-xl border border-indigo-200 bg-indigo-50 dark:border-indigo-900 dark:bg-indigo-950">
+          <div className="flex items-center gap-2 border-b border-indigo-100 bg-white px-5 py-3 dark:border-indigo-900 dark:bg-indigo-900/40">
+            <Target size={15} className="text-indigo-600" />
+            <h2 className="text-sm font-semibold text-indigo-800 dark:text-indigo-200">
+              Simulação prévia — últimos {previewResult?.days ?? 30} dias
+            </h2>
+            {previewLoading && (
+              <span className="ml-auto text-xs text-indigo-600 animate-pulse">Calculando…</span>
+            )}
+          </div>
+          {previewError && (
+            <div className="flex items-start gap-2 p-4 text-sm text-red-700">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+              <span>{previewError}</span>
+            </div>
+          )}
+          {previewResult && (
+            <div className="grid grid-cols-2 gap-4 p-5 md:grid-cols-4">
+              <div className="rounded-lg bg-white p-3 shadow-sm dark:bg-indigo-900/30">
+                <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                  <Target size={12} /> Matches estimados
+                </div>
+                <div className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">
+                  {previewResult.total_alerts ?? previewResult.matches}
+                </div>
+              </div>
+              <div className="rounded-lg bg-white p-3 shadow-sm dark:bg-indigo-900/30">
+                <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                  <Users size={12} /> Clientes afetados
+                </div>
+                <div className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">
+                  {previewResult.players?.length ?? '—'}
+                </div>
+              </div>
+              <div className="rounded-lg bg-white p-3 shadow-sm dark:bg-indigo-900/30">
+                <div className="text-xs text-gray-500">Eventos avaliados</div>
+                <div className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">
+                  {(previewResult as SimulateRuleResult & { evaluated?: number }).evaluated ?? '—'}
+                </div>
+              </div>
+              <div className="rounded-lg bg-white p-3 shadow-sm dark:bg-indigo-900/30">
+                <div className="text-xs text-gray-500">Taxa de match</div>
+                <div className={`mt-1 text-2xl font-bold ${
+                  previewResult.matches > 500 ? 'text-orange-600' : 'text-gray-900 dark:text-white'
+                }`}>
+                  {(previewResult as SimulateRuleResult & { evaluated?: number }).evaluated
+                    ? `${((previewResult.matches / ((previewResult as SimulateRuleResult & { evaluated?: number }).evaluated ?? 1)) * 100).toFixed(1)}%`
+                    : '—'}
+                </div>
+              </div>
+            </div>
+          )}
+          {previewResult && previewResult.matches > 500 && (
+            <div className="flex items-start gap-2 border-t border-indigo-100 bg-amber-50 px-5 py-3 text-xs text-amber-800">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-600" />
+              <span>
+                Esta regra geraria muitos alertas. Considere adicionar condições para aumentar a precisão antes de publicar.
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Impacto estimado — aparece após publicar */}
       {(impactLoading || impactResult) && (

@@ -6,6 +6,7 @@ import {
   SlidersHorizontal, Save, RefreshCw, HelpCircle, ChevronRight,
   AlertTriangle, Shield, Clock,
 } from 'lucide-react';
+import ContextualHelp from '@/components/ContextualHelp';
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -205,7 +206,17 @@ export default function SensitivityPage() {
 
       {/* Pesos dos componentes */}
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-1 text-base font-bold text-gray-800">Pesos por componente de score</h2>
+        <h2 className="mb-1 text-base font-bold text-gray-800">Pesos por componente de score
+          <ContextualHelp title="Como funcionam os pesos?" side="right">
+            <p className="mb-1">O score final de um cliente é calculado pela média ponderada de três componentes:</p>
+            <ul className="space-y-1 pl-2">
+              <li>• <strong>Regras:</strong> condições determinísticas (ex: "depósitos acima de R$50k em 24h")</li>
+              <li>• <strong>ML:</strong> modelos treinados no histórico do próprio cliente</li>
+              <li>• <strong>Rede:</strong> vínculos com outros clientes via dispositivo ou conta bancária</li>
+            </ul>
+            <p className="mt-2 text-gray-500">A soma deve ser sempre 100%. Se você aumenta um, precisa reduzir outro.</p>
+          </ContextualHelp>
+        </h2>
         <p className="mb-4 text-xs text-gray-500">
           A soma dos três pesos deve ser igual a 100%.{' '}
           <span className={`font-bold ${weightsOk ? 'text-green-600' : 'text-red-600'}`}>
@@ -241,7 +252,16 @@ export default function SensitivityPage() {
 
       {/* Limiares de severidade */}
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-1 text-base font-bold text-gray-800">Limiares de severidade (score 0-100)</h2>
+        <h2 className="mb-1 text-base font-bold text-gray-800">Limiares de severidade (score 0-100)
+          <ContextualHelp title="O que são os limiares?" side="right">
+            <p className="mb-1">Definem a nota de corte para cada categoria de alerta:</p>
+            <ul className="space-y-1 pl-2">
+              <li>• <strong>Abaixar</strong> o limiar → mais alertas gerados (mais rigoroso)</li>
+              <li>• <strong>Elevar</strong> o limiar → menos alertas (mais seletivo)</li>
+            </ul>
+            <p className="mt-2 text-gray-500">Use "Simular impacto" para ver quantos alertas cada ajuste geraria antes de salvar.</p>
+          </ContextualHelp>
+        </h2>
         <p className="mb-4 text-xs text-gray-500">
           Define em qual faixa do score um alerta é classificado como Baixo, Médio, Alto ou Crítico.
         </p>

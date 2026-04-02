@@ -37,6 +37,7 @@ import {
   Activity, HelpCircle, X, Network, CreditCard, History, ArrowRightLeft,
   Search,
 } from 'lucide-react';
+import PlayerNetworkGraph from '@/components/PlayerNetworkGraph';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const SEV_LABEL: Record<string, string> = {
@@ -178,12 +179,13 @@ function SLABadge({ sla_due_at }: { sla_due_at?: string }) {
   return <span className={`rounded border px-2 py-0.5 text-xs font-semibold ${cls}`}>{label}</span>;
 }
 
-type Tab = 'overview' | 'profile' | 'movements' | 'decision';
+type Tab = 'overview' | 'profile' | 'movements' | 'network' | 'decision';
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
-  { id: 'overview',   label: 'Visão Geral',    icon: Activity },
+  { id: 'overview',   label: 'Visão Geral',       icon: Activity },
   { id: 'profile',    label: 'Perfil do Cliente', icon: User },
-  { id: 'movements',  label: 'Movimentações',  icon: TrendingDown },
+  { id: 'movements',  label: 'Movimentações',     icon: TrendingDown },
+  { id: 'network',    label: 'Rede e Vínculos',   icon: Network },
   { id: 'decision',   label: 'Decisão e Relatório', icon: FileText },
 ];
 
@@ -759,6 +761,103 @@ function TabMovements({ alertIds }: { alertIds: string[] }) {
         </div>
       )}
 
+    </div>
+  );
+}
+
+// ── Tab: Rede e Vínculos ──────────────────────────────────────────────────────
+function TabNetwork({ playerId }: { playerId: string | undefined }) {
+  const { data: networkRes, isLoading } = useQuery({
+    queryKey: ['player-network', playerId],
+    queryFn:  () => fetchPlayerNetwork(playerId!),
+    enabled:  !!playerId,
+  });
+
+  const relatedPlayers = networkRes?.related_players ?? [];
+
+  if (!playerId) return (
+    <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 py-16 text-center">
+      <Network size={32} className="mx-auto mb-3 text-gray-300" />
+      <p className="text-sm text-gray-400">Nenhum cliente vinculado a este caso.</p>
+    </div>
+  );
+
+  if (isLoading) return <p className="text-sm text-gray-400 p-5">Carregando vínculos...</p>;
+
+  return (
+    <div className="space-y-5">
+      {/* Explicação */}
+      <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
+        <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold text-blue-800">
+          <Network size={14} /> O que é a rede de vínculos?
+        </h3>
+        <p className="text-xs text-blue-700 leading-relaxed">
+          O sistema rastreia clientes que compartilham o mesmo dispositivo ou conta bancária.
+          Vínculos não indicam ilicitude por si só, mas são relevantes para avaliar se há
+          coordenação entre contas no esquema investigado.
+        </p>
+      </div>
+
+      {/* Grafo visual */}
+      {relatedPlayers.length > 0 ? (
+        <>
+          <PlayerNetworkGraph playerId={playerId} relatedPlayers={relatedPlayers} />
+
+          {/* Tabela detalhada */}
+          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+            <h3 className="mb-3 text-sm font-semibold text-gray-700">
+              Detalhamento dos vínculos ({relatedPlayers.length})
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-100 text-left text-gray-400">
+                    <th className="pb-2 pr-4">ID do cliente vinculado</th>
+                    <th className="pb-2 pr-4">Tipo de vínculo</th>
+                    <th className="pb-2">Identificador compartilhado</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {relatedPlayers.map((item, i) =>
+                    item.shared_by.map((link, j) => (
+                      <tr key={`${i}-${j}`} className="hover:bg-gray-50">
+                        {j === 0 && (
+                          <td
+                            className="py-2 pr-4 align-top font-mono text-gray-600"
+                            rowSpan={item.shared_by.length}
+                          >
+                            {item.player_id.slice(0, 12)}…
+                          </td>
+                        )}
+                        <td className="py-2 pr-4">
+                          <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                            link.type === 'device'
+                              ? 'bg-orange-100 text-orange-700'
+                              : 'bg-blue-100 text-blue-700'
+                          }`}>
+                            {link.type === 'device' ? '📱 Dispositivo' : '🏦 Conta bancária'}
+                          </span>
+                        </td>
+                        <td className="py-2 font-mono text-gray-500">
+                          {link.value.length > 20 ? `${link.value.slice(0, 20)}…` : link.value}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 py-16 text-center">
+          <Network size={32} className="mx-auto mb-3 text-gray-300" />
+          <p className="text-sm font-medium text-gray-500">Nenhum vínculo encontrado</p>
+          <p className="mt-1 text-xs text-gray-400">
+            Este cliente não compartilha dispositivo ou conta bancária com outros clientes no sistema.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -1355,10 +1454,11 @@ export default function CaseDetailPage() {
       </div>
 
       {/* Conteúdo da aba */}
-      {activeTab === 'overview'  && <TabOverview c={c} />}
-      {activeTab === 'profile'   && <TabProfile playerId={c.player_id} />}
-      {activeTab === 'movements' && <TabMovements alertIds={c.alerts?.map((a) => a.id) ?? []} />}
-      {activeTab === 'decision'  && <TabDecision caseId={id} c={c} qc={qc} />}
+      {activeTab === 'overview'   && <TabOverview c={c} />}
+      {activeTab === 'profile'    && <TabProfile playerId={c.player_id} />}
+      {activeTab === 'movements'  && <TabMovements alertIds={c.alerts?.map((a) => a.id) ?? []} />}
+      {activeTab === 'network'    && <TabNetwork playerId={c.player_id} />}
+      {activeTab === 'decision'   && <TabDecision caseId={id} c={c} qc={qc} />}
 
       {/* Barra fixa de anotações */}
       <StickyAnnotations caseId={id} />

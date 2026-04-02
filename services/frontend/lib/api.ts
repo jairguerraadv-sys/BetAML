@@ -580,6 +580,14 @@ export interface SimulateRuleResult {
 export const simulateRule = (id: string, payload: object) =>
   api.post<SimulateRuleResult>(`/rules/${id}/simulate`, payload).then((r) => r.data);
 
+export const previewDsl = (condition_dsl: string, severity: string, scope: string, days = 30) =>
+  api
+    .post<SimulateRuleResult & { evaluated: number; errors: number; days: number }>(
+      '/rules/preview-dsl',
+      { condition_dsl, severity, scope, days },
+    )
+    .then((r) => r.data);
+
 export interface RuleMacro {
   id: string;
   tenant_id: string;
