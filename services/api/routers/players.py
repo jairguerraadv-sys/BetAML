@@ -88,7 +88,12 @@ async def get_player(
         # LGPD Art. 18 — dados anonimizados; não retornar PII
         raise HTTPException(410, "Dados deste player foram anonimizados (LGPD Art. 18)")
     cpf_plain = decrypt_pii(p.cpf_encrypted)
-    show_full = bool(get_effective_roles(current_user).intersection({AppRole.ANALISTA, AppRole.GESTOR}))
+    # AUDITOR tem AppRole.ANALISTA no mapa legado (leitura), mas não acesso full PII
+    _legacy_role = getattr(current_user, "role", None)
+    show_full = bool(
+        get_effective_roles(current_user).intersection({AppRole.ANALISTA, AppRole.GESTOR})
+        and _legacy_role != "AUDITOR"
+    )
 
     # Audit access to PII (LGPD Art. 37) — always log, even for masked CPF
     await write_audit(

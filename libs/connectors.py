@@ -205,21 +205,22 @@ class ConnectorGamma(BaseConnector):
         return ParseResult(records, line, len(errors), errors)
 
     def _flatten(self, el: ET.Element) -> dict[str, Any]:
-        """Retorna campos XML brutos sem renomear. MappingEngine é responsável pela normalização."""
+        """Aplica FIELD_MAP para traduzir tags XML para nomes canônicos."""
         result: dict[str, Any] = {}
         for child in el:
             ctag = child.tag.split("}")[-1]
             if len(list(child)):
                 for subchild in child:
                     stag = subchild.tag.split("}")[-1]
-                    result[f"{ctag}.{stag}"] = subchild.text
+                    compound_key = f"{ctag}.{stag}"
+                    result[self.FIELD_MAP.get(compound_key, compound_key)] = subchild.text
             else:
                 val: Any = child.text
                 # extrai atributo currency de Amount (ex.: <Amount currency="BRL">500.00</Amount>)
                 if ctag == "Amount":
-                    result["Amount.currency"] = child.get("currency", "BRL")
-                result[ctag] = val
-        result.setdefault("Amount.currency", "BRL")
+                    result[self.FIELD_MAP.get("Amount.currency", "currency")] = child.get("currency", "BRL")
+                result[self.FIELD_MAP.get(ctag, ctag)] = val
+        result.setdefault("currency", "BRL")
         result.setdefault("source_system", self.source_system)
         return result
 

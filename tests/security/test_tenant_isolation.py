@@ -486,15 +486,15 @@ class TestAuditorReadOnly(unittest.TestCase):
         """POST /alerts/{id}/triage (alert labelling) must not allow AUDITOR.
 
         Inspects routers/alerts.py and verifies that the triage_alert function
-        uses require_roles with a list that excludes AUDITOR.
+        uses require_role/require_role_any with a list that excludes AUDITOR.
         """
         src = _read_router("alerts")
         block = _extract_function_block(src, "triage_alert")
         self.assertTrue(block, "triage_alert function not found in routers/alerts.py")
         self.assertIn(
-            "require_roles",
+            "require_role",
             block,
-            "triage_alert must use require_roles to gate write access",
+            "triage_alert must use require_role/require_role_any to gate write access",
         )
         self.assertNotIn(
             '"AUDITOR"',
@@ -506,15 +506,15 @@ class TestAuditorReadOnly(unittest.TestCase):
         """POST /cases/{id}/assign must not allow AUDITOR.
 
         Inspects routers/cases.py and verifies that assign_case restricts
-        access to ADMIN and excludes AUDITOR.
+        access to GESTOR (ADMIN equivalent) and excludes AUDITOR.
         """
         src = _read_router("cases")
         block = _extract_function_block(src, "assign_case")
         self.assertTrue(block, "assign_case function not found in routers/cases.py")
         self.assertIn(
-            "require_roles",
+            "require_role",
             block,
-            "assign_case must use require_roles to gate write access",
+            "assign_case must use require_role/require_role_any to gate write access",
         )
         self.assertNotIn(
             '"AUDITOR"',
@@ -546,15 +546,15 @@ class TestAuditorReadOnly(unittest.TestCase):
         """POST /players/{id}/erase must not allow AUDITOR.
 
         Inspects routers/players.py and verifies that erase_player_data
-        requires ADMIN (and optionally SUPER_ADMIN) but never AUDITOR.
+        requires GESTOR/SUPER_ADMIN but never AUDITOR.
         """
         src = _read_router("players")
         block = _extract_function_block(src, "erase_player_data")
         self.assertTrue(block, "erase_player_data function not found in routers/players.py")
         self.assertIn(
-            "require_roles",
+            "require_role",
             block,
-            "erase_player_data must use require_roles to gate erasure access",
+            "erase_player_data must use require_role/require_role_any to gate erasure access",
         )
         self.assertNotIn(
             '"AUDITOR"',
@@ -584,19 +584,21 @@ class TestPIIMasking(unittest.TestCase):
             "get_player must implement a show_full PII guard variable",
         )
         self.assertIn(
-            '"AML_ANALYST"',
+            "AppRole.ANALISTA",
             block,
-            "show_full PII guard must explicitly include AML_ANALYST",
+            "show_full PII guard must explicitly include AppRole.ANALISTA (AML_ANALYST equivalent)",
         )
         self.assertIn(
-            '"ADMIN"',
+            "AppRole.GESTOR",
             block,
-            "show_full PII guard must explicitly include ADMIN",
+            "show_full PII guard must explicitly include AppRole.GESTOR (ADMIN equivalent)",
         )
+        # Verifica que AUDITOR não está na lista de papéis permitidos para full PII
+        # (pode aparecer como exclusão explícita — "AUDITOR" != permitido)
         self.assertNotIn(
-            '"AUDITOR"',
+            'AppRole.AUDITOR',
             block,
-            "AUDITOR must not be included in the show_full PII role guard",
+            "AUDITOR AppRole must not be in the show_full PII role guard allow list",
         )
 
     def test_erased_player_returns_410(self):
@@ -637,14 +639,14 @@ class TestLGPDErasureAuth(unittest.TestCase):
         block = _extract_function_block(src, "erase_player_data")
         self.assertTrue(block, "erase_player_data function not found in routers/players.py")
         self.assertIn(
-            'require_roles("ADMIN"',
+            "require_role_any",
             block,
-            "erase_player_data must require ADMIN role (LGPD erasure is a privileged action)",
+            "erase_player_data must require privileged role (LGPD erasure is a privileged action)",
         )
         self.assertNotIn(
-            '"AML_ANALYST"',
+            "AppRole.ANALISTA",
             block,
-            "erase_player_data must not grant LGPD erasure rights to AML_ANALYST",
+            "erase_player_data must not grant LGPD erasure rights to Analista/AML_ANALYST",
         )
 
     def test_data_export_requires_analyst_or_admin(self):
@@ -658,19 +660,19 @@ class TestLGPDErasureAuth(unittest.TestCase):
         block = _extract_function_block(src, "export_player_data")
         self.assertTrue(block, "export_player_data function not found in routers/players.py")
         self.assertIn(
-            "require_roles",
+            "require_role",
             block,
-            "export_player_data must use require_roles to gate data-export access",
+            "export_player_data must use require_role/require_role_any to gate data-export access",
         )
         self.assertIn(
-            '"ADMIN"',
+            "AppRole.GESTOR",
             block,
-            "export_player_data must grant data-export access to ADMIN",
+            "export_player_data must grant data-export access to GESTOR (ADMIN equivalent)",
         )
         self.assertIn(
-            '"AML_ANALYST"',
+            "AppRole.ANALISTA",
             block,
-            "export_player_data must grant data-export access to AML_ANALYST",
+            "export_player_data must grant data-export access to ANALISTA (AML_ANALYST equivalent)",
         )
 
 

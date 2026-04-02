@@ -66,6 +66,7 @@ def _make_user(tenant_id: str = "t1", role: str = "ADMIN") -> MagicMock:
     user.tenant_id = tenant_id
     user.id = "user-123"
     user.role = role
+    user.roles = None  # força fallback ao mapa legado em get_effective_roles
     return user
 
 

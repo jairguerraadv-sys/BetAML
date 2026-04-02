@@ -25,6 +25,7 @@ def _make_user(role: str = "AUDITOR", tenant_id: str = "t1"):
     user.id = "u1"
     user.role = role
     user.tenant_id = tenant_id
+    user.roles = None  # força fallback ao mapa legado em get_effective_roles
     return user
 
 
@@ -74,6 +75,12 @@ async def test_get_player_masks_cpf_for_auditor():
     db = AsyncMock()
     db.flush = AsyncMock()
 
+    # Configura db.execute para retornar resultado compatível com .scalars().first() e .scalar()
+    _exec_result = MagicMock()
+    _exec_result.scalars.return_value.first.return_value = None
+    _exec_result.scalar.return_value = 0
+    db.execute = AsyncMock(return_value=_exec_result)
+
     with patch("routers.players.decrypt_pii", return_value="12345678909"), \
          patch("routers.players.write_audit", new_callable=AsyncMock):
         result = await get_player(
@@ -94,6 +101,12 @@ async def test_get_player_returns_full_cpf_for_aml_analyst():
     repo.get_by_id = AsyncMock(return_value=_make_player())
     db = AsyncMock()
     db.flush = AsyncMock()
+
+    # Configura db.execute para retornar resultado compatível com .scalars().first() e .scalar()
+    _exec_result = MagicMock()
+    _exec_result.scalars.return_value.first.return_value = None
+    _exec_result.scalar.return_value = 0
+    db.execute = AsyncMock(return_value=_exec_result)
 
     with patch("routers.players.decrypt_pii", return_value="12345678909"), \
          patch("routers.players.write_audit", new_callable=AsyncMock):

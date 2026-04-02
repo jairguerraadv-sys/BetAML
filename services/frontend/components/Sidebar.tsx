@@ -9,7 +9,10 @@ import {
   ChevronDown, BookOpen, Users, Plug, ScrollText,
   Shield, List, BrainCircuit, Database, GitBranch, Wand2,
   Settings, HelpCircle, Search, Moon, Sun, Activity, AlertOctagon,
+  BarChart3, Building2, LayoutTemplate, ShieldCheck,
 } from 'lucide-react';
+import type { NavSection, NavItem } from '@/lib/nav-config';
+import { getNavSections } from '@/lib/nav-config';
 import { useTheme } from './ThemeProvider';
 import { useLocale } from '@/lib/i18n';
 import { logout as apiLogout } from '@/lib/api';
@@ -47,6 +50,19 @@ const ADV_NAV = [
 
 // Roles que veem o menu avançado
 const ADVANCED_ROLES = ['ADMIN', 'SUPER_ADMIN'];
+
+/** Mapeia nome de ícone (string de nav-config) para componente Lucide. */
+const ICON_MAP: Record<string, React.ElementType> = {
+  LayoutDashboard, AlertTriangle, FolderOpen, FileBarChart2, Bell,
+  SlidersHorizontal, BookOpen, Users, Plug, ScrollText, Shield, List,
+  BrainCircuit, Database, GitBranch, Wand2, Settings, Activity, AlertOctagon,
+  BarChart3, Building2, LayoutTemplate, ShieldCheck,
+  ChevronDown, HelpCircle, Search, Moon, Sun, LogOut,
+};
+
+function resolveIcon(name?: string): React.ElementType {
+  return (name && ICON_MAP[name]) ? ICON_MAP[name] : HelpCircle;
+}
 
 function NavItem({ href, label, icon: Icon, tooltip, active }: {
   href: string; label: string; icon: React.ElementType;

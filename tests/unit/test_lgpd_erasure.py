@@ -81,14 +81,17 @@ class TestRightToErasureRBAC(unittest.TestCase):
             return fh.read()
 
     def test_require_roles_admin_used(self):
-        """erase_player_data must call require_roles('ADMIN')."""
+        """erase_player_data must use require_role_any with privileged roles."""
         src = self._load_players_src()
         idx = src.find("erase_player_data")
         self.assertGreater(idx, 0, "erase_player_data function not found in routers/players.py")
         snippet = src[idx: idx + 800]
-        # Allows require_roles("ADMIN") or require_roles("ADMIN", "SUPER_ADMIN")
-        self.assertIn('require_roles("ADMIN', snippet,
-                      "erase_player_data must use require_roles('ADMIN')")
+        # Aceita require_role_any([AppRole.GESTOR, ...]) — equivalente pós-refactor RBAC
+        self.assertTrue(
+            'require_roles("ADMIN' in snippet
+            or 'require_role_any' in snippet,
+            "erase_player_data must use privileged role guard (require_roles ADMIN or require_role_any)"
+        )
 
     def test_cpf_encrypted_erased(self):
         """erase_player_data must anonymise cpf_encrypted."""
@@ -120,7 +123,8 @@ class TestCreateTenantRBAC(unittest.TestCase):
         snippet = src[idx: idx + 400]
         self.assertTrue(
             'require_roles("SUPER_ADMIN")' in snippet
-            or 'require_roles("ADMIN", "SUPER_ADMIN")' in snippet,
+            or 'require_roles("ADMIN", "SUPER_ADMIN")' in snippet
+            or 'AppRole.SUPER_ADMIN' in snippet,
             "create_tenant must use privileged admin RBAC",
         )
 

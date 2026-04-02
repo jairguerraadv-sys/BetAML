@@ -51,11 +51,11 @@ def mock_db_session():
             self._data = data
 
     async def _execute_side_effect(stmt):
-        # Detecta tipo de query baseado no repr
-        stmt_str = str(stmt)
+        # Detecta tipo de query baseado no repr (usa lowercase para robustez)
+        stmt_str = str(stmt).lower()
 
         # Alerts labelados para structuring detector
-        if "Alert" in stmt_str and "label" in stmt_str:
+        if "alerts" in stmt_str and "label" in stmt_str:
             from datetime import UTC, datetime
             from uuid import uuid4
 
@@ -108,7 +108,7 @@ def mock_db_session():
             return _MockResult(alerts)
 
         # Players para network clustering
-        elif "Player" in stmt_str and "status" in stmt_str:
+        elif "players" in stmt_str and "status" in stmt_str:
             from uuid import uuid4
 
             players = []
@@ -304,7 +304,11 @@ async def test_recurrence_estimator_trains_successfully(mock_db_session, mock_mi
     call_count = [0]
 
     async def _execute_side_effect(stmt):
-        stmt_str = str(stmt)
+        # SQLAlchemy 2.x usa POSTCOMPILE para IN — compilar com literal_binds para detectar valores
+        try:
+            stmt_str = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        except Exception:
+            stmt_str = str(stmt)
         call_count[0] += 1
 
         # Primeira chamada: baseline players (ERASED/REPORTED)

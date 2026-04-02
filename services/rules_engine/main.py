@@ -534,7 +534,7 @@ async def evaluate_rules(
         component_ids = crule.get("component_rule_ids") or []
         score_weights = crule.get("score_weights") or {}
         min_threshold = crule.get("min_score_threshold") or 0.5
-        operator = str(crule.get("logic") or "AND").upper()
+        operator = str(crule.get("operator") or crule.get("logic") or "AND").upper()
         n_threshold = int(crule.get("n_threshold") or 1)
         severity_mode = str(crule.get("severity_mode") or "MAX").upper()
         fixed_severity = crule.get("fixed_severity")

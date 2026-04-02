@@ -246,6 +246,7 @@ async def refresh(
         access_token=new_access_token,
         refresh_token=new_refresh_token,
         role=user.role,
+        roles=list(get_effective_roles(user)),
         tenant_id=user.tenant_id,
     )
 

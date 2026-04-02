@@ -192,7 +192,8 @@ async def test_global_search_supports_cpf_digits():
     player.risk_band = "MEDIUM"
     player.cpf_encrypted = b"cipher"
 
-    db = _make_db_with_results([[], [player], [], []])
+    # call order: external_id search → name_candidates (len≥3) → cpf_partial → cases → alerts
+    db = _make_db_with_results([[], [], [player], [], []])
     user = _make_user()
 
     with patch("routers.search.select", return_value=_chainable()), \
@@ -220,8 +221,8 @@ async def test_global_search_case_result_shape():
     case.title = "Suspicious activity"
     case.status = "OPEN"
 
-    # Call 1 = players (empty), call 2 = cases (with case), call 3 = alerts (empty)
-    db = _make_db_with_results([[], [case], []])
+    # call order: external_id search → name_candidates (len≥3) → cases → alerts
+    db = _make_db_with_results([[], [], [case], []])
     user = _make_user()
 
     with patch("routers.search.select", return_value=_chainable()), \
@@ -250,8 +251,8 @@ async def test_global_search_alert_result_shape():
     alert.severity = "HIGH"
     alert.player_id = "P-1"
 
-    # Call 1 = players (empty), call 2 = cases (empty), call 3 = alerts (with alert)
-    db = _make_db_with_results([[], [], [alert]])
+    # call order: external_id search → name_candidates (len≥3) → cases → alerts
+    db = _make_db_with_results([[], [], [], [alert]])
     user = _make_user()
 
     with patch("routers.search.select", return_value=_chainable()), \
