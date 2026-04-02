@@ -6,9 +6,11 @@ import {
   AlertDetail,
   AlertExplainability,
   Case,
+  RelatedTransactions,
   closeAlert,
   fetchAlert,
   fetchAlertExplainability,
+  fetchAlertRelatedTransactions,
   fetchCases,
   labelAlert,
   linkAlertToCase,
@@ -111,6 +113,13 @@ export default function AlertDetailPage() {
     },
   });
 
+  const { data: relatedTx } = useQuery<RelatedTransactions>({
+    queryKey: ['alert-tx', id],
+    queryFn: () => fetchAlertRelatedTransactions(id),
+    enabled: !!id,
+    retry: false,
+  });
+
   if (isLoading) {
     return <div className="p-8 text-center text-gray-400">Carregando alerta...</div>;
   }
@@ -143,22 +152,28 @@ export default function AlertDetailPage() {
           <span className={`rounded-full px-3 py-1 text-xs font-semibold ${STATUS_BADGE[alert.status] ?? 'bg-gray-100'}`}>
             {alert.status}
           </span>
+          <a
+            href={`/investigate/${alert.id}`}
+            className="flex items-center gap-1.5 rounded-full bg-brand px-3 py-1 text-xs font-semibold text-white hover:opacity-90"
+          >
+            🔍 Investigar passo a passo
+          </a>
         </div>
       </div>
 
       {/* Metadados */}
       <Section title="Informações do Alerta">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <KV label="Tipo" value={alert.alert_type} />
+          <KV label="Tipo de alerta" value={alert.alert_type} />
           <KV label="Criado em" value={new Date(alert.created_at).toLocaleString('pt-BR')} />
-          <KV label="Player ID" value={
+          <KV label="Cliente" value={
             alert.player_id
-              ? <a href={`/players`} className="text-brand hover:underline font-mono text-xs">{alert.player_id.slice(0, 8)}…</a>
+              ? <a href={`/players/${alert.player_id}`} className="text-brand hover:underline font-mono text-xs">{alert.player_id.slice(0, 8)}…</a>
               : null
           } />
-          <KV label="Rule ID" value={alert.rule_id ? <span className="font-mono text-xs">{alert.rule_id.slice(0, 8)}…</span> : null} />
-          <KV label="Anomaly Score" value={alert.anomaly_score != null ? alert.anomaly_score.toFixed(4) : null} />
-          <KV label="Composite Score" value={alert.composite_score != null ? alert.composite_score.toFixed(4) : null} />
+          <KV label="Regra disparada" value={alert.rule_id ? <span className="font-mono text-xs">{alert.rule_id.slice(0, 8)}…</span> : null} />
+          <KV label="Pontuação de risco" value={alert.anomaly_score != null ? `${(alert.anomaly_score * 100).toFixed(1)}%` : null} />
+          <KV label="Pontuação composta" value={alert.composite_score != null ? `${(alert.composite_score * 100).toFixed(1)}%` : null} />
           {alert.case_id && (
             <KV label="Caso vinculado" value={
               <a href={`/cases/${alert.case_id}`} className="text-brand hover:underline font-mono text-xs">
@@ -194,13 +209,88 @@ export default function AlertDetailPage() {
         )}
       </Section>
 
-      {/* Score Breakdown */}
-      {alert.score_breakdown && Object.keys(alert.score_breakdown).length > 0 && (
-        <Section title="Score Breakdown">
-          <pre className="overflow-x-auto rounded-lg bg-gray-50 p-3 text-xs text-gray-700">
-            {JSON.stringify(alert.score_breakdown, null, 2)}
-          </pre>
+      {/* Transações relacionadas */}
+      {relatedTx && (relatedTx.transactions.length > 0 || relatedTx.bets.length > 0) && (
+        <Section title={`Movimentações no período (janela: ${relatedTx.window_hours}h)`}>
+          {relatedTx.transactions.length > 0 && (
+            <div className="mb-4">
+              <p className="mb-2 text-xs font-semibold text-gray-500">Transações ({relatedTx.transactions.length})</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b text-left text-gray-400">
+                      <th className="py-1.5 pr-3">Tipo</th><th className="py-1.5 pr-3">Valor</th>
+                      <th className="py-1.5 pr-3">Status</th><th className="py-1.5">Data</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {relatedTx.transactions.map((t) => (
+                      <tr key={t.id} className="border-b border-gray-50">
+                        <td className="py-1.5 pr-3 font-medium text-gray-700">{t.type}</td>
+                        <td className={`py-1.5 pr-3 font-semibold ${
+                          t.type === 'WITHDRAWAL' ? 'text-red-600' : 'text-green-700'
+                        }`}>
+                          {t.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </td>
+                        <td className="py-1.5 pr-3 text-gray-500">{t.status}</td>
+                        <td className="py-1.5 text-gray-400">
+                          {new Date(t.occurred_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {relatedTx.bets.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-semibold text-gray-500">Apostas ({relatedTx.bets.length})</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b text-left text-gray-400">
+                      <th className="py-1.5 pr-3">Tipo</th><th className="py-1.5 pr-3">Apostado</th>
+                      <th className="py-1.5 pr-3">Ganho</th><th className="py-1.5">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {relatedTx.bets.map((b) => (
+                      <tr key={b.id} className="border-b border-gray-50">
+                        <td className="py-1.5 pr-3 font-medium text-gray-700">{b.bet_type}</td>
+                        <td className="py-1.5 pr-3 text-gray-700">
+                          {b.stake_amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </td>
+                        <td className={`py-1.5 pr-3 font-semibold ${
+                          b.actual_payout != null && b.actual_payout > b.stake_amount ? 'text-green-700' : 'text-gray-500'
+                        }`}>
+                          {b.actual_payout != null
+                            ? b.actual_payout.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                            : '—'}
+                        </td>
+                        <td className="py-1.5 text-gray-500">{b.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </Section>
+      )}
+
+      {/* Score Breakdown — oculto por padrão */}
+      {alert.score_breakdown && Object.keys(alert.score_breakdown).length > 0 && (
+        <details className="rounded-xl border border-gray-200">
+          <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-500 hover:bg-gray-50">
+            Detalhes técnicos de pontuação
+          </summary>
+          <div className="px-5 pb-4">
+            <pre className="overflow-x-auto rounded-lg bg-gray-50 p-3 text-xs text-gray-700">
+              {JSON.stringify(alert.score_breakdown, null, 2)}
+            </pre>
+          </div>
+        </details>
       )}
 
       {explainability && explainability.top_features.length > 0 && (
@@ -292,16 +382,16 @@ export default function AlertDetailPage() {
         )}
       </div>
 
-      <Section title="Feedback de Qualidade (Label)">
+      <Section title="Marcar qualidade para treinamento do modelo">
         <div className="grid gap-3 md:grid-cols-[220px_1fr_auto]">
           <select
             value={labelValue}
             onChange={(e) => setLabelValue(e.target.value as 'TRUE_POSITIVE' | 'FALSE_POSITIVE' | 'NEED_REVIEW')}
             className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
           >
-            <option value="TRUE_POSITIVE">TRUE_POSITIVE</option>
-            <option value="FALSE_POSITIVE">FALSE_POSITIVE</option>
-            <option value="NEED_REVIEW">NEED_REVIEW</option>
+            <option value="TRUE_POSITIVE">Risco real (verdadeiro positivo)</option>
+            <option value="FALSE_POSITIVE">Falso positivo</option>
+            <option value="NEED_REVIEW">Precisa revisar</option>
           </select>
           <input
             value={labelNote}

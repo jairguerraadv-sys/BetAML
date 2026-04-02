@@ -11,6 +11,9 @@ import {
   ShieldAlert,
   Activity,
   ChevronRight,
+  Trash2,
+  UserCheck,
+  TrendingDown,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -162,16 +165,17 @@ export default function DashboardPage() {
   const topPlayers = stats?.top_players_by_risk ?? [];
   const ruleTypeData = stats?.alerts_by_rule_type ?? [];
   const heatmapPoints = stats?.alert_heatmap ?? [];
+  const highFpRules = stats?.high_fp_rules ?? [];
 
   return (
     <div className="space-y-6">
       <div className="rounded-[28px] border border-slate-200 bg-gradient-to-br from-slate-950 via-sky-950 to-cyan-900 p-6 text-white shadow-sm">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-cyan-200/80">Cockpit AML</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-cyan-200/80">Painel do Analista</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight">
-          {greeting()}{userName ? `, ${userName}` : ''}.
+          {greeting()}{userName ? `, ${userName}` : ''}! Veja o que precisa da sua atenção hoje.
         </h1>
         <p className="mt-2 max-w-3xl text-sm text-cyan-50/80">
-          Visão diária de alertas, SLA, risco e ingestão do tenant com atualização automática a cada 30 segundos.
+          Resumo da sua fila de trabalho — alertas abertos, SLA, risco e eventos do dia.
         </p>
         {stats?.generated_at && (
           <p className="mt-4 text-xs text-cyan-100/70">
@@ -222,6 +226,45 @@ export default function DashboardPage() {
         />
       </div>
 
+      {/* Analyst daily-work row */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <KpiCard
+          icon={Trash2}
+          title="Descartados (últimos 7 dias)"
+          value={stats?.dismissed_7d ?? 0}
+          sub="alertas descartados recentemente — vale revisar"
+          tone={(stats?.dismissed_7d ?? 0) > 20 ? 'warning' : 'default'}
+        />
+        <KpiCard
+          icon={UserCheck}
+          title="Casos na minha fila / SLA"
+          value={stats?.my_cases_near_sla ?? 0}
+          sub="casos atribuídos a mim que vencem em 24h"
+          href="/cases"
+          tone={(stats?.my_cases_near_sla ?? 0) > 0 ? 'danger' : 'success'}
+        />
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Regras com muitos falsos positivos</p>
+            <TrendingDown size={18} className="text-orange-500" aria-hidden="true" />
+          </div>
+          {highFpRules.length === 0 ? (
+            <p className="mt-3 text-sm text-gray-400">Nenhuma regra com FP elevado no período.</p>
+          ) : (
+            <ul className="mt-3 space-y-1">
+              {highFpRules.map((r) => (
+                <li key={r.rule_id} className="flex items-center justify-between text-xs">
+                  <span className="text-gray-700 truncate max-w-[160px]" title={r.rule_name}>{r.rule_name}</span>
+                  <span className="ml-2 shrink-0 rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-semibold text-orange-700">
+                    {r.fp_count} FP
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
       {isLoading && (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-5 py-10 text-center text-sm text-gray-400">
           Carregando dashboard…
@@ -235,7 +278,7 @@ export default function DashboardPage() {
               <div className="mb-4 flex items-center justify-between">
                 <div>
                   <h2 className="text-sm font-semibold text-gray-800">Alertas por severidade, últimos 30 dias</h2>
-                  <p className="mt-1 text-xs text-gray-500">Série temporal para calibragem operacional.</p>
+                  <p className="mt-1 text-xs text-gray-500">Como os alertas evoluíram nos últimos 30 dias.</p>
                 </div>
                 <Link href="/alerts" className="text-xs font-semibold text-brand hover:underline">
                   Abrir alertas
@@ -267,7 +310,7 @@ export default function DashboardPage() {
               <div className="mb-4 flex items-center justify-between">
                 <div>
                   <h2 className="text-sm font-semibold text-gray-800">Distribuição por tipo de alerta</h2>
-                  <p className="mt-1 text-xs text-gray-500">Regras, anomalias e composições dominantes.</p>
+                  <p className="mt-1 text-xs text-gray-500">Alertas por origem — regras, anomalias ou composições.</p>
                 </div>
               </div>
               <ResponsiveContainer width="100%" height={280}>
@@ -298,8 +341,8 @@ export default function DashboardPage() {
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center justify-between">
                 <div>
-                  <h2 className="text-sm font-semibold text-gray-800">Top 10 players por risk score</h2>
-                  <p className="mt-1 text-xs text-gray-500">Priorize revisão dos perfis mais críticos.</p>
+                  <h2 className="text-sm font-semibold text-gray-800">Jogadores em alta prioridade</h2>
+                  <p className="mt-1 text-xs text-gray-500">Priorize a revisão dos perfis com maior risco.</p>
                 </div>
                 <Link href="/players" className="text-xs font-semibold text-brand hover:underline">
                   Ver jogadores
@@ -333,8 +376,8 @@ export default function DashboardPage() {
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center justify-between">
                 <div>
-                  <h2 className="text-sm font-semibold text-gray-800">Mapa de calor de alertas</h2>
-                  <p className="mt-1 text-xs text-gray-500">Concentração por hora e dia da semana.</p>
+                  <h2 className="text-sm font-semibold text-gray-800">Quando os alertas costumam surgir</h2>
+                  <p className="mt-1 text-xs text-gray-500">Concentração por hora e dia da semana (últimos 30 dias).</p>
                 </div>
                 <span className="rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-semibold text-sky-700">
                   janela 30d

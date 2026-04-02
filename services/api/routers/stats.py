@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user
 from database import get_db
-from models import Alert, Case, IngestJob, Player, User
+from models import Alert, Case, IngestJob, Player, RuleDefinition, User
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -34,6 +34,7 @@ async def dashboard_stats(
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow = today_start + timedelta(days=1)
     since_30d = today_start - timedelta(days=29)
+    since_7d = today_start - timedelta(days=6)
     _closed = ("CLOSED", "REPORTED", "ARCHIVED")
 
     # All counts in one round-trip using scalar subqueries
@@ -168,7 +169,7 @@ async def dashboard_stats(
         .limit(10)
     )).all()
 
-    return {
+    payload: dict = {
         "generated_at": now,
         "alerts_today":  alerts_today,
         "critical_open": critical_open,
@@ -200,3 +201,60 @@ async def dashboard_stats(
             for (weekday, hour), count in sorted(heatmap_map.items())
         ],
     }
+
+    # ── Analyst-specific KPIs ─────────────────────────────────────────────────
+
+    dismissed_7d = (await db.execute(
+        select(func.count(Alert.id)).where(
+            Alert.tenant_id == tid,
+            Alert.status == "DISMISSED",
+            Alert.updated_at >= since_7d,
+        )
+    )).scalar_one()
+
+    my_cases_near_sla = (await db.execute(
+        select(func.count(Case.id)).where(
+            Case.tenant_id == tid,
+            Case.assigned_to == str(current_user.id),
+            Case.sla_due_at != None,  # noqa: E711
+            Case.sla_due_at >= now,
+            Case.sla_due_at < now + timedelta(hours=24),
+            Case.status.notin_(_closed),
+        )
+    )).scalar_one()
+
+    # Rules with the most false-positive-labelled alerts in the last 30 days
+    fp_by_rule_rows = (await db.execute(
+        select(Alert.rule_id, func.count(Alert.id).label("fp_count"))
+        .where(
+            Alert.tenant_id == tid,
+            Alert.label == "FALSE_POSITIVE",
+            Alert.created_at >= since_30d,
+            Alert.rule_id != None,  # noqa: E711
+        )
+        .group_by(Alert.rule_id)
+        .order_by(func.count(Alert.id).desc())
+        .limit(3)
+    )).all()
+
+    rule_ids = [str(r[0]) for r in fp_by_rule_rows if r[0]]
+    rule_names: dict[str, str] = {}
+    if rule_ids:
+        name_rows = (await db.execute(
+            select(RuleDefinition.id, RuleDefinition.name).where(RuleDefinition.id.in_(rule_ids))
+        )).all()
+        rule_names = {str(r[0]): r[1] for r in name_rows}
+
+    high_fp_rules = [
+        {
+            "rule_id": str(r[0]),
+            "rule_name": rule_names.get(str(r[0]), "Regra desconhecida"),
+            "fp_count": r[1],
+        }
+        for r in fp_by_rule_rows
+    ]
+
+    payload["dismissed_7d"] = dismissed_7d
+    payload["my_cases_near_sla"] = my_cases_near_sla
+    payload["high_fp_rules"] = high_fp_rules
+    return payload

@@ -1125,6 +1125,10 @@ export interface DashboardStats {
     risk_band: string;
   }>;
   alert_heatmap: Array<{ weekday: number; hour: number; count: number }>;
+  // Analyst-specific KPIs
+  dismissed_7d?: number;
+  my_cases_near_sla?: number;
+  high_fp_rules?: Array<{ rule_id: string; rule_name: string; fp_count: number }>;
 }
 
 export const fetchDashboardStats = () =>

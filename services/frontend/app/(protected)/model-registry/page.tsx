@@ -25,6 +25,7 @@ import {
 } from 'recharts';
 import {
   BarChart2, BrainCircuit, Info, ShieldCheck, Star, Target, TrendingUp, Trophy,
+  AlertTriangle, CheckCircle2, TrendingDown,
 } from 'lucide-react';
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
@@ -250,6 +251,58 @@ export default function ModelRegistryPage() {
             hint="Percentual configurado do tráfego enviado ao challenger via scoring por tenant."
           />
         </div>
+
+        {/* Health summary banner */}
+        {(() => {
+          const fp = summary.totals.false_positive_rate ?? 0;
+          const prec = summary.totals.precision_estimated ?? 0;
+          const labeled = summary.totals.labeled_alerts ?? 0;
+          if (labeled < 50) return (
+            <div className="flex items-start gap-3 rounded-xl border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800">
+              <Info size={16} className="mt-0.5 flex-shrink-0 text-yellow-500" />
+              <div>
+                <p className="font-semibold">Poucos alertas rotulados ({labeled})</p>
+                <p className="text-yellow-700">Continue triando alertas para melhorar a precisão das estimativas. O modelo aprende com o feedback dos analistas.</p>
+              </div>
+            </div>
+          );
+          if (fp > 0.4) return (
+            <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+              <AlertTriangle size={16} className="mt-0.5 flex-shrink-0 text-red-500" />
+              <div>
+                <p className="font-semibold">Taxa de falso positivo elevada ({pct(fp)})</p>
+                <p className="text-red-700">Mais de 40% dos alertas revisados são falsos positivos. Considere ajustar os pesos de pontuação ou os thresholds das regras.</p>
+              </div>
+            </div>
+          );
+          if (fp > 0.25) return (
+            <div className="flex items-start gap-3 rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
+              <TrendingDown size={16} className="mt-0.5 flex-shrink-0 text-orange-500" />
+              <div>
+                <p className="font-semibold">Atenção: FP rate em {pct(fp)}</p>
+                <p className="text-orange-700">Acima de 25% — revisite as regras com mais falsos positivos e ajuste sensibilidade se necessário.</p>
+              </div>
+            </div>
+          );
+          if (prec >= 0.8) return (
+            <div className="flex items-start gap-3 rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
+              <CheckCircle2 size={16} className="mt-0.5 flex-shrink-0 text-green-500" />
+              <div>
+                <p className="font-semibold">O modelo está em boa saúde — precisão de {pct(prec)}</p>
+                <p className="text-green-700">A taxa de falso positivo está controlada ({pct(fp)}). Continue monitorando o feedback para manter a qualidade.</p>
+              </div>
+            </div>
+          );
+          return (
+            <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">
+              <Info size={16} className="mt-0.5 flex-shrink-0 text-blue-500" />
+              <div>
+                <p className="font-semibold">Modelo estável — precisão {pct(prec)}</p>
+                <p className="text-blue-700">O desempenho está dentro do esperado. Melhore a cobertura aumentando os alertas rotulados.</p>
+              </div>
+            </div>
+          );
+        })()}
       )}
 
       {summary && summary.by_day.length > 0 && (

@@ -1,10 +1,11 @@
 'use client';
 import { useState, useCallback } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { api, validateDsl, createRule } from '@/lib/api';
+import { api, validateDsl, createRule, simulateRule, SimulateRuleResult } from '@/lib/api';
 import {
   Plus, Trash2, Play, Save, Copy, ChevronDown, ChevronRight,
   AlertTriangle, Info, CheckCircle2, X, ToggleLeft, ToggleRight,
+  Search, TrendingUp, Users, Target,
 } from 'lucide-react';
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
@@ -239,8 +240,11 @@ export default function RuleBuilderPage() {
     { id: uid(), field: '', operator: 'gte', value: '' },
   ]);
   const [showTemplates, setShowTemplates] = useState(true);
+  const [templateSearch, setTemplateSearch] = useState('');
   const [validateResult, setValidateResult] = useState<{ valid: boolean; error?: string } | null>(null);
   const [saved, setSaved]             = useState(false);
+  const [impactResult, setImpactResult] = useState<SimulateRuleResult | null>(null);
+  const [impactLoading, setImpactLoading] = useState(false);
 
   const dsl = buildDsl(conditions, joinOp);
 
@@ -250,11 +254,19 @@ export default function RuleBuilderPage() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: () =>
-      createRule({ name, description, condition_dsl: dsl, severity, scope }),
-    onSuccess: () => {
+    mutationFn: async () => {
+      const rule = await createRule({ name, description, condition_dsl: dsl, severity, scope });
+      const today = new Date().toISOString().slice(0, 10);
+      const from = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+      setImpactLoading(true);
+      const impact = await simulateRule(rule.id, { from, to: today }).catch(() => null);
+      setImpactLoading(false);
+      return { rule, impact };
+    },
+    onSuccess: ({ impact }) => {
       setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
+      setImpactResult(impact);
+      setTimeout(() => setSaved(false), 4000);
     },
   });
 
@@ -275,7 +287,16 @@ export default function RuleBuilderPage() {
     setConditions(tmpl.conditions.map((c) => ({ ...c, id: uid() })));
     setShowTemplates(false);
     setValidateResult(null);
+    setImpactResult(null);
   };
+
+  const filteredTemplates = templateSearch.trim()
+    ? TEMPLATES.filter((t) =>
+        t.name.toLowerCase().includes(templateSearch.toLowerCase()) ||
+        t.tag.toLowerCase().includes(templateSearch.toLowerCase()) ||
+        t.description.toLowerCase().includes(templateSearch.toLowerCase()),
+      )
+    : TEMPLATES;
 
   const isValid = name.trim().length > 0 && dsl.length > 0;
 
@@ -303,8 +324,22 @@ export default function RuleBuilderPage() {
         </button>
 
         {showTemplates && (
-          <div className="grid grid-cols-1 gap-3 border-t border-gray-100 p-4 dark:border-gray-700 sm:grid-cols-2 lg:grid-cols-3">
-            {TEMPLATES.map((tmpl) => (
+          <div className="border-t border-gray-100 p-4 dark:border-gray-700">
+            {/* Template search */}
+            <div className="relative mb-3">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="search"
+                placeholder="Filtrar modelos por nome ou tag…"
+                value={templateSearch}
+                onChange={(e) => setTemplateSearch(e.target.value)}
+                className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-8 pr-3 text-xs focus:ring-2 focus:ring-brand dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {filteredTemplates.length === 0 ? (
+                <p className="col-span-3 py-4 text-center text-xs text-gray-400">Nenhum modelo encontrado.</p>
+              ) : filteredTemplates.map((tmpl) => (
               <button
                 key={tmpl.id}
                 onClick={() => applyTemplate(tmpl)}
@@ -321,6 +356,7 @@ export default function RuleBuilderPage() {
                 <span className="mt-2 inline-block text-xs font-medium text-brand">{tmpl.tag}</span>
               </button>
             ))}
+            </div>
           </div>
         )}
       </div>
@@ -477,6 +513,61 @@ export default function RuleBuilderPage() {
           </div>
         </div>
       </div>
+
+      {/* Impacto estimado — aparece após publicar */}
+      {(impactLoading || impactResult) && (
+        <div className="overflow-hidden rounded-xl border border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950">
+          <div className="flex items-center gap-2 border-b border-green-100 bg-white px-5 py-3 dark:border-green-900 dark:bg-green-900/40">
+            <TrendingUp size={15} className="text-green-600" />
+            <h2 className="text-sm font-semibold text-green-800 dark:text-green-200">
+              Impacto estimado — últimos 30 dias
+            </h2>
+            {impactLoading && (
+              <span className="ml-auto text-xs text-green-600 animate-pulse">Calculando…</span>
+            )}
+          </div>
+          {impactResult && (
+            <div className="grid grid-cols-2 gap-4 p-5 md:grid-cols-4">
+              <div className="rounded-lg bg-white p-3 shadow-sm dark:bg-green-900/30">
+                <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                  <Target size={12} /> Alertas gerados
+                </div>
+                <div className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">
+                  {impactResult.total_alerts ?? impactResult.matches}
+                </div>
+              </div>
+              <div className="rounded-lg bg-white p-3 shadow-sm dark:bg-green-900/30">
+                <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                  <Users size={12} /> Clientes envolvidos
+                </div>
+                <div className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">
+                  {impactResult.players?.length ?? '—'}
+                </div>
+              </div>
+              <div className="rounded-lg bg-white p-3 shadow-sm dark:bg-green-900/30">
+                <div className="text-xs text-gray-500">Precisão estimada</div>
+                <div className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">
+                  {impactResult.precision_estimated != null
+                    ? `${(impactResult.precision_estimated * 100).toFixed(0)}%`
+                    : '—'}
+                </div>
+              </div>
+              <div className="rounded-lg bg-white p-3 shadow-sm dark:bg-green-900/30">
+                <div className="text-xs text-gray-500">Falso positivo est.</div>
+                <div className={`mt-1 text-2xl font-bold ${
+                  impactResult.false_positive_estimated != null && impactResult.false_positive_estimated > 0.35
+                    ? 'text-red-600'
+                    : 'text-gray-900 dark:text-white'
+                }`}>
+                  {impactResult.false_positive_estimated != null
+                    ? `${(impactResult.false_positive_estimated * 100).toFixed(0)}%`
+                    : '—'}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Dica */}
       <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950">

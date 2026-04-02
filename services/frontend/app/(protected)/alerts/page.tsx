@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { fetchAlerts, triageAlert, Alert } from '@/lib/api';
 import {
   AlertTriangle, Eye, FolderPlus, X, ChevronRight,
-  Clock, Filter, RefreshCw, HelpCircle,
+  Clock, Filter, RefreshCw, HelpCircle, Glasses, Search,
 } from 'lucide-react';
 
 // ── Tradução de termos técnicos ────────────────────────────────────────────────
@@ -74,11 +74,17 @@ function AlertCard({
   onTriage,
   onOpen,
   onNewCase,
+  onObserve,
+  isObserving,
+  onInvestigate,
 }: {
   alert: Alert;
   onTriage: (a: Alert) => void;
   onOpen: (id: string) => void;
   onNewCase: (a: Alert) => void;
+  onObserve: (id: string) => void;
+  isObserving: boolean;
+  onInvestigate: (id: string) => void;
 }) {
   const style   = SEV_STYLES[alert.severity] ?? SEV_STYLES.LOW;
   const explain = TYPE_EXPLAIN[alert.alert_type] ?? `Tipo: ${alert.alert_type}`;
@@ -133,12 +139,28 @@ function AlertCard({
             >
               <Eye size={11} /> Ver detalhes
             </button>
+            <button
+              onClick={() => onInvestigate(alert.id)}
+              className="flex items-center gap-1 rounded-lg border border-brand bg-brand/5 px-2.5 py-1 text-xs text-brand hover:bg-brand/10 transition-colors font-medium"
+            >
+              <Search size={11} /> Investigar
+            </button>
             {!hasCase && (
               <button
                 onClick={() => onNewCase(alert)}
                 className="flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs text-indigo-700 hover:bg-indigo-100 transition-colors"
               >
                 <FolderPlus size={11} /> Abrir caso
+              </button>
+            )}
+            {alert.status === 'OPEN' && (
+              <button
+                onClick={() => onObserve(alert.id)}
+                disabled={isObserving}
+                className="flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs text-teal-700 hover:bg-teal-100 transition-colors disabled:opacity-50"
+                title="Marcar como em observação (IN_REVIEW)"
+              >
+                <Glasses size={11} /> {isObserving ? '...' : 'Observar'}
               </button>
             )}
             <button
@@ -185,6 +207,7 @@ export default function AlertsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('OPEN');
   const [note, setNote]         = useState('');
   const [disposition, setDisp]  = useState('');
+  const [observingId, setObservingId] = useState<string | null>(null);
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['alerts', statusFilter],
@@ -221,6 +244,13 @@ export default function AlertsPage() {
       setNote('');
       setDisp('');
     },
+  });
+
+  const observe = useMutation({
+    mutationFn: (id: string) => triageAlert(id, 'IN_REVIEW', ''),
+    onMutate:   (id) => setObservingId(id),
+    onSettled:  () => setObservingId(null),
+    onSuccess:  () => qc.invalidateQueries({ queryKey: ['alerts'] }),
   });
 
   return (
@@ -295,6 +325,9 @@ export default function AlertsPage() {
               onOpen={(id) => router.push(`/alerts/${id}`)}
               onTriage={(alert) => { setSelected(alert); setDisp(''); setNote(''); }}
               onNewCase={(alert) => router.push(`/cases?linkAlert=${alert.id}`)}
+              onObserve={(id) => observe.mutate(id)}
+              isObserving={observingId === a.id}
+              onInvestigate={(id) => router.push(`/investigate/${id}`)}
             />
           ))}
         </div>
