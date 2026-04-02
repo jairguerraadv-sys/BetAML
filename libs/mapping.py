@@ -126,11 +126,108 @@ BACKOFFICE_BETA_PLAYER: dict[str, Any] = {
     ],
 }
 
+# ── BackofficeX — CSV diário (depositos / cadastros / apostas) ────────────────
+# Espelha docs/mapping-config-example.yaml — use como template de onboarding.
+
+BACKOFFICE_X_TRANSACTION: dict[str, Any] = {
+    "version": "1.0",
+    "source_system": "BackofficeX",
+    "entity_type": "TRANSACTION",
+    "fields": [
+        {"target": "external_transaction_id", "source": "id_transacao",       "transform": "copy",          "required": True},
+        {"target": "player_cpf",              "source": "cpf_apostador",       "transform": "normalizeCpf",  "required": True},
+        {"target": "external_player_id",      "source": "id_apostador",        "transform": "copy"},
+        {"target": "type",                    "source": "tipo_mov",             "transform": "mapEnum",       "required": True,
+         "params": {"DEP": "DEPOSIT", "SAQ": "WITHDRAWAL", "SAQ_INT": "WITHDRAWAL",
+                    "CB": "CHARGEBACK", "BON": "BONUS", "BON_BEM": "BONUS",
+                    "AJU": "ADJUSTMENT", "_default": "ADJUSTMENT"}},
+        {"target": "amount",                  "source": "vlr_bruto",           "transform": "coerceDecimal", "required": True},
+        {"target": "currency",                "source": "moeda",               "transform": "copy"},
+        {"target": "method",                  "source": "metodo_pgto",         "transform": "mapEnum",       "required": True,
+         "params": {"PIX": "PIX", "pix": "PIX", "TED": "TED", "ted": "TED",
+                    "DOC": "TED", "CARTAO": "CARD", "CARD": "CARD",
+                    "credit_card": "CARD", "debit_card": "CARD",
+                    "WALLET": "WALLET", "_default": "OTHER"}},
+        {"target": "status",                  "source": "status_transacao",    "transform": "mapEnum",       "required": True,
+         "params": {"LIQUIDADA": "SETTLED", "CONCLUIDA": "SETTLED",
+                    "EM_PROC": "PENDING",  "PENDENTE": "PENDING",
+                    "FALHA": "FAILED",     "ERRO": "FAILED",
+                    "CANCELADA": "REVERSED", "ESTORNADA": "REVERSED",
+                    "_default": "PENDING"}},
+        {"target": "occurred_at",             "source": "dt_transacao",        "transform": "parseDate",     "required": True},
+        {"target": "description",             "source": "descricao",           "transform": "strip"},
+        {"target": "source_system",           "transform": "constant",         "params": {"value": "BackofficeX"}},
+    ],
+}
+
+BACKOFFICE_X_PLAYER: dict[str, Any] = {
+    "version": "1.0",
+    "source_system": "BackofficeX",
+    "entity_type": "PLAYER",
+    "fields": [
+        {"target": "external_player_id",       "source": "id_cliente",       "transform": "copy",         "required": True},
+        {"target": "name",                     "source": "nome_completo",    "transform": "strip",        "required": True},
+        {"target": "cpf",                      "source": "cpf",              "transform": "normalizeCpf", "required": True},
+        {"target": "birth_date",               "source": "dt_nasc",          "transform": "parseDate"},
+        {"target": "email",                    "source": "email",            "transform": "lowercase"},
+        {"target": "phone",                    "source": "telefone",         "transform": "strip"},
+        {"target": "profession",               "source": "ocupacao",         "transform": "strip"},
+        {"target": "declared_income_monthly",  "source": "renda_mensal",     "transform": "coerceDecimal"},
+        {"target": "pep_flag",                 "source": "pep",              "transform": "mapEnum",
+         "params": {"true": True, "false": False, "True": True, "False": False,
+                    "S": True, "N": False, "SIM": True, "NAO": False, "NÃO": False,
+                    "_default": False}},
+        {"target": "registration_date",        "source": "dt_cadastro",      "transform": "parseDate"},
+        {"target": "nationality",              "source": "nacionalidade",    "transform": "copy"},
+        {"target": "source_system",            "transform": "constant",      "params": {"value": "BackofficeX"}},
+    ],
+}
+
+BACKOFFICE_X_BET: dict[str, Any] = {
+    "version": "1.0",
+    "source_system": "BackofficeX",
+    "entity_type": "BET",
+    "fields": [
+        {"target": "external_bet_id",    "source": "id_aposta",       "transform": "copy",         "required": True},
+        {"target": "player_cpf",         "source": "cpf_apostador",   "transform": "normalizeCpf", "required": True},
+        {"target": "external_player_id", "source": "id_apostador",    "transform": "copy"},
+        {"target": "stake_amount",       "source": "vlr_aposta",      "transform": "coerceDecimal","required": True},
+        {"target": "odds",               "source": "odds",            "transform": "coerceDecimal"},
+        {"target": "potential_payout",   "source": "retorno_potencial","transform": "coerceDecimal"},
+        {"target": "settled_payout",     "source": "retorno_efetivo", "transform": "coerceDecimal"},
+        {"target": "market_type",        "source": "tipo_mercado",    "transform": "normalize",
+         "params": {"resultado_final": "match_result", "handicap": "handicap",
+                    "mais_menos": "over_under", "ambas_marcam": "both_to_score",
+                    "placar_exato": "correct_score", "total_gols": "over_under",
+                    "_default": "other"}},
+        {"target": "sport",              "source": "esporte",         "transform": "normalize",
+         "params": {"futebol": "football", "basquete": "basketball", "tenis": "tennis",
+                    "volei": "volleyball", "esports": "esports", "_default": "other"}},
+        {"target": "event_id",           "source": "id_evento",       "transform": "copy"},
+        {"target": "selection",          "source": "selecao",         "transform": "strip"},
+        {"target": "channel",            "source": "canal",           "transform": "mapEnum",
+         "params": {"APP": "APP", "WEB": "WEB", "SITE": "WEB",
+                    "TERMINAL": "TERMINAL", "PDV": "TERMINAL", "_default": "WEB"}},
+        {"target": "placed_at",          "source": "dt_aposta",       "transform": "parseDate",    "required": True},
+        {"target": "settled_at",         "source": "dt_liquidacao",   "transform": "parseDate"},
+        {"target": "status",             "source": "status_aposta",   "transform": "mapEnum",
+         "params": {"GANHA": "WON", "PERDIDA": "LOST", "CANCELADA": "CANCELLED",
+                    "PENDENTE": "PENDING", "OPEN": "PENDING", "VOID": "VOIDED",
+                    "_default": "PENDING"}},
+        {"target": "cashout_amount",     "source": "vlr_cashout",     "transform": "coerceDecimal"},
+        {"target": "source_system",      "transform": "constant",     "params": {"value": "BackofficeX"}},
+    ],
+}
+
 BACKOFFICE_CONFIGS: dict[str, dict[str, Any]] = {
     "BackofficeAlpha:TRANSACTION": BACKOFFICE_ALPHA_TRANSACTION,
     "BackofficeAlpha:PLAYER":      BACKOFFICE_ALPHA_PLAYER,
     "BackofficeBeta:TRANSACTION":  BACKOFFICE_BETA_TRANSACTION,
     "BackofficeBeta:PLAYER":       BACKOFFICE_BETA_PLAYER,
+    # BackofficeX — template de onboarding (ver docs/mapping-config-example.yaml)
+    "BackofficeX:TRANSACTION":     BACKOFFICE_X_TRANSACTION,
+    "BackofficeX:PLAYER":          BACKOFFICE_X_PLAYER,
+    "BackofficeX:BET":             BACKOFFICE_X_BET,
 }
 
 

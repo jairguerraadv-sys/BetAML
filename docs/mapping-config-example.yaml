@@ -1,0 +1,442 @@
+# ============================================================
+# BetAML — Exemplo de MappingConfig para "Backoffice X"
+# Formato: YAML (armazenado como config_json JSONB no Postgres)
+#
+# Contexto:
+#   Operadora fictícia "Aposta Fácil Ltda." usa um sistema
+#   legado que gera três arquivos CSV diários:
+#     - depositos_YYYYMMDD.csv      → entity_type: TRANSACTION
+#     - cadastros_YYYYMMDD.csv      → entity_type: PLAYER
+#     - apostas_YYYYMMDD.csv        → entity_type: BET
+#
+# Каждый arquivo é associado a um MappingConfig versionado.
+# O pipeline de ingestão:
+#   1. Lê CSV com ConnectorCSV (pandas + chunksize=5000)
+#   2. Aplica MappingEngine com o config abaixo
+#   3. Valida contra CANONICAL_INGEST_SCHEMA (libs/mapping.py)
+#   4. Grava em financial_transactions / players / bets
+#   5. Erros vão para ingest_errors (quarentena)
+# ============================================================
+
+
+# ────────────────────────────────────────────────────────────
+# Metadados do registro (campos da tabela mapping_configs)
+# ────────────────────────────────────────────────────────────
+# name:           "BackofficeX – CSV Diário de Depósitos/Saques"
+# source_system:  "BackofficeX"
+# entity_type:    "TRANSACTION"       # TRANSACTION | PLAYER | BET | DEVICE_EVENT
+# version:        "1.0"
+# version_number: 1
+# status:         ACTIVE              # DRAFT | ACTIVE | DEPRECATED
+# connector_hint: CSV                 # CSV | JSON | NDJSON | XML | WEBHOOK
+#
+# O campo config_json abaixo é o que fica no JSONB do Postgres.
+# ────────────────────────────────────────────────────────────
+
+
+# ==============================================================
+# 1. TRANSACTION — depositos_YYYYMMDD.csv
+# ==============================================================
+#
+# Cabeçalho real do arquivo (primeira linha):
+#   id_transacao,cpf_apostador,id_apostador,tipo_mov,vlr_bruto,moeda,
+#   metodo_pgto,cod_instrumento,titular_instrumento,
+#   status_transacao,dt_transacao,descricao
+#
+# Linha de exemplo:
+#   TXN-00192831,123.456.789-09,USR-4421,DEP,1500.00,BRL,
+#   PIX,pixkey@email.com,,LIQUIDADA,22/03/2026 14:35:00,Depósito via Pix
+# ==============================================================
+
+transaction_mapping:
+  version: "1.0"
+  source_system: BackofficeX
+  entity_type: TRANSACTION
+  fields:
+
+    # Identificador único da transação no backoffice
+    - target: external_transaction_id
+      source: id_transacao
+      transform: copy
+      required: true
+
+    # CPF do apostador — normaliza (remove pontuação, mantém 11 dígitos)
+    - target: player_cpf
+      source: cpf_apostador
+      transform: normalizeCpf
+      required: true
+
+    # ID externo do apostador (usar quando CPF não está disponível)
+    - target: external_player_id
+      source: id_apostador
+      transform: copy
+
+    # Tipo de movimentação: mapeia valores do backoffice → enum canônico
+    # Canônico: DEPOSIT | WITHDRAWAL | CHARGEBACK | BONUS | ADJUSTMENT
+    - target: type
+      source: tipo_mov
+      transform: mapEnum
+      required: true
+      params:
+        DEP:       DEPOSIT
+        SAQ:       WITHDRAWAL
+        SAQ_INT:   WITHDRAWAL
+        CB:        CHARGEBACK
+        BON:       BONUS
+        BON_BEM:   BONUS
+        AJU:       ADJUSTMENT
+        _default:  ADJUSTMENT    # fallback seguro para valores desconhecidos
+
+    # Valor bruto — converte string com vírgula decimal para float
+    - target: amount
+      source: vlr_bruto
+      transform: coerceDecimal
+      required: true
+
+    # Moeda — copia diretamente (BRL esperado, validação downstream)
+    - target: currency
+      source: moeda
+      transform: copy
+      params: {}
+
+    # Método de pagamento: normaliza para enum canônico
+    # Canônico: PIX | TED | CARD | WALLET | OTHER
+    - target: method
+      source: metodo_pgto
+      transform: mapEnum
+      required: true
+      params:
+        PIX:         PIX
+        pix:         PIX
+        TED:         TED
+        ted:         TED
+        DOC:         TED         # DOC é tratado como TED para fins PLD
+        CARTAO:      CARD
+        CARD:        CARD
+        credit_card: CARD
+        debit_card:  CARD
+        WALLET:      WALLET
+        SAQUE_CASH:  OTHER
+        _default:    OTHER
+
+    # Instrumento de pagamento (chave Pix, número mascarado, código banco)
+    - target: payment_instrument.instrument_type
+      source: metodo_pgto
+      transform: mapEnum
+      params:
+        PIX:   PIX
+        TED:   TED
+        DOC:   TED
+        CARTAO: CARD
+        _default: OTHER
+
+    - target: payment_instrument.masked_number
+      source: cod_instrumento
+      transform: strip
+
+    - target: payment_instrument.holder_document
+      source: titular_instrumento
+      transform: normalizeCpf
+
+    # Status da transação
+    # Canônico: PENDING | SETTLED | FAILED | REVERSED
+    - target: status
+      source: status_transacao
+      transform: mapEnum
+      required: true
+      params:
+        LIQUIDADA:  SETTLED
+        CONCLUIDA:  SETTLED
+        EM_PROC:    PENDING
+        PENDENTE:   PENDING
+        FALHA:      FAILED
+        ERRO:       FAILED
+        CANCELADA:  REVERSED
+        ESTORNADA:  REVERSED
+        _default:   PENDING
+
+    # Data da transação — suporta formato dd/MM/yyyy HH:mm:ss do backoffice
+    - target: occurred_at
+      source: dt_transacao
+      transform: parseDate
+      required: true
+      # MappingEngine tenta os formatos em DATE_FORMATS (libs/mapping.py):
+      # "%d/%m/%Y %H:%M:%S", "%d/%m/%Y", "%Y-%m-%dT%H:%M:%SZ", etc.
+
+    # Descrição livre
+    - target: description
+      source: descricao
+      transform: strip
+
+    # Campo fixo: identifica a origem em todos os eventos canônicos
+    - target: source_system
+      transform: constant
+      params:
+        value: BackofficeX
+
+
+# ==============================================================
+# 2. PLAYER — cadastros_YYYYMMDD.csv
+# ==============================================================
+#
+# Cabeçalho:
+#   id_cliente,nome_completo,cpf,dt_nasc,email,telefone,
+#   ocupacao,renda_mensal,pep,dt_cadastro,nacionalidade
+#
+# Linha de exemplo:
+#   USR-4421,João da Silva Mendes,123.456.789-09,15/06/1985,
+#   joao@email.com,11999880001,Motorista autônomo,4500.00,
+#   false,01/01/2023,BR
+# ==============================================================
+
+player_mapping:
+  version: "1.0"
+  source_system: BackofficeX
+  entity_type: PLAYER
+  fields:
+
+    - target: external_player_id
+      source: id_cliente
+      transform: copy
+      required: true
+
+    # Nome completo — remove espaços extras nas pontas
+    - target: name
+      source: nome_completo
+      transform: strip
+      required: true
+
+    - target: cpf
+      source: cpf
+      transform: normalizeCpf
+      required: true
+
+    - target: birth_date
+      source: dt_nasc
+      transform: parseDate
+
+    # Email normalizado para lowercase
+    - target: email
+      source: email
+      transform: lowercase
+
+    - target: phone
+      source: telefone
+      transform: strip
+
+    - target: profession
+      source: ocupacao
+      transform: strip
+
+    # Renda declarada mensal (R$)
+    - target: declared_income_monthly
+      source: renda_mensal
+      transform: coerceDecimal
+
+    # PEP flag — converte string "true"/"false"/"S"/"N" para bool
+    # Nota: o MappingEngine retorna o valor mapeado; o pipeline
+    # converte para bool antes de gravar.
+    - target: pep_flag
+      source: pep
+      transform: mapEnum
+      params:
+        "true":  true
+        "false": false
+        "True":  true
+        "False": false
+        S:       true
+        N:       false
+        SIM:     true
+        NAO:     false
+        NÃO:     false
+        _default: false
+
+    - target: registration_date
+      source: dt_cadastro
+      transform: parseDate
+
+    # ISO 3166-1 alpha-2 da nacionalidade
+    - target: nationality
+      source: nacionalidade
+      transform: copy
+
+    - target: source_system
+      transform: constant
+      params:
+        value: BackofficeX
+
+
+# ==============================================================
+# 3. BET — apostas_YYYYMMDD.csv
+# ==============================================================
+#
+# Cabeçalho:
+#   id_aposta,cpf_apostador,id_apostador,vlr_aposta,odds,
+#   retorno_potencial,retorno_efetivo,tipo_mercado,
+#   esporte,id_evento,selecao,canal,dt_aposta,dt_liquidacao,
+#   status_aposta,vlr_cashout
+#
+# Linha de exemplo:
+#   BET-88712,123.456.789-09,USR-4421,100.00,3.75,
+#   375.00,375.00,RESULTADO_FINAL,
+#   FUTEBOL,EVT-55201,"Real Madrid/Flamengo/Vitória",APP,
+#   22/03/2026 16:00:00,22/03/2026 18:00:00,
+#   GANHA,0.00
+# ==============================================================
+
+bet_mapping:
+  version: "1.0"
+  source_system: BackofficeX
+  entity_type: BET
+  fields:
+
+    - target: external_bet_id
+      source: id_aposta
+      transform: copy
+      required: true
+
+    - target: player_cpf
+      source: cpf_apostador
+      transform: normalizeCpf
+      required: true
+
+    - target: external_player_id
+      source: id_apostador
+      transform: copy
+
+    # Valor apostado (stake)
+    - target: stake_amount
+      source: vlr_aposta
+      transform: coerceDecimal
+      required: true
+
+    - target: odds
+      source: odds
+      transform: coerceDecimal
+
+    - target: potential_payout
+      source: retorno_potencial
+      transform: coerceDecimal
+
+    - target: settled_payout
+      source: retorno_efetivo
+      transform: coerceDecimal
+
+    # Tipo de mercado normalizado (texto livre → slug lowercase)
+    - target: market_type
+      source: tipo_mercado
+      transform: normalize
+      params:
+        resultado_final:     match_result
+        handicap:            handicap
+        mais_menos:          over_under
+        ambas_marcam:        both_to_score
+        placar_exato:        correct_score
+        total_gols:          over_under
+        _default:            other
+
+    # Esporte normalizado
+    - target: sport
+      source: esporte
+      transform: normalize
+      params:
+        futebol:    football
+        basquete:   basketball
+        tenis:      tennis
+        volei:      volleyball
+        esports:    esports
+        _default:   other
+
+    - target: event_id
+      source: id_evento
+      transform: copy
+
+    # Seleção(ões) do apostador — pode vir como string CSV ("Time A/Time B")
+    - target: selection
+      source: selecao
+      transform: strip
+
+    # Canal de aposta: WEB | APP | TERMINAL
+    - target: channel
+      source: canal
+      transform: mapEnum
+      params:
+        APP:      APP
+        WEB:      WEB
+        SITE:     WEB
+        TERMINAL: TERMINAL
+        PDV:      TERMINAL
+        _default: WEB
+
+    - target: placed_at
+      source: dt_aposta
+      transform: parseDate
+      required: true
+
+    - target: settled_at
+      source: dt_liquidacao
+      transform: parseDate
+
+    # Status da aposta
+    - target: status
+      source: status_aposta
+      transform: mapEnum
+      params:
+        GANHA:      WON
+        PERDIDA:    LOST
+        CANCELADA:  CANCELLED
+        PENDENTE:   PENDING
+        OPEN:       PENDING
+        VOID:       VOIDED
+        _default:   PENDING
+
+    - target: cashout_amount
+      source: vlr_cashout
+      transform: coerceDecimal
+
+    - target: source_system
+      transform: constant
+      params:
+        value: BackofficeX
+
+
+# ==============================================================
+# 4. Notas de uso e validações downstream
+# ==============================================================
+#
+# Campos obrigatórios no modelo canônico (CANONICAL_INGEST_SCHEMA):
+#
+#   TRANSACTION: external_transaction_id | player_cpf/external_player_id
+#                type | amount | occurred_at
+#
+#   PLAYER:      external_player_id | cpf | name
+#
+#   BET:         external_bet_id | player_cpf/external_player_id
+#                stake_amount | placed_at
+#
+# Erros de mapeamento (campo obrigatório None, valor fora do mapEnum, etc.)
+# → registro vai para `ingest_errors` com:
+#     raw_payload, motivo do erro, mapping_config_id, source_system
+#
+# Transformações disponíveis no MappingEngine (libs/mapping.py):
+#   copy          : copia o valor sem alteração
+#   strip         : remove espaços nas pontas (str)
+#   lowercase     : converte para minúsculas (str)
+#   parseDate     : qualquer formato → ISO8601 (ver DATE_FORMATS)
+#   normalizeCpf  : remove não-dígitos, retorna 11 chars
+#   coerceDecimal : string / int / float → float (ponto decimal)
+#   mapEnum       : dicionário de mapeamento; _default como fallback
+#   normalize     : igual mapEnum mas aplica .lower() no valor de entrada
+#   constant      : ignora source, devolve params.value fixo
+#   copyField     : mesmo que copy (alias legacy)
+#   coerceArray   : string CSV → list[str], ou passa lista intacta
+#   conditional   : alias mapEnum (nomenclatura alternativa)
+#   extractXMLAttr: extrai atributo de dict gerado pelo ConnectorGamma
+#
+# Para criar uma segunda versão deste config sem quebrar produção:
+#   1. POST /mappings com os campos e status="DRAFT"
+#   2. POST /mappings/{id}/test com arquivo CSV de homologação
+#   3. Conferir stats: total / success / errors na resposta
+#   4. PATCH /mappings/{id} com {"active": true, "is_current": true}
+#      → o backend desativa automaticamente o registro anterior
+# ==============================================================
