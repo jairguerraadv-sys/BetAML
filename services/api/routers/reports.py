@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import require_roles
+from auth import AppRole, require_roles, require_role, require_role_any
 from database import AsyncSessionLocal, get_db
 from models import Alert, Bet, Case, FinancialTransaction, Player, ReportPackage, RuleDefinition, User
 from utils import write_audit
@@ -250,7 +250,7 @@ async def generate_monthly_report(
     body: MonthlyReportIn,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
 ):
     """Trigger async generation of monthly compliance summary report (202 Accepted)."""
     await write_audit(
@@ -277,7 +277,7 @@ async def get_monthly_summary(
     date_from: str = Query(..., description="Data inicial YYYY-MM-DD (inclusivo)"),
     date_to: str = Query(..., description="Data final YYYY-MM-DD (inclusivo)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
 ):
     """Return the monthly compliance summary synchronously."""
     try:
@@ -308,7 +308,7 @@ async def get_monthly_summary_csv(
     date_from: str = Query(..., description="Data inicial YYYY-MM-DD"),
     date_to: str = Query(..., description="Data final YYYY-MM-DD"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
 ):
     """Export the monthly compliance summary as a UTF-8-BOM CSV for Excel."""
     try:

@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import case as sqla_case, cast, Float, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import get_current_user, require_roles
+from auth import AppRole, get_current_user, require_roles, require_role_any
 from database import get_db
 from models import (
     Alert, Case, CaseEvent, FeatureSnapshot, IngestError, IngestJob,
@@ -520,7 +520,7 @@ async def pld_kpis(
 @router.get("/data-quality", summary="Dashboard de qualidade de dados")
 async def data_quality(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
 ):
     """Dashboard de qualidade de dados para o analista de PLD.
 

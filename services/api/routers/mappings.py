@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import get_current_user, require_roles
+from auth import AppRole, get_current_user, require_roles, require_role, require_role_any, require_permission
 from database import get_db
 from libs.connectors import CONNECTOR_TEMPLATE_REGISTRY, get_connector
 from libs.mapping import (
@@ -206,7 +206,7 @@ async def list_mapping_templates(
 @router.post("/mappings/validate")
 async def validate_mapping_config(
     body: MappingValidateIn,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     _ = current_user
     try:
@@ -229,7 +229,7 @@ async def validate_mapping_config(
 @router.post("/mappings/preview")
 async def preview_mapping_config(
     body: MappingPreviewIn,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     _ = current_user
     try:
@@ -289,7 +289,7 @@ async def list_mappings(
 @router.post("/mappings", status_code=201)
 async def create_mapping(
     body: MappingCreate,
-    current_user: User = Depends(require_roles("ADMIN")),
+    current_user: User = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
     db: AsyncSession = Depends(get_db),
 ):
     cfg = _parse_config_payload(
@@ -408,7 +408,7 @@ async def list_mapping_versions(
 async def rollback_mapping_version(
     mapping_id: str,
     version_number: int = Query(..., ge=1),
-    current_user: User = Depends(require_roles("ADMIN")),
+    current_user: User = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
     db: AsyncSession = Depends(get_db),
 ):
     ref = await db.get(MappingConfig, mapping_id)
@@ -483,7 +483,7 @@ async def rollback_mapping_version(
 async def create_new_mapping_version(
     mapping_id: str,
     body: MappingPatch,
-    current_user: User = Depends(require_roles("ADMIN")),
+    current_user: User = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
     db: AsyncSession = Depends(get_db),
 ):
     current = await db.get(MappingConfig, mapping_id)
@@ -555,7 +555,7 @@ async def create_new_mapping_version(
 async def test_mapping(
     mapping_id: str,
     body: MappingTestIn,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
     db: AsyncSession = Depends(get_db),
 ):
     mc = await db.get(MappingConfig, mapping_id)

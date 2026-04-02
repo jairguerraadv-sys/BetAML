@@ -7,6 +7,8 @@ export interface CurrentUser {
   username: string;
   email?: string;
   role: string;
+  /** Lista de papéis no modelo multi-tenant (ex: ["Operador_Analista"]) */
+  roles?: string[];
   tenant_id: string;
 }
 

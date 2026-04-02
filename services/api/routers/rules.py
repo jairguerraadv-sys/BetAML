@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import get_current_user, require_roles
+from auth import AppRole, get_current_user, get_effective_roles, require_roles, require_role, require_role_any, require_permission
 from database import get_db
 from models import Alert, RuleDefinition, RuleMacro, User
 from utils import write_audit
@@ -105,7 +105,7 @@ class PreviewDslRequest(BaseModel):
 @router.post("/rules/preview-dsl")
 async def preview_dsl(
     body: PreviewDslRequest,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role(AppRole.GESTOR)),
     db: AsyncSession = Depends(get_db),
 ):
     """Pré-visualiza quantos eventos uma DSL matcharia nos últimos N dias,
@@ -183,7 +183,7 @@ async def preview_dsl(
 
 @router.post("/rules", status_code=201)
 async def create_rule(    body: RuleCreate,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role(AppRole.GESTOR)),
     db: AsyncSession = Depends(get_db),
 ):
     from libs.dsl_parser import validate_dsl
@@ -230,7 +230,7 @@ async def get_rule(
 async def update_rule(
     rule_id: str,
     body: RuleUpdate,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role(AppRole.GESTOR)),
     db: AsyncSession = Depends(get_db),
 ):
     r = await db.get(RuleDefinition, rule_id)
@@ -265,7 +265,7 @@ async def update_rule(
 @router.delete("/rules/{rule_id}")
 async def delete_rule(
     rule_id: str,
-    current_user: User = Depends(require_roles("ADMIN")),
+    current_user: User = Depends(require_role(AppRole.GESTOR)),
     db: AsyncSession = Depends(get_db),
 ):
     r = await db.get(RuleDefinition, rule_id)
@@ -281,7 +281,7 @@ async def delete_rule(
 async def simulate_rule(
     rule_id: str,
     body: SimulateRequest,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role(AppRole.GESTOR)),
     db: AsyncSession = Depends(get_db),
 ):
     from libs.dsl_parser import eval_dsl

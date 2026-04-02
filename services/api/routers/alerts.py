@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import get_current_user, require_roles
+from auth import AppRole, get_current_user, get_effective_roles, require_roles, require_role, require_role_any, require_permission
 from database import AsyncSessionLocal, get_db
 from libs.schemas import AlertExplainabilityOut
 from models import Alert, Bet, Case, FinancialTransaction, Notification, User
@@ -284,7 +284,7 @@ class TriageRequest(BaseModel):
 async def triage_alert(
     alert_id: str,
     body: TriageRequest,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     a = await db.get(Alert, alert_id)
@@ -301,7 +301,7 @@ async def triage_alert(
 @router.post("/alerts/{alert_id}/close")
 async def close_alert(
     alert_id: str,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     a = await db.get(Alert, alert_id)
@@ -321,7 +321,7 @@ class LinkCaseRequest(BaseModel):
 async def link_alert_to_case(
     alert_id: str,
     body: LinkCaseRequest,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     a = await db.get(Alert, alert_id)
@@ -420,10 +420,10 @@ async def label_alert(
     body: AlertLabelIn,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "SUPER_ADMIN")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN])),
 ):
     """Label an alert as TRUE_POSITIVE, FALSE_POSITIVE, or NEED_REVIEW."""
-    if current_user.role not in {"ADMIN", "AML_ANALYST", "SUPER_ADMIN"}:
+    if not get_effective_roles(current_user).intersection({AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN}):
         raise HTTPException(403, "Forbidden")
     alert = (await db.execute(
         select(Alert).where(
@@ -498,7 +498,7 @@ async def _enqueue_feedback_event(alert_id: str, label: str, tenant_id: str) -> 
                 await _db.execute(
                     select(User.id).where(
                         User.tenant_id == tenant_id,
-                        User.role == "ADMIN",
+                        User.role.in_(["ADMIN", "AML_ANALYST", AppRole.GESTOR, AppRole.ANALISTA]),
                         User.active == True,  # noqa: E712
                     )
                 )

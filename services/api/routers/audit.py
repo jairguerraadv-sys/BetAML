@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import require_roles
+from auth import AppRole, require_roles, require_role_any
 from database import get_db
 from models import AuditLog, User
 
@@ -53,7 +53,7 @@ async def list_audit_logs(
     offset: int = 0,
     page: int | None = Query(None, ge=1),
     per_page: int | None = Query(None, ge=1, le=500),
-    current_user: User = Depends(require_roles("ADMIN", "AUDITOR")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.ADMIN_TECNICO])),
     db: AsyncSession = Depends(get_db),
 ):
     if per_page is not None:
@@ -102,7 +102,7 @@ async def list_audit_log_legacy(
     offset: int = Query(0, ge=0),
     page: int | None = Query(None, ge=1),
     per_page: int | None = Query(None, ge=1, le=500),
-    current_user: User = Depends(require_roles("ADMIN", "AUDITOR")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.ADMIN_TECNICO])),
     db: AsyncSession = Depends(get_db),
 ):
     # Legacy compatibility endpoint expected by older integrations/tests.

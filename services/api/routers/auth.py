@@ -9,9 +9,11 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import (
+    AppRole,
     create_access_token,
     create_refresh_token,
     get_current_user,
+    get_effective_roles,
     oauth2_scheme_optional,
     revoke_refresh_token,
     revoke_token,
@@ -36,7 +38,8 @@ class TokenResponse(BaseModel):
     access_token: str
     refresh_token: Optional[str] = None  # Incluído para mobile apps
     token_type: str = "bearer"
-    role: str
+    role: str          # papel legado (backward compat)
+    roles: list[str]   # lista de papéis efetivos (novo modelo RBAC)
     tenant_id: str
 
 
@@ -147,7 +150,9 @@ async def login(
         access_token=access_token,
         refresh_token=refresh_token,  # Also return in body for mobile apps
         role=user.role,
-        tenant_id=user.tenant_id
+        roles=sorted(get_effective_roles(user) - {user.role}  # exclui nome legado da lista de novos
+                     if not (user.roles or []) else set(user.roles or [])),
+        tenant_id=user.tenant_id,
     )
 
 
@@ -155,11 +160,15 @@ async def login(
 @router.get("/auth/me")
 @limiter.limit("100/minute")
 async def me(request: Request, current_user: User = Depends(get_current_user)):
+    effective = get_effective_roles(current_user)
+    # roles efetivos = apenas os novos papéis (sem os legados de backward compat)
+    new_roles = sorted({r for r in effective if r.startswith("Operador_") or r.startswith("BetAML_")})
     return {
         "id": current_user.id,
         "username": current_user.username,
         "email": current_user.email,
-        "role": current_user.role,
+        "role": current_user.role,      # legado
+        "roles": new_roles,             # novo modelo RBAC
         "tenant_id": current_user.tenant_id,
     }
 

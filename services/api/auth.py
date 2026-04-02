@@ -25,7 +25,93 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
-ROLES = {"SUPER_ADMIN", "ADMIN", "AML_ANALYST", "AUDITOR"}
+
+# ── Papéis da plataforma BetAML ───────────────────────────────────────────────
+
+class AppRole(str):
+    """Constantes de papéis (usa strings simples para serialização JSON fácil)."""
+    ANALISTA      = "Operador_Analista"
+    GESTOR        = "Operador_Gestor"
+    ADMIN_TECNICO = "Operador_AdminTecnico"
+    SUPER_ADMIN   = "BetAML_SuperAdmin"
+
+
+# Papéis válidos (novo + legado para backward compat)
+ROLES: frozenset[str] = frozenset({
+    # Novos papéis semanticamente corretos
+    AppRole.ANALISTA, AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN,
+    # Legados — mantidos para compatibilidade com tokens existentes e seeds
+    "SUPER_ADMIN", "ADMIN", "AML_ANALYST", "AUDITOR",
+})
+
+# Mapeamento legado → novos papéis (para usuários sem a coluna `roles` preenchida)
+_LEGACY_ROLE_MAP: dict[str, list[str]] = {
+    "AML_ANALYST": [AppRole.ANALISTA],
+    "AUDITOR":     [AppRole.ANALISTA],                                    # auditor = acesso leitura = Analista
+    "ADMIN":       [AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.ANALISTA],  # admin legacy = acumula funções
+    "SUPER_ADMIN": [AppRole.SUPER_ADMIN],
+}
+
+# Mapa estático de permissões (resource:action) por papel
+_PERMISSIONS: dict[str, frozenset[str]] = {
+    AppRole.ANALISTA: frozenset({
+        "alerts:read",   "alerts:write",
+        "cases:read",    "cases:write",
+        "players:read",  "players:write",
+        "reports:read",  "reports:write",
+        "notifications:read",
+        "audit:read",
+        "player_lists:read",
+    }),
+    AppRole.GESTOR: frozenset({
+        # herda Analista
+        "alerts:read",      "alerts:write",
+        "cases:read",       "cases:write",   "cases:admin",
+        "players:read",     "players:write",
+        "reports:read",     "reports:write", "reports_kpi:read",
+        "notifications:read",
+        "audit:read",
+        "player_lists:read", "player_lists:write",
+        # exclusivo Gestor
+        "sensitivity:read",  "sensitivity:write",
+        "rules:read",        "rules:write",
+    }),
+    AppRole.ADMIN_TECNICO: frozenset({
+        "mappings:read",       "mappings:write",
+        "ingest:read",         "ingest:write",
+        "ingest_errors:read",  "ingest_errors:write",
+        "users:read",          "users:write",
+        "audit:read",
+        "settings:read",       "settings:write",
+    }),
+    AppRole.SUPER_ADMIN: frozenset({
+        "tenants:read",   "tenants:write",  "tenants:admin",
+        "templates:read", "templates:write",
+        "ml_global:read", "ml_global:write",
+        "platform_audit:read",
+        "roles_global:admin",
+        "users:read",     "users:write",
+        "*",   # superpermissão
+    }),
+}
+
+
+def get_effective_roles(user: Any) -> set[str]:
+    """Retorna o conjunto de papéis efetivos de um usuário.
+
+    Consulta a coluna `roles` (JSONB) se preenchida; caso contrário,
+    deriva do campo legado `role` (string) via _LEGACY_ROLE_MAP.
+    Inclui sempre o valor legado para compatibilidade com guards antigos.
+    """
+    # Novo estilo: coluna `roles` JSONB populada
+    user_roles: list[str] | None = getattr(user, "roles", None)
+    if user_roles:
+        return set(user_roles)
+    # Fallback legado
+    legacy = getattr(user, "role", "")
+    derived = set(_LEGACY_ROLE_MAP.get(legacy, [AppRole.ANALISTA]))
+    derived.add(legacy)   # mantém nome legado para guards antigos que usam require_roles("ADMIN")
+    return derived
 
 # ── Redis client para blacklist de JWT ────────────────────────────────────────
 _auth_redis: Any = None
@@ -159,13 +245,49 @@ async def get_current_user(
 
 
 def require_roles(*roles: str) -> Callable[..., Any]:
+    """Requer que o usuário possua pelo menos um dos papéis indicados.
+
+    Aceita nomes de papéis legados ("ADMIN", "AML_ANALYST") e novos
+    ("Operador_Gestor"), verificando contra get_effective_roles().
+    """
+    roles_set = set(roles)
     async def checker(current_user: User = Depends(get_current_user)) -> User:
-        if current_user.role not in roles:
+        user_roles = get_effective_roles(current_user)
+        if not user_roles.intersection(roles_set):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Acesso negado para role '{current_user.role}'",
+                detail=f"Acesso negado. Papéis necessários: {sorted(roles_set)}",
             )
         return current_user
+    return checker
+
+
+def require_role(role: str) -> Callable[..., Any]:
+    """Requer que o usuário possua exatamente este papel."""
+    return require_roles(role)
+
+
+def require_role_any(roles: list[str]) -> Callable[..., Any]:
+    """Requer que o usuário possua pelo menos um dos papéis da lista."""
+    return require_roles(*roles)
+
+
+def require_permission(permission: str) -> Callable[..., Any]:
+    """Requer permissão específica no formato 'resource:action'.
+
+    Verifica o mapa _PERMISSIONS para todos os papéis efetivos do usuário.
+    BetAML_SuperAdmin possui a superpermissão '*' que concede tudo.
+    """
+    async def checker(current_user: User = Depends(get_current_user)) -> User:
+        user_roles = get_effective_roles(current_user)
+        for r in user_roles:
+            perms = _PERMISSIONS.get(r, frozenset())
+            if "*" in perms or permission in perms:
+                return current_user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Acesso negado. Permissão necessária: {permission}",
+        )
     return checker
 
 
@@ -324,7 +446,10 @@ async def get_ingest_principal(
         return IngestPrincipal(tenant_id=ak.tenant_id, id=None, role="API_KEY")
     if authorization and authorization.startswith("Bearer "):
         user = await get_current_user(token=authorization[7:], db=db)
-        if user.role not in ("ADMIN", "AML_ANALYST"):
+        ingest_roles = {AppRole.ANALISTA, AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN,
+                        "ADMIN", "AML_ANALYST"}  # legado incluído
+        user_roles = get_effective_roles(user)
+        if not user_roles.intersection(ingest_roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Acesso negado para role '{user.role}'",

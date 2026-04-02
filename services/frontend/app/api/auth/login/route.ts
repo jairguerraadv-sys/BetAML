@@ -31,6 +31,7 @@ export async function POST(req: NextRequest) {
 
     const response = NextResponse.json({
       role: data.role,
+      roles: data.roles ?? [],
       tenant_id: data.tenant_id,
     });
 
@@ -41,6 +42,16 @@ export async function POST(req: NextRequest) {
       sameSite: 'strict',
       path: '/',
       maxAge: 60 * 60, // 1 hora (sincronizado com ACCESS_TOKEN_EXPIRE_MIN=60)
+    });
+
+    // Lista de papéis em cookie separado para uso no Edge Middleware
+    // (NÃO é prova de adulteração; o backend valida o JWT em toda requisição)
+    response.cookies.set('betaml_roles', encodeURIComponent(JSON.stringify(data.roles ?? [])), {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      path: '/',
+      maxAge: 60 * 60,
     });
 
     return response;

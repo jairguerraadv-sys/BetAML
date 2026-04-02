@@ -78,18 +78,16 @@ export default function Sidebar() {
   const router   = useRouter();
   const { theme, toggle: toggleTheme } = useTheme();
   const [locale, setLocale] = useLocale();
-  const [advOpen, setAdvOpen]   = useState(false);
   const { user, setUser } = useUser();
 
-  const role = user?.role ?? 'analyst';
-  const userName = user?.username ?? user?.email ?? '';
+  // Derivação de papéis e seções de navegação
+  const userRoles = user?.roles ?? (user?.role ? [user.role] : []);
+  const sections  = getNavSections(userRoles);
+  const userName  = user?.username ?? user?.email ?? '';
+  const displayRole = userRoles
+    .map((r) => r.replace('Operador_', '').replace('BetAML_', ''))
+    .join(' · ');
 
-  useEffect(() => {
-    // Auto-open advanced if on an advanced route
-    if (ADV_NAV.some((n) => pathname.startsWith(n.href))) setAdvOpen(true);
-  }, [pathname]);
-
-  const canSeeAdvanced = ADVANCED_ROLES.includes(role);
   const [showTour, setShowTour] = useState(false);
 
   async function logout() {
@@ -106,7 +104,8 @@ export default function Sidebar() {
         <p className="text-[10px] font-medium uppercase tracking-widest text-gray-400">PLD/FT Intelligence</p>
         {userName && (
           <p className="mt-1.5 text-[11px] text-gray-500 truncate dark:text-gray-400">
-            👤 {userName} · <span className="capitalize">{role.replace('_', ' ')}</span>
+            👤 {userName}
+            {displayRole && <> · <span className="capitalize">{displayRole}</span></>}
           </p>
         )}
       </div>
@@ -124,46 +123,25 @@ export default function Sidebar() {
         </button>
       </div>
 
-      {/* Jornadas principais */}
+      {/* Navegação dinâmica por papel */}
       <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5">
-        <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-          Meu Trabalho
-        </p>
-        {MAIN_NAV.map((item) => (
-          <NavItem
-            key={item.href}
-            {...item}
-            active={pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href))}
-          />
-        ))}
-
-        {/* Configurações avançadas — colapsável */}
-        {canSeeAdvanced && (
-          <div className="mt-4">
-            <button
-              onClick={() => setAdvOpen((v) => !v)}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <span className="flex-1 text-left">Configurações Avançadas</span>
-              <ChevronDown
-                size={13}
-                className={clsx('transition-transform', advOpen && 'rotate-180')}
+        {sections.map((section) => (
+          <div key={section.label} className="mb-4">
+            <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+              {section.label}
+            </p>
+            {section.items.map((item) => (
+              <NavItem
+                key={item.path}
+                href={item.path}
+                label={item.label}
+                icon={resolveIcon(item.icon)}
+                tooltip={item.tooltip}
+                active={pathname === item.path || (item.path !== '/dashboard' && pathname.startsWith(item.path))}
               />
-            </button>
-
-            {advOpen && (
-              <div className="mt-0.5 space-y-0.5">
-                {ADV_NAV.map((item) => (
-                  <NavItem
-                    key={item.href}
-                    {...item}
-                    active={pathname === item.href || (item.href !== '/settings' && pathname.startsWith(item.href))}
-                  />
-                ))}
-              </div>
-            )}
+            ))}
           </div>
-        )}
+        ))}
       </nav>
 
       {/* Footer: dark mode + locale + sign out */}

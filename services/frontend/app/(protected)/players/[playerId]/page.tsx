@@ -183,7 +183,7 @@ export default function PlayerDetailPage() {
   const [historyStatus, setHistoryStatus] = useState<string>('');
   const [historyProvider, setHistoryProvider] = useState<string>('');
   const [erasureReason, setErasureReason] = useState<string>('Solicitação de titular (LGPD Art. 18)');
-  const currentUser   = useCurrentUser();
+  const { user: currentUser, hasAnyRole } = useCurrentUser();
   const queryClient = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
@@ -262,8 +262,8 @@ export default function PlayerDetailPage() {
     URL.revokeObjectURL(url);
   };
 
-  const canRequestLgpdExport = ['ADMIN', 'AML_ANALYST', 'SUPER_ADMIN'].includes(currentUser?.role ?? '');
-  const canErasePlayer = ['ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role ?? '');
+  const canRequestLgpdExport = hasAnyRole(['Operador_Analista', 'Operador_Gestor', 'BetAML_SuperAdmin']);
+  const canErasePlayer = hasAnyRole(['Operador_Gestor', 'BetAML_SuperAdmin']);
 
   if (isLoading) return <p className="text-sm text-gray-400">Carregando perfil…</p>;
   if (error)     return <p className="text-sm text-red-600">Player não encontrado.</p>;
@@ -299,7 +299,8 @@ export default function PlayerDetailPage() {
             <dt className="text-gray-500">CPF</dt>
             <dd className="font-mono font-medium">
               {p.cpf}
-              {currentUser?.role === 'AUDITOR' && (
+              {/* Analistas só veem o CPF mascarado */}
+              {currentUser?.roles?.includes('Operador_Analista') && !currentUser?.roles?.includes('Operador_Gestor') && (
                 <span className="ml-2 rounded bg-yellow-100 px-1.5 py-0.5 text-[10px] font-semibold text-yellow-700">
                   MASCARADO
                 </span>

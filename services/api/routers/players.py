@@ -12,7 +12,7 @@ from sqlalchemy import case as sqla_case, func as sqlfunc, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import compute_cpf_hmac, decrypt_pii, encrypt_pii, get_current_user, mask_cpf, require_roles
+from auth import AppRole, compute_cpf_hmac, decrypt_pii, encrypt_pii, get_current_user, get_effective_roles, mask_cpf, require_roles, require_role, require_role_any, require_permission
 from database import get_db
 from models import Alert, Bet, Case, DeviceEvent, FinancialTransaction, Player, ScoringConfig, User
 from repositories import PlayerRepository
@@ -53,7 +53,7 @@ async def list_players(
 ):
     players = await repo.list_active(current_user.tenant_id, limit=limit, offset=offset)
     # LGPD Art. 37 — log de acesso a dados pessoais (CPF mascarado)
-    if current_user.role in ("ADMIN", "AML_ANALYST") and players:
+    if get_effective_roles(current_user).intersection({AppRole.ANALISTA, AppRole.GESTOR}) and players:
         await write_audit(
             db, current_user.tenant_id, current_user.id,
             "LIST_PLAYERS", "Player", None,
@@ -88,7 +88,7 @@ async def get_player(
         # LGPD Art. 18 — dados anonimizados; não retornar PII
         raise HTTPException(410, "Dados deste player foram anonimizados (LGPD Art. 18)")
     cpf_plain = decrypt_pii(p.cpf_encrypted)
-    show_full = current_user.role in ("ADMIN", "AML_ANALYST")
+    show_full = bool(get_effective_roles(current_user).intersection({AppRole.ANALISTA, AppRole.GESTOR}))
 
     # Audit access to PII (LGPD Art. 37) — always log, even for masked CPF
     await write_audit(
@@ -156,7 +156,7 @@ async def get_player(
 @router.get("/players/{player_id}/econ-compat")
 async def get_player_econ_compat(
     player_id: str,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -224,7 +224,7 @@ async def get_player_econ_compat(
 async def get_player_feature_history(
     player_id: str,
     days: int = Query(30, ge=1, le=365),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -293,7 +293,7 @@ async def erase_player_data(
     player_id: str,
     reason: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
+    current_user: User = Depends(require_role_any([AppRole.GESTOR, AppRole.SUPER_ADMIN])),
     repo: object = Depends(get_player_repo),
 ):
     """
@@ -427,7 +427,7 @@ async def right_to_erasure_alias(
     player_id: str,
     reason: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
+    current_user: User = Depends(require_role_any([AppRole.GESTOR, AppRole.SUPER_ADMIN])),
 ):
     """
     Backward-compatible alias for POST /players/{player_id}/erase.
@@ -475,7 +475,7 @@ class PlayerDataExportOut(BaseModel):
 @router.get("/players/{player_id}/data-export", response_model=PlayerDataExportOut)
 async def export_player_data(
     player_id: str,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -599,7 +599,7 @@ async def export_player_data(
 async def get_player_transactions_chart(
     player_id: str,
     days: int = Query(90, ge=7, le=365),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """Volume diário de depósitos e saques dos últimos N dias (painel de investigação)."""
@@ -640,7 +640,7 @@ async def get_player_transactions_chart(
 async def get_player_bets_chart(
     player_id: str,
     days: int = Query(90, ge=7, le=365),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """Volume diário de stake de apostas dos últimos N dias."""
@@ -670,7 +670,7 @@ async def get_player_bets_chart(
 @router.get("/players/{player_id}/payment-instruments")
 async def get_player_payment_instruments(
     player_id: str,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """Instrumentos de pagamento distintos usados pelo player com datas de primeira/última ocorrência."""
@@ -709,7 +709,7 @@ async def get_player_payment_instruments(
 async def get_player_network(
     player_id: str,
     depth: int = Query(1, ge=1, le=2, description="Profundidade do grafo (1=vizinhos diretos, 2=vizinhos de vizinhos)"),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """Grafo de rede do player para visualização de clusters e lavagem via intermediários.
@@ -929,7 +929,7 @@ async def get_player_network(
 @router.get("/players/{player_id}/case-alert-history")
 async def get_player_case_alert_history(
     player_id: str,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """Histórico de casos e alertas anteriores do player para o painel de investigação."""

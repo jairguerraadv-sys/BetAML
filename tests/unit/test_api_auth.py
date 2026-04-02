@@ -245,7 +245,12 @@ class TestRBAC:
 
     def test_roles_set_is_complete(self):
         from auth import ROLES
-        assert ROLES == {"SUPER_ADMIN", "ADMIN", "AML_ANALYST", "AUDITOR"}
+        # Papéis legados mantidos para compatibilidade retroativa
+        legacy = {"SUPER_ADMIN", "ADMIN", "AML_ANALYST", "AUDITOR"}
+        # Novos papéis multi-tenant
+        new_roles = {"Operador_Analista", "Operador_Gestor", "Operador_AdminTecnico", "BetAML_SuperAdmin"}
+        assert legacy.issubset(ROLES), f"Papéis legados ausentes: {legacy - ROLES}"
+        assert new_roles.issubset(ROLES), f"Novos papéis ausentes: {new_roles - ROLES}"
 
 
 # ────────────────────────────────────────────────────────────────────────────

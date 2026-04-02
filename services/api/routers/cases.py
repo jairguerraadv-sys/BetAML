@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func as sqlfunc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import decrypt_pii, get_current_user, mask_cpf, require_roles
+from auth import AppRole, decrypt_pii, get_current_user, get_effective_roles, mask_cpf, require_roles, require_role, require_role_any, require_permission
 from database import get_db
 from models import Alert, Bet, Case, CaseEvent, FinancialTransaction, Notification, Player, ReportPackage, ScoringConfig, Tenant, User
 from repositories import CaseRepository
@@ -554,7 +554,7 @@ def _suggest_analyst_narrative(case_obj: Case, alerts: list[Alert], player_info:
 @router.post("/cases", status_code=201)
 async def create_case(
     body: CaseCreate,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     resolved_player_id: Optional[str] = None
@@ -696,7 +696,7 @@ async def get_case(
 async def assign_case(
     case_id: str,
     body: AssignRequest,
-    current_user: User = Depends(require_roles("ADMIN")),
+    current_user: User = Depends(require_role(AppRole.GESTOR)),
     db: AsyncSession = Depends(get_db),
 ):
     c = await db.get(Case, case_id)
@@ -727,7 +727,7 @@ async def assign_case(
 async def add_case_event(
     case_id: str,
     body: CaseEventCreate,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     c = await db.get(Case, case_id)
@@ -764,7 +764,7 @@ async def upload_evidence(
     case_id: str,
     file: UploadFile = File(...),
     description: str = Form(""),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     c = await db.get(Case, case_id)
@@ -785,7 +785,7 @@ async def upload_evidence(
 async def generate_report_package(
     case_id: str,
     body: ReportPackageIn = ReportPackageIn(),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     c = await db.get(Case, case_id)
@@ -902,7 +902,7 @@ async def generate_report_package(
 @router.get("/cases/{case_id}/report-package/narrative-suggest")
 async def suggest_report_narrative(
     case_id: str,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """Sugere narrativa inicial para o analista revisar no ReportPackage."""
@@ -935,7 +935,7 @@ async def suggest_report_narrative(
 @router.post("/cases/{case_id}/report-package/submit")
 async def submit_report_package(
     case_id: str,
-    current_user: User = Depends(require_roles("ADMIN")),
+    current_user: User = Depends(require_role(AppRole.GESTOR)),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -1064,7 +1064,7 @@ async def submit_report_package(
 @router.get("/cases/{case_id}/report-packages")
 async def list_report_packages(
     case_id: str,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """Lista todos os ReportPackages para um caso, ordenados por data de criação decrescente.
@@ -1111,7 +1111,7 @@ async def list_tenant_report_packages(
     case_id: str | None = Query(None),
     status: str | None = Query(None),
     limit: int = Query(50, le=200),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
@@ -1145,7 +1145,7 @@ async def list_tenant_report_packages(
 async def download_report_json(
     case_id: str,
     rp_id: str,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     rp = await db.get(ReportPackage, rp_id)
@@ -1160,7 +1160,7 @@ async def download_report_json(
 async def download_report_pdf(
     case_id: str,
     rp_id: str,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """Baixa o PDF de um ReportPackage específico.
@@ -1218,7 +1218,7 @@ async def download_report_pdf(
 async def download_coaf_xml(
     case_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
 ):
     """Gera XML de Comunicação ao COAF conforme Resolução COAF 40/2021
     (formato COS v2.1 — Comunicado Siscoaf 97 / Portaria SPA/MF 1.143/2024).
@@ -1353,7 +1353,7 @@ async def download_coaf_xml(
 async def add_case_comment(
     case_id: str,
     body: CaseCommentIn,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """Adiciona comentário ao caso. Suporta @menção de analistas do mesmo tenant."""
@@ -1368,7 +1368,7 @@ async def add_case_comment(
                     User.tenant_id == current_user.tenant_id,
                     User.id.in_(body.mentions),
                     User.active == True,  # noqa: E712
-                    User.role.in_(["ADMIN", "AML_ANALYST"]),
+                    User.role.in_(["ADMIN", "AML_ANALYST", AppRole.GESTOR, AppRole.ANALISTA]),
                 )
             )
             scalars_result = result.scalars()
@@ -1411,7 +1411,7 @@ async def add_case_comment(
 async def link_alert_to_case(
     case_id: str,
     body: CaseLinkAlertIn,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     """Vincula um alerta avulso a um caso existente."""
@@ -1443,7 +1443,7 @@ async def link_alert_to_case(
 async def link_transaction_to_case(
     case_id: str,
     body: CaseLinkTransactionIn,
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     c = await db.get(Case, case_id)
@@ -1480,7 +1480,7 @@ async def lookup_case_entities(
     q: str = Query(..., min_length=2),
     scope: str = Query("all", pattern="^(all|alerts|transactions)$"),
     limit: int = Query(10, ge=1, le=50),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
     c = await db.get(Case, case_id)

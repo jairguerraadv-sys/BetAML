@@ -5,7 +5,7 @@ import uuid
 
 from sqlalchemy import (
     BigInteger, Boolean, Column, Date, DateTime,
-    ForeignKey, Integer, LargeBinary, Numeric, String, Text,
+    ForeignKey, Integer, JSON, LargeBinary, Numeric, String, Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
@@ -41,7 +41,8 @@ class User(Base):
     username      = Column(Text, nullable=False)
     email         = Column(Text, nullable=False)
     password_hash = Column(Text, nullable=False)
-    role          = Column(String(20), nullable=False)
+    role          = Column(String(50), nullable=False)   # campo legado; mantido para backward compat
+    roles         = Column(JSON, nullable=True)          # lista de papéis novos (ex: ["Operador_Analista"])
     refresh_token_jti = Column(Text)
     active        = Column(Boolean, nullable=False, default=True)
     created_at    = Column(DateTime(timezone=True), server_default=func.now())

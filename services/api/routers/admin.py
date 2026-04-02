@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, func as sqlfunc, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import create_access_token, get_current_user, hash_password, require_roles
+from auth import AppRole, create_access_token, get_current_user, get_effective_roles, hash_password, require_roles, require_role, require_role_any, require_permission
 from config import settings
 from database import get_db
 from libs.models import (
@@ -63,8 +63,27 @@ from libs.models import Alert
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["admin"])
 
-# Roles that non-SUPER_ADMIN admins are permitted to assign
-_ASSIGNABLE_ROLES = frozenset({"ADMIN", "AML_ANALYST", "AUDITOR"})
+# Roles assignable via admin endpoint (novos + legados para backward compat)
+_ASSIGNABLE_ROLES = frozenset({
+    # Novos papéis
+    AppRole.ANALISTA, AppRole.GESTOR, AppRole.ADMIN_TECNICO,
+    # Legados — aceitos durante período de migração
+    "ADMIN", "AML_ANALYST", "AUDITOR",
+})
+
+# Mapeamento de role (legado ou novo) → lista de novos papéis para coluna `roles`
+_LEGACY_TO_ROLES: dict[str, list[str]] = {
+    "AML_ANALYST":      [AppRole.ANALISTA],
+    "AUDITOR":          [AppRole.ANALISTA],
+    "ADMIN":            [AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.ANALISTA],
+    AppRole.ANALISTA:   [AppRole.ANALISTA],
+    AppRole.GESTOR:     [AppRole.GESTOR, AppRole.ANALISTA],
+    AppRole.ADMIN_TECNICO: [AppRole.ADMIN_TECNICO],
+}
+
+def _role_to_roles_list(role: str) -> list[str]:
+    """Converte campo `role` (legado ou novo) para lista de novos papéis."""
+    return _LEGACY_TO_ROLES.get(role, [role])
 
 
 def _tenant_filter(model, tenant_id: str):
@@ -220,7 +239,7 @@ class OpsSummaryOut(BaseModel):
 async def set_maintenance_mode(
     enabled: bool = Query(...),
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """Toggle maintenance mode para o tenant (bloqueia ingest + scoring)."""
     flag_key = f"{current_user.tenant_id}:maintenance_mode"
@@ -253,7 +272,7 @@ async def set_maintenance_mode(
 async def set_maintenance_mode_put(
     enabled: bool = Query(...),
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """REST-friendly alias for maintenance mode toggle."""
     return await set_maintenance_mode(enabled=enabled, db=db, current_user=current_user)
@@ -262,7 +281,7 @@ async def set_maintenance_mode_put(
 @router.get("/admin/ops/summary", response_model=OpsSummaryOut, tags=["admin"])
 async def get_ops_summary(
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_roles("ADMIN", "AUDITOR")),
+    current_user=Depends(require_role_any([AppRole.GESTOR, AppRole.SUPER_ADMIN])),
 ):
     """Operational summary for infra dashboards and admin triage."""
     import httpx
@@ -426,7 +445,7 @@ async def get_ops_summary(
 @router.get("/admin/kpis/aml", response_model=AMLKPIOut, tags=["admin"])
 async def get_aml_kpis(
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_roles("ADMIN", "AUDITOR", "AML_ANALYST")),
+    current_user=Depends(require_role_any([AppRole.GESTOR, AppRole.SUPER_ADMIN])),
 ):
     """Scorecard AML operacional para triagem, qualidade de rotulagem e SLA de casos."""
     now_utc = datetime.now(UTC)
@@ -525,7 +544,7 @@ async def get_aml_kpis(
 @router.get("/admin/stats/usage", tags=["admin"])
 async def get_usage_stats(
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_roles("ADMIN")),
+    current_user=Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """Retorna métricas de uso do tenant para o mês corrente."""
     from sqlalchemy import text as _text
@@ -598,7 +617,7 @@ async def get_usage_stats(
 @router.get("/admin/api-keys", response_model=list[ApiKeyOut], tags=["admin"])
 async def list_api_keys(
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     result = await db.execute(
         select(ApiKey).where(_tenant_filter(ApiKey, current_user.tenant_id))
@@ -611,7 +630,7 @@ async def list_api_keys(
 async def create_api_key(
     body: ApiKeyCreate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     permissions = body.permissions or ["ingest"]
     tenant_compact = str(current_user.tenant_id).replace("-", "").lower()
@@ -650,7 +669,7 @@ async def create_api_key(
 async def revoke_api_key(
     key_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     row = (await db.execute(
         select(ApiKey).where(ApiKey.id == key_id,
@@ -668,7 +687,7 @@ async def revoke_api_key(
 async def get_api_key_usage(
     key_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """Retorna os últimos 30 dias de contadores de uso diário da API key (via Redis)."""
     from datetime import date, timedelta as _td
@@ -715,7 +734,7 @@ async def get_api_key_usage(
 @router.get("/admin/flags", response_model=list[SystemFlagOut], tags=["admin"])
 async def list_system_flags(
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     # Keys are stored as "{tenant_id}:{flag_name}"
     prefix = f"{current_user.tenant_id}:%"
@@ -730,7 +749,7 @@ async def upsert_system_flag(
     flag_name: str,
     body: SystemFlagUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     flag_key = f"{current_user.tenant_id}:{flag_name}"
     flag = await db.get(SystemFlag, flag_key)
@@ -764,7 +783,7 @@ async def get_scoring_config(
 async def update_scoring_config(
     body: ScoringConfigUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     row = (await db.execute(
         select(ScoringConfig).where(ScoringConfig.tenant_id == current_user.tenant_id)
@@ -789,7 +808,7 @@ async def update_scoring_config(
 async def preview_scoring_config(
     body: ScoringPreviewIn,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """Simula quantos alertas teriam sido gerados nos últimos 30d com a config proposta."""
     from datetime import timedelta
@@ -897,7 +916,7 @@ DEFAULT_RULES_TEMPLATE = [
 async def create_tenant(
     body: TenantCreateIn,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
+    current_user = Depends(require_role(AppRole.SUPER_ADMIN)),
 ):
     """
     Onboarding de novo tenant via API.
@@ -997,7 +1016,7 @@ async def create_onboarding_mapping(
     tenant_id: str,
     body: AdminOnboardingMappingIn,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
+    current_user = Depends(require_role(AppRole.SUPER_ADMIN)),
 ):
     """Creates the first mapping for a newly onboarded tenant without switching session context."""
     from routers.mappings import _next_version_number, _parse_config_payload
@@ -1090,7 +1109,7 @@ async def ingest_onboarding_sample(
     source_system: str = Form(...),
     mapping_config_id: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
+    current_user = Depends(require_role(AppRole.SUPER_ADMIN)),
 ):
     """Queues a sample ingest job for the newly created tenant."""
     from routers.ingest import ALLOWED_SOURCE_SYSTEMS, _publish_with_retries, _upload_bronze_file
@@ -1191,7 +1210,7 @@ async def create_onboarding_rule(
     tenant_id: str,
     body: AdminOnboardingRuleIn,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN", "SUPER_ADMIN")),
+    current_user = Depends(require_role(AppRole.SUPER_ADMIN)),
 ):
     """Creates the first rule for a newly onboarded tenant without requiring a separate login."""
     from libs.dsl_parser import validate_dsl
@@ -1260,7 +1279,7 @@ class TenantUpdateIn(BaseModel):
 @router.get("/admin/tenants", response_model=list[TenantOut], tags=["admin"])
 async def list_tenants(
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("SUPER_ADMIN")),
+    current_user = Depends(require_role(AppRole.SUPER_ADMIN)),
 ):
     """Lista todos os tenants da plataforma (SUPER_ADMIN only)."""
     result = await db.execute(select(Tenant).order_by(Tenant.created_at.desc()))
@@ -1286,7 +1305,7 @@ async def update_tenant(
     tenant_id: str,
     body: TenantUpdateIn,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("SUPER_ADMIN")),
+    current_user = Depends(require_role(AppRole.SUPER_ADMIN)),
 ):
     """Atualiza nome ou status ativo do tenant (SUPER_ADMIN only)."""
     t = await db.get(Tenant, tenant_id)
@@ -1319,7 +1338,7 @@ async def update_tenant(
 @router.get("/admin/users", response_model=list[UserOut], tags=["admin"])
 async def list_users(
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """Lista todos os usuários do tenant atual. Senha não é exposta."""
     result = await db.execute(
@@ -1334,7 +1353,7 @@ async def list_users(
 async def create_user(
     body: UserCreateIn,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """
     Cria um novo usuário no tenant.
@@ -1367,6 +1386,7 @@ async def create_user(
         email=body.email,
         password_hash=hash_password(body.password),
         role=body.role,
+        roles=_role_to_roles_list(body.role),
         active=True,
     )
     db.add(new_user)
@@ -1390,7 +1410,7 @@ async def update_user(
     user_id: str,
     body: UserUpdateIn,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """
     Atualiza role ou status ativo de um usuário.
@@ -1421,6 +1441,7 @@ async def update_user(
 
     if body.role is not None:
         target.role = body.role
+        target.roles = _role_to_roles_list(body.role)
     if body.active is not None:
         target.active = body.active
 
@@ -1446,7 +1467,7 @@ async def update_user(
 async def deactivate_user(
     user_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """
     Desativa (soft-delete) um usuário. Não realiza deleção física.
@@ -1480,7 +1501,7 @@ async def deactivate_user(
 async def reset_user_password(
     user_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """
     Gera uma nova senha aleatória (16 chars) para o usuário e a salva como hash.
@@ -1520,7 +1541,7 @@ async def reset_user_password(
 @router.post("/admin/invite", tags=["admin"])
 async def generate_invite(
     body: InviteIn,
-    current_user = Depends(require_roles("ADMIN")),
+    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """
     Gera um token de convite JWT (48h de validade) contendo tenant_id, email e role.

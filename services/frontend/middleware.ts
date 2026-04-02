@@ -3,13 +3,17 @@
  *
  * Responsabilidades:
  *  1. Proteger rotas autenticadas: redireciona para /login se não há cookie betaml_token
- *  2. Injetar o token como header Authorization nas chamadas /api-proxy/* (rewrite)
- *     — isso elimina a necessidade de ler o token via JS no cliente.
+ *  2. Proteger rotas de plataforma (/platform/**): exige papel BetAML_SuperAdmin
+ *     verificado via cookie betaml_roles (definido na rota de login)
+ *  3. Injetar o token como header Authorization nas chamadas /api-proxy/* (rewrite)
+ *
+ * Nota de segurança: o backend valida o JWT em TODA chamada à API.
+ *  O middleware apenas melhora a UX ao redirecionar antes de uma chamada 403.
  */
 import { NextRequest, NextResponse } from 'next/server';
 
 // Rotas que NÃO requerem autenticação
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/_next', '/favicon.ico'];
+const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/_next', '/favicon.ico', '/forbidden'];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -27,8 +31,23 @@ export function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // Proteger rotas de plataforma — apenas BetAML_SuperAdmin
+  if (pathname.startsWith('/platform')) {
+    const rolesRaw = req.cookies.get('betaml_roles')?.value ?? '';
+    let roles: string[] = [];
+    try {
+      roles = JSON.parse(decodeURIComponent(rolesRaw)) as string[];
+    } catch {
+      // cookie inválido ou ausente
+    }
+    if (!roles.includes('BetAML_SuperAdmin')) {
+      const url = req.nextUrl.clone();
+      url.pathname = '/forbidden';
+      return NextResponse.redirect(url);
+    }
+  }
+
   // Para chamadas de proxy ao backend, injetar o token como Authorization header
-  // O Next.js rewrite já encaminha para o backend; aqui garantimos o header.
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set('Authorization', `Bearer ${token}`);
 

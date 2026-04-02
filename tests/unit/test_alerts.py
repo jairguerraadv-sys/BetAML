@@ -35,6 +35,7 @@ def _make_user(tenant_id: str = "t1", role: str = "AML_ANALYST"):
     u.id = "u1"
     u.tenant_id = tenant_id
     u.role = role
+    u.roles = None  # Simula usuário legado; get_effective_roles usa o campo `role`
     return u
 
 
@@ -485,6 +486,21 @@ async def test_label_alert_forbidden_for_auditor():
     alert = _make_alert(tenant_id="t1")
     db = _make_db()
 
+@pytest.mark.asyncio
+async def test_label_alert_auditor_can_label_after_rbac_migration():
+    """AUDITOR (legado) agora mapeia para Operador_Analista e PODE rotular alertas.
+
+    No RBAC refatorado, AUDITOR → Operador_Analista via _LEGACY_ROLE_MAP.
+    Analistas têm permissão alerts:rw, portanto podem rotular.
+    Para um papel somente-leitura futuro, use uma conta com papel específico.
+    """
+    from routers.alerts import label_alert, AlertLabelIn
+    from fastapi import BackgroundTasks
+
+    alert = _make_alert(tenant_id="t1")
+    alert.label = None
+    db = _make_db()
+
     async def _execute(stmt):
         result = MagicMock()
         result.scalar_one_or_none.return_value = alert
@@ -493,14 +509,14 @@ async def test_label_alert_forbidden_for_auditor():
 
     db.execute = _execute
     user = _make_user(tenant_id="t1", role="AUDITOR")
-    body = AlertLabelIn(label="FALSE_POSITIVE", label_note="should fail")
+    body = AlertLabelIn(label="FALSE_POSITIVE", label_note="auditor can label now")
     bg = BackgroundTasks()
 
-    with pytest.raises(HTTPException) as exc:
-        await label_alert(alert_id="a1", body=body, background_tasks=bg, db=db, current_user=user)
+    with patch("routers.alerts.write_audit", new_callable=AsyncMock):
+        result = await label_alert(alert_id="a1", body=body, background_tasks=bg, db=db, current_user=user)
 
-    assert exc.value.status_code == 403
-    assert alert.label is None
+    assert result["status"] == "labeled"
+    assert alert.label == "FALSE_POSITIVE"
 
 
 # ---------------------------------------------------------------------------

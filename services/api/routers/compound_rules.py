@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import get_current_user, require_roles
+from auth import AppRole, get_current_user, require_roles, require_role, require_role_any
 from database import get_db
 from libs.schemas import CompoundRuleOut, RuleMacroOut
 from models import CompoundRule, RuleDefinition, RuleMacro, User
@@ -85,7 +85,7 @@ async def list_compound_rules(
 async def create_compound_rule(
     body: CompoundRuleCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role(AppRole.GESTOR)),
 ):
     """Create a compound rule that combines multiple component rules."""
     component_rows = (
@@ -134,7 +134,7 @@ async def update_compound_rule(
     rule_id: str,
     body: CompoundRuleUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST")),
+    current_user: User = Depends(require_role(AppRole.GESTOR)),
 ):
     row = (
         await db.execute(
