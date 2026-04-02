@@ -11,6 +11,7 @@ import {
   fetchMappingVersions,
   previewMappingConfig,
   rollbackMappingVersion,
+  testMapping,
   updateMappingAsNewVersion,
   validateMappingConfig,
   type MappingListItem,
@@ -119,6 +120,7 @@ export default function MappingsPage() {
   const [previewResult, setPreviewResult] = useState<Record<string, unknown> | null>(null);
   const [previewValidation, setPreviewValidation] = useState<Record<string, unknown> | null>(null);
   const [previewSampleParse, setPreviewSampleParse] = useState<Record<string, unknown> | null>(null);
+  const [savedMappingTestResult, setSavedMappingTestResult] = useState<unknown | null>(null);
   const [normalizedConfig, setNormalizedConfig] = useState<Record<string, unknown> | null>(null);
   const [mode, setMode] = useState<'create' | 'new-version'>('create');
 
@@ -217,6 +219,20 @@ export default function MappingsPage() {
     },
   });
 
+  const testSavedMappingMutation = useMutation({
+    mutationFn: ({ id, sample }: { id: string; sample: Record<string, unknown> }) => testMapping(id, { sample }),
+    onSuccess: (data) => {
+      setSavedMappingTestResult(data);
+    },
+    onError: (e: unknown) => {
+      const err = e as { response?: { data?: { detail?: string } } };
+      setSavedMappingTestResult({
+        status: 'error',
+        detail: err?.response?.data?.detail || 'Erro ao testar mapping salvo',
+      });
+    },
+  });
+
   useEffect(() => {
     const t = setTimeout(() => {
       if (!editorText.trim()) {
@@ -273,6 +289,7 @@ export default function MappingsPage() {
     setMappingName(`${tpl.source_system} TRANSACTION`);
     setPreviewResult(null);
     setPreviewSampleParse(null);
+    setSavedMappingTestResult(null);
     setSampleText(tpl.sample_payload);
   }
 
@@ -290,6 +307,7 @@ export default function MappingsPage() {
     setNormalizedConfig(detail.config_json);
     setPreviewResult(null);
     setPreviewSampleParse(null);
+    setSavedMappingTestResult(null);
   }
 
   async function runPreview() {
@@ -531,6 +549,24 @@ export default function MappingsPage() {
             {previewMutation.isPending ? 'Gerando preview...' : 'Gerar Preview'}
           </button>
 
+          {selected && (
+            <button
+              onClick={() => {
+                try {
+                  const sampleObj = JSON.parse(sampleText) as Record<string, unknown>;
+                  testSavedMappingMutation.mutate({ id: selected.id, sample: sampleObj });
+                } catch {
+                  setSavedMappingTestResult({ status: 'error', detail: 'JSON de amostra inválido para teste salvo' });
+                }
+              }}
+              disabled={testSavedMappingMutation.isPending}
+              aria-label="Testar mapping salvo"
+              className="w-full rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 disabled:opacity-50"
+            >
+              {testSavedMappingMutation.isPending ? 'Testando mapping salvo...' : 'Testar Mapping Salvo'}
+            </button>
+          )}
+
           <pre
             aria-label="Resultado do preview do mapping"
             className="max-h-56 overflow-auto rounded-lg bg-gray-900 p-3 text-xs text-emerald-200"
@@ -551,6 +587,15 @@ export default function MappingsPage() {
           >
             {prettyJson(previewValidation || { canonical_preview_validation: 'pendente' })}
           </pre>
+
+          {selected && (
+            <pre
+              aria-label="Resultado do teste do mapping salvo"
+              className="max-h-44 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-indigo-200"
+            >
+              {prettyJson(savedMappingTestResult || { saved_mapping_test: 'pendente' })}
+            </pre>
+          )}
 
           <pre
             aria-label="Config normalizada do mapping"

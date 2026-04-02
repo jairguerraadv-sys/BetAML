@@ -33,7 +33,7 @@ test.describe('Alerts', () => {
     await page.getByLabel(/observação da triagem/i).fill('Triagem automatizada via Playwright');
     await page.getByRole('button', { name: /confirmar triagem/i }).click();
 
-    await expect(page.getByText('FALSE_POSITIVE')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('span', { hasText: 'FALSE_POSITIVE' }).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('alert detail can be linked to a newly created case', async ({ page, request }) => {
@@ -53,5 +53,26 @@ test.describe('Alerts', () => {
     await page.getByRole('button', { name: /vincular alerta a caso/i }).click();
 
     await expect(page.getByRole('link', { name: /ver caso/i })).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('alert detail supports label feedback and close action', async ({ page, request }) => {
+    const session = await apiLogin(request);
+    const alert = await createAlertViaApi(request, session.access_token, {
+      title: `E2E close and label alert ${Date.now()}`,
+    });
+
+    await page.goto(`/alerts/${alert.id}`);
+    await expect(page.getByRole('heading', { name: new RegExp(alert.title ?? 'alerta', 'i') })).toBeVisible();
+
+    await page.locator('select').first().selectOption('FALSE_POSITIVE');
+    await page.getByPlaceholder(/nota opcional para feedback do modelo/i).fill('Feedback de qualidade via Playwright');
+    await page.getByRole('button', { name: /aplicar label/i }).click();
+
+    await expect(page.getByText(/label atualizado com sucesso/i)).toBeVisible({ timeout: 10_000 });
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: /fechar alerta/i }).click();
+
+    await expect(page.getByText('CLOSED')).toBeVisible({ timeout: 10_000 });
   });
 });

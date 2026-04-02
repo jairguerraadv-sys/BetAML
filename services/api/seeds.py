@@ -21,7 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from config import settings
-from auth import hash_password, encrypt_pii
+from auth import hash_password, encrypt_pii, compute_cpf_hmac
 from models import (
     Alert, Base, Case, CaseEvent, CompoundRule,
     MappingConfig, Player, PlayerList, PlayerListEntry, RuleDefinition,
@@ -242,6 +242,7 @@ async def seed(db: AsyncSession):
                 tenant_id=tenant.id,
                 external_player_id=f"EXT-{slug.upper()}-{i+1:03d}",
                 cpf_encrypted=encrypt_pii(cpf),
+                cpf_hmac=compute_cpf_hmac(cpf),
                 name_encrypted=encrypt_pii(f"Player {i+1} {tenant_data['name']}"),
                 pep_flag=(i < 3),   # primeiros 3 são PEP
                 declared_income_monthly=random.choice([2000, 5000, 10000, 20000, None]),

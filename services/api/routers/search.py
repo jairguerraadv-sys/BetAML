@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import String, cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import decrypt_pii, get_current_user, mask_cpf
+from auth import compute_cpf_hmac, decrypt_pii, get_current_user, mask_cpf
 from database import get_db
 from models import Alert, Case, Player, User
 from utils import write_audit
@@ -29,6 +29,10 @@ def _safe_masked_cpf(player: Player) -> str | None:
         return None
 
 
+def _query_digits(q: str) -> str:
+    return "".join(ch for ch in q if ch.isdigit())
+
+
 @router.get("", summary="Global search")
 async def global_search(
     q: str = Query(..., min_length=2, max_length=100),
@@ -38,16 +42,16 @@ async def global_search(
     """
     Search players, cases and alerts across the current tenant.
     Matches on:
-     - Players: external_player_id (prefix), name (partial) and CPF digits (best effort)
+     - Players: external_player_id (prefix), name (partial), CPF (HMAC index O(1))
      - Cases: reference_number (prefix), title (partial)
      - Alerts: alert_id (prefix), alert_type (partial)
     """
     tid = current_user.tenant_id
     q_like = f"%{q}%"
     q_prefix = f"{q}%"
-    query_digits = "".join(ch for ch in q if ch.isdigit())
+    digits = _query_digits(q)
 
-    # ── Players ──────────────────────────────────────────────────────────────
+    # ── Players — text lookup ─────────────────────────────────────────────────
     stmt_players = (
         select(Player)
         .where(
@@ -61,10 +65,31 @@ async def global_search(
         )
         .limit(_MAX)
     )
-    players_rows = (await db.execute(stmt_players)).scalars().all()
+    players_rows = list((await db.execute(stmt_players)).scalars().all())
 
-    if query_digits:
-        cpf_candidates = (
+    # ── CPF lookup: O(1) via cpf_hmac index (preferred) ──────────────────────
+    if digits and len(digits) == 11:
+        # Exact 11-digit CPF → HMAC lookup is deterministic and O(1)
+        try:
+            cpf_hmac = compute_cpf_hmac(digits)
+            hmac_rows = list((await db.execute(
+                select(Player)
+                .where(
+                    Player.tenant_id == tid,
+                    Player.status != "ERASED",
+                    Player.cpf_hmac == cpf_hmac,
+                )
+                .limit(_MAX)
+            )).scalars().all())
+            players_rows.extend(hmac_rows)
+        except Exception:  # noqa: BLE001
+            pass  # fallback: HMAC not available (e.g. key rotation)
+
+    elif digits and 3 <= len(digits) < 11:
+        # Partial CPF digits: bounded O(n) fallback (max 250 rows, sorted by recency)
+        # NOTE: this path disappears once cpf_hmac is backfilled (migration_v21)
+        # and the query can switch to LIKE on a computed column.
+        cpf_candidates = list((
             await db.execute(
                 select(Player)
                 .where(
@@ -74,15 +99,15 @@ async def global_search(
                 .order_by(Player.updated_at.desc())
                 .limit(250)
             )
-        ).scalars().all()
+        ).scalars().all())
         for player in cpf_candidates:
             try:
                 cpf_plain = decrypt_pii(player.cpf_encrypted)
             except Exception:  # noqa: BLE001
                 continue
-            cpf_digits = "".join(ch for ch in cpf_plain if ch.isdigit())
-            masked_digits = "".join(ch for ch in mask_cpf(cpf_plain) if ch.isdigit())
-            if query_digits in cpf_digits or query_digits in masked_digits:
+            cpf_dig = "".join(ch for ch in cpf_plain if ch.isdigit())
+            masked_dig = "".join(ch for ch in mask_cpf(cpf_plain) if ch.isdigit())
+            if digits in cpf_dig or digits in masked_dig:
                 players_rows.append(player)
 
     players_rows = list(OrderedDict((str(p.id), p) for p in players_rows).values())[:_MAX]

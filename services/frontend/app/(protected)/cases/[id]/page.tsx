@@ -8,6 +8,7 @@ import {
   fetchAdminUsers,
   fetchAlertRelatedTransactions,
   fetchCase,
+  fetchCaseNarrativeSuggestion,
   fetchCaseReportPackages,
   fetchPlayer,
   fetchPlayerBetsChart,
@@ -22,6 +23,8 @@ import {
   lookupCaseEntities,
   submitReportPackage,
   updateCaseStatus,
+  SISCOAF_OCCURRENCE_CODES,
+  SISCOAF_INVOLVEMENT_TYPES,
 } from '@/lib/api';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -765,13 +768,29 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
   const [narrative, setNarrative] = useState('');
   const [decision, setDecision]   = useState<'FILE_SAR' | 'NO_ACTION' | 'PENDING'>('PENDING');
   const [rpResult, setRpResult]   = useState<{ report_package_id: string; pdf_path: string | null } | null>(null);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  // Siscoaf 97 fields
+  const [occurrenceCodes, setOccurrenceCodes]       = useState<number[]>([]);
+  const [involvementTypes, setInvolvementTypes]     = useState<number[]>([49]);
+  const [valorPremio, setValorPremio]               = useState<string>('0.00');
+  const [valorApostas, setValorApostas]             = useState<string>('0.00');
+  const [infoAdicionais, setInfoAdicionais]         = useState<string>('');
+
   const { data: reportPackages = [] } = useQuery({
     queryKey: ['case-report-packages', caseId],
     queryFn: () => fetchCaseReportPackages(caseId),
   });
 
   const reportMut = useMutation({
-    mutationFn: () => generateReportPackage(caseId, { analyst_narrative: narrative, decision }),
+    mutationFn: () => generateReportPackage(caseId, {
+      analyst_narrative: narrative,
+      decision,
+      occurrence_codes: occurrenceCodes,
+      involvement_types: involvementTypes,
+      valor_premio: parseFloat(valorPremio) || 0,
+      valor_apostas: parseFloat(valorApostas) || 0,
+      informacoes_adicionais: infoAdicionais || undefined,
+    }),
     onSuccess: (res) => {
       setRpResult({ report_package_id: res.report_package_id, pdf_path: res.pdf_path });
       qc.invalidateQueries({ queryKey: ['case', caseId] });
@@ -783,6 +802,17 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['case', caseId] });
       qc.invalidateQueries({ queryKey: ['case-report-packages', caseId] });
+    },
+  });
+
+  const suggestNarrativeMut = useMutation({
+    mutationFn: () => fetchCaseNarrativeSuggestion(caseId),
+    onSuccess: (data) => {
+      setSuggestionError(null);
+      setNarrative((prev) => (prev.trim() ? `${prev}\n\n${data.suggested_narrative}` : data.suggested_narrative));
+    },
+    onError: () => {
+      setSuggestionError('Não foi possível obter sugestão automática no momento.');
     },
   });
 
@@ -872,6 +902,17 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                 Narrativa analítica{' '}
                 {decision === 'FILE_SAR' && <span className="text-red-500">— obrigatório para comunicação COAF</span>}
               </label>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => suggestNarrativeMut.mutate()}
+                  disabled={suggestNarrativeMut.isPending}
+                  className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                >
+                  {suggestNarrativeMut.isPending ? 'Sugerindo...' : 'Sugerir narrativa inicial'}
+                </button>
+                {suggestionError && <span className="text-xs text-red-600">{suggestionError}</span>}
+              </div>
               <textarea
                 aria-label="Narrativa analítica do report package"
                 rows={5}
@@ -882,14 +923,156 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
               />
             </div>
 
+            {/* ── Siscoaf 97 — Campos obrigatórios (Portaria SPA/MF 1.143/2024) ── */}
+            <div className={`space-y-4 rounded-xl border p-4 ${decision === 'FILE_SAR' ? 'border-red-200 bg-red-50' : 'border-gray-100 bg-gray-50'}`}>
+              <div className="flex items-center gap-2">
+                <span className="rounded bg-red-700 px-2 py-0.5 text-xs font-bold text-white">COAF</span>
+                <h4 className="text-xs font-semibold text-gray-700">
+                  Siscoaf — Portaria SPA/MF 1.143/2024 (Comunicado 97)
+                  {decision === 'FILE_SAR' && <span className="ml-1 text-red-600">— campos obrigatórios</span>}
+                </h4>
+              </div>
+
+              {/* Tabela de Ocorrências */}
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-gray-600">
+                  Códigos de Ocorrência Siscoaf
+                  {decision === 'FILE_SAR' && <span className="ml-1 text-red-500">*</span>}
+                </label>
+                <div className="max-h-52 overflow-y-auto rounded-lg border border-gray-200 bg-white">
+                  {Object.entries(SISCOAF_OCCURRENCE_CODES).map(([code, desc]) => {
+                    const codeNum = Number(code);
+                    return (
+                      <label key={code} className="flex cursor-pointer items-start gap-2.5 border-b border-gray-50 px-3 py-2 hover:bg-gray-50 last:border-0">
+                        <input
+                          type="checkbox"
+                          aria-label={`Código de ocorrência Siscoaf ${code}`}
+                          checked={occurrenceCodes.includes(codeNum)}
+                          onChange={(e) =>
+                            setOccurrenceCodes(prev =>
+                              e.target.checked
+                                ? [...prev, codeNum]
+                                : prev.filter(c => c !== codeNum)
+                            )
+                          }
+                          className="mt-0.5 accent-red-700 shrink-0"
+                        />
+                        <span className="text-xs text-gray-700">
+                          <span className="font-mono font-semibold text-gray-900">{code}</span>
+                          {' — '}
+                          {desc}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {occurrenceCodes.length > 0 && (
+                  <p className="mt-1 text-xs text-gray-500">{occurrenceCodes.length} código(s) selecionado(s)</p>
+                )}
+              </div>
+
+              {/* Tipos de Envolvimento */}
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-gray-600">Tipos de Envolvimento</label>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(SISCOAF_INVOLVEMENT_TYPES).map(([code, desc]) => {
+                    const codeNum = Number(code);
+                    return (
+                      <label key={code} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
+                        involvementTypes.includes(codeNum)
+                          ? 'border-red-200 bg-red-50 text-red-800 font-semibold'
+                          : 'border-gray-200 hover:bg-gray-50 text-gray-700'
+                      }`}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Tipo de envolvimento ${desc}`}
+                          checked={involvementTypes.includes(codeNum)}
+                          onChange={(e) =>
+                            setInvolvementTypes(prev =>
+                              e.target.checked
+                                ? [...prev, codeNum]
+                                : prev.filter(t => t !== codeNum)
+                            )
+                          }
+                          className="accent-red-700"
+                        />
+                        <span className="font-mono">{code}</span> — {desc}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Valores */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-gray-600">
+                    Valor do Prêmio (R$)
+                    {decision === 'FILE_SAR' && <span className="ml-1 text-red-500">*</span>}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    aria-label="Valor do prêmio"
+                    value={valorPremio}
+                    onChange={(e) => setValorPremio(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-red-400 focus:outline-none"
+                    placeholder="0.00"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-gray-600">
+                    Valor das Apostas (R$)
+                    {decision === 'FILE_SAR' && <span className="ml-1 text-red-500">*</span>}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    aria-label="Valor das apostas"
+                    value={valorApostas}
+                    onChange={(e) => setValorApostas(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-red-400 focus:outline-none"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
+              {/* Informações Adicionais */}
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-gray-600">
+                  Informações Adicionais
+                  {decision === 'FILE_SAR' && <span className="ml-1 text-red-500">* obrigatório (Siscoaf 97 — campo não pode ser nulo)</span>}
+                </label>
+                <textarea
+                  aria-label="Informações adicionais Siscoaf"
+                  rows={3}
+                  value={infoAdicionais}
+                  onChange={(e) => setInfoAdicionais(e.target.value)}
+                  placeholder="Descreva detalhes adicionais específicos sobre os códigos de ocorrência selecionados..."
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:border-red-400 focus:outline-none focus:ring-1 focus:ring-red-200"
+                />
+              </div>
+            </div>
+
             <button
               onClick={() => reportMut.mutate()}
-              disabled={reportMut.isPending || (decision === 'FILE_SAR' && !narrative.trim())}
+              disabled={
+                reportMut.isPending ||
+                (decision === 'FILE_SAR' && (!narrative.trim() || occurrenceCodes.length === 0 || !infoAdicionais.trim()))
+              }
               aria-label="Gerar dossiê"
               className="rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 shadow-sm"
             >
               {reportMut.isPending ? 'Gerando dossiê...' : 'Gerar Dossiê'}
             </button>
+            {decision === 'FILE_SAR' && occurrenceCodes.length === 0 && (
+              <p className="text-xs text-red-600">Selecione ao menos um código de ocorrência Siscoaf para comunicar ao COAF.</p>
+            )}
+            {decision === 'FILE_SAR' && !infoAdicionais.trim() && (
+              <p className="text-xs text-red-600">Informações Adicionais são obrigatórias (Comunicado Siscoaf 97).</p>
+            )}
             {reportMut.isError && (
               <p className="text-xs text-red-600">Erro ao gerar relatório. Tente novamente.</p>
             )}

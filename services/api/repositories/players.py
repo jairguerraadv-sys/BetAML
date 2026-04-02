@@ -86,6 +86,7 @@ class PlayerRepository:
         """Apaga dados PII e marca player como ERASED (LGPD Art. 18)."""
         player.status = "ERASED"
         player.cpf_encrypted = b""
+        player.cpf_hmac = None  # invalidar índice HMAC após erasure LGPD
         player.name_encrypted = b""
         player.birth_date = None
         player.declared_income_monthly = None

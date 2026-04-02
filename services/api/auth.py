@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -384,3 +385,23 @@ def mask_cpf(cpf: str) -> str:
     if len(digits) >= 3:
         return f"***.***.***.{digits[-2:]}"
     return "***"
+
+
+# ── CPF HMAC para lookup indexado O(1) ───────────────────────────────────────
+# HMAC-SHA256 determinístico do CPF (somente dígitos) com chave derivada da
+# PII_ENCRYPTION_KEY mais um salt de domínio fixo ("cpf_hmac").
+# Permite busca por CPF na tabela players sem descriptografia de toda a tabela.
+# O HMAC não permite reversão do CPF original — privacidade mantida.
+
+def compute_cpf_hmac(cpf_plain: str) -> str:
+    """
+    Computa HMAC-SHA256 do CPF (somente dígitos) para indexação.
+
+    Returns:
+        str — hex digest de 64 chars, indexável no banco (coluna cpf_hmac).
+    """
+    digits = "".join(c for c in cpf_plain if c.isdigit())
+    raw_key = settings.pii_encryption_key.encode("utf-8")
+    # Usa domain separation para evitar colisão com outros HMACs da mesma chave
+    hmac_key = hashlib.sha256(raw_key + b":cpf_hmac").digest()
+    return hmac.new(hmac_key, digits.encode("utf-8"), hashlib.sha256).hexdigest()

@@ -6,9 +6,11 @@ import {
   AlertDetail,
   AlertExplainability,
   Case,
+  closeAlert,
   fetchAlert,
   fetchAlertExplainability,
   fetchCases,
+  labelAlert,
   linkAlertToCase,
   triageAlert,
 } from '@/lib/api';
@@ -54,6 +56,8 @@ export default function AlertDetailPage() {
   const [disposition, setDisp]         = useState('');
   const [note, setNote]                = useState('');
   const [selectedCase, setSelectedCase] = useState('');
+  const [labelValue, setLabelValue] = useState<'TRUE_POSITIVE' | 'FALSE_POSITIVE' | 'NEED_REVIEW'>('NEED_REVIEW');
+  const [labelNote, setLabelNote] = useState('');
 
   const { data: alert, isLoading, error } = useQuery<AlertDetail>({
     queryKey: ['alert', id],
@@ -88,6 +92,22 @@ export default function AlertDetailPage() {
     onSuccess:  () => {
       qc.invalidateQueries({ queryKey: ['alert', id] });
       setShowLink(false);
+    },
+  });
+
+  const close = useMutation({
+    mutationFn: () => closeAlert(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['alert', id] });
+      qc.invalidateQueries({ queryKey: ['alerts'] });
+    },
+  });
+
+  const label = useMutation({
+    mutationFn: () => labelAlert(id, labelValue, labelNote || undefined),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['alert', id] });
+      qc.invalidateQueries({ queryKey: ['alerts'] });
     },
   });
 
@@ -242,6 +262,18 @@ export default function AlertDetailPage() {
             Triagem
           </button>
         )}
+        {alert.status !== 'CLOSED' && (
+          <button
+            onClick={() => {
+              if (!window.confirm('Confirma fechamento do alerta?')) return;
+              close.mutate();
+            }}
+            disabled={close.isPending}
+            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {close.isPending ? 'Fechando...' : 'Fechar Alerta'}
+          </button>
+        )}
         {!alert.case_id && (
           <button
             onClick={() => setShowLink(true)}
@@ -259,6 +291,39 @@ export default function AlertDetailPage() {
           </a>
         )}
       </div>
+
+      <Section title="Feedback de Qualidade (Label)">
+        <div className="grid gap-3 md:grid-cols-[220px_1fr_auto]">
+          <select
+            value={labelValue}
+            onChange={(e) => setLabelValue(e.target.value as 'TRUE_POSITIVE' | 'FALSE_POSITIVE' | 'NEED_REVIEW')}
+            className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
+          >
+            <option value="TRUE_POSITIVE">TRUE_POSITIVE</option>
+            <option value="FALSE_POSITIVE">FALSE_POSITIVE</option>
+            <option value="NEED_REVIEW">NEED_REVIEW</option>
+          </select>
+          <input
+            value={labelNote}
+            onChange={(e) => setLabelNote(e.target.value)}
+            placeholder="Nota opcional para feedback do modelo"
+            className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
+          />
+          <button
+            onClick={() => label.mutate()}
+            disabled={label.isPending}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {label.isPending ? 'Aplicando...' : 'Aplicar Label'}
+          </button>
+        </div>
+        {label.isSuccess && (
+          <p className="mt-2 text-xs text-green-700">Label atualizado com sucesso.</p>
+        )}
+        {label.isError && (
+          <p className="mt-2 text-xs text-red-700">Falha ao aplicar label.</p>
+        )}
+      </Section>
 
       {/* Modal: Triagem */}
       {showTriage && (

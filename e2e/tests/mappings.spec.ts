@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-import { login } from './helpers';
+import { apiLoginAsAdmin, createMappingViaApi, login, loginAsAdmin } from './helpers';
 
 test.describe('Mappings', () => {
   test.beforeEach(async ({ page }) => {
@@ -29,5 +29,23 @@ test.describe('Mappings', () => {
 
     await page.getByRole('button', { name: /criar mapping/i }).click();
     await expect(page.getByText(mappingName)).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('can run saved mapping test from selected mapping', async ({ page, request }) => {
+    const session = await apiLoginAsAdmin(request);
+    const mapping = await createMappingViaApi(request, session.access_token, {
+      name: `E2E Mapping Saved Test ${Date.now()}`,
+      source_system: `ConnectorGammaSavedTest-${Date.now()}`,
+    });
+
+    await loginAsAdmin(page);
+    await page.goto('/mappings');
+
+    await page.getByRole('gridcell', { name: mapping.name }).first().click();
+    await page.getByRole('button', { name: /testar mapping salvo/i }).click();
+
+    await expect(page.getByLabel(/resultado do teste do mapping salvo/i)).toContainText(/"status":\s*"ok"|"status":\s*"error"/i, {
+      timeout: 10_000,
+    });
   });
 });

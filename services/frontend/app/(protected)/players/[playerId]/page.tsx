@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
 import {
+  erasePlayerData,
+  fetchPlayerDataExport,
   fetchLatestPlayerExternalValidation,
   fetchPlayerExternalValidationHistory,
   fetchPlayer,
@@ -10,7 +12,9 @@ import {
   fetchPlayerEconCompat,
   fetchPlayerNetwork,
   PlayerDetail,
+  PlayerDataExport,
   EconCompat,
+  requestPlayerRightToErasure,
   retryExternalValidation,
   requestPlayerExternalValidation,
 } from '@/lib/api';
@@ -178,6 +182,7 @@ export default function PlayerDetailPage() {
   const [tab, setTab] = useState<Tab>('profile');
   const [historyStatus, setHistoryStatus] = useState<string>('');
   const [historyProvider, setHistoryProvider] = useState<string>('');
+  const [erasureReason, setErasureReason] = useState<string>('Solicitação de titular (LGPD Art. 18)');
   const currentUser   = useCurrentUser();
   const queryClient = useQueryClient();
 
@@ -226,6 +231,39 @@ export default function PlayerDetailPage() {
       await queryClient.invalidateQueries({ queryKey: ['player-external-validation-history', playerId] });
     },
   });
+
+  const lgpdExportMutation = useMutation({
+    mutationFn: () => fetchPlayerDataExport(playerId),
+  });
+
+  const eraseMutation = useMutation({
+    mutationFn: () => erasePlayerData(playerId, erasureReason),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['player', playerId] });
+      await queryClient.invalidateQueries({ queryKey: ['players'] });
+    },
+  });
+
+  const rightToErasureMutation = useMutation({
+    mutationFn: () => requestPlayerRightToErasure(playerId, erasureReason),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['player', playerId] });
+      await queryClient.invalidateQueries({ queryKey: ['players'] });
+    },
+  });
+
+  const downloadDataExport = (payload: PlayerDataExport) => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `player-data-export-${payload.player_id}-${payload.export_id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const canRequestLgpdExport = ['ADMIN', 'AML_ANALYST', 'SUPER_ADMIN'].includes(currentUser?.role ?? '');
+  const canErasePlayer = ['ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role ?? '');
 
   if (isLoading) return <p className="text-sm text-gray-400">Carregando perfil…</p>;
   if (error)     return <p className="text-sm text-red-600">Player não encontrado.</p>;
@@ -418,6 +456,76 @@ export default function PlayerDetailPage() {
                   </div>
                 )}
               </div>
+
+              {(canRequestLgpdExport || canErasePlayer) && (
+                <div className="mt-4 rounded-xl border border-gray-200 p-4">
+                  <h4 className="text-sm font-semibold text-gray-900">LGPD e Governança de Dados</h4>
+                  <p className="mt-1 text-xs text-gray-600">
+                    Execute exportação de dados pessoais (Art. 18) e, para perfis autorizados,
+                    a anonimização irreversível do titular.
+                  </p>
+
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    {canRequestLgpdExport && (
+                      <button
+                        onClick={async () => {
+                          const payload = await lgpdExportMutation.mutateAsync();
+                          downloadDataExport(payload);
+                        }}
+                        disabled={lgpdExportMutation.isPending}
+                        className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 disabled:opacity-50"
+                      >
+                        {lgpdExportMutation.isPending ? 'Gerando exportação...' : 'Baixar Data Export (JSON)'}
+                      </button>
+                    )}
+
+                    {canErasePlayer && (
+                      <div className="space-y-2">
+                        <input
+                          value={erasureReason}
+                          onChange={(e) => setErasureReason(e.target.value)}
+                          placeholder="Motivo da solicitação LGPD"
+                          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-red-200"
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={() => {
+                              if (!window.confirm('Confirma anonimização irreversível do player?')) return;
+                              eraseMutation.mutate();
+                            }}
+                            disabled={eraseMutation.isPending}
+                            className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 disabled:opacity-50"
+                          >
+                            {eraseMutation.isPending ? 'Anonimizando...' : 'Anonimizar (erase)'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (!window.confirm('Confirma right-to-erasure para este player?')) return;
+                              rightToErasureMutation.mutate();
+                            }}
+                            disabled={rightToErasureMutation.isPending}
+                            className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 disabled:opacity-50"
+                          >
+                            {rightToErasureMutation.isPending ? 'Processando...' : 'Right to Erasure (alias)'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {(eraseMutation.data || rightToErasureMutation.data) && (
+                    <p className="mt-3 text-xs text-green-700">
+                      {(eraseMutation.data ?? rightToErasureMutation.data)?.message}
+                    </p>
+                  )}
+
+                  {(lgpdExportMutation.isError || eraseMutation.isError || rightToErasureMutation.isError) && (
+                    <p className="mt-3 text-xs text-red-700">
+                      Falha ao executar ação LGPD. Verifique permissões e tente novamente.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
           {tab === 'econ' && <EconCompatPanel player_id={playerId} />}

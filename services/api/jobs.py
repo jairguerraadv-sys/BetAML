@@ -228,6 +228,7 @@ async def cleanup_expired_player_data() -> None:
                     # Anonimizar
                     anon_suffix = hashlib.sha256(str(player.id).encode()).hexdigest()[:12]
                     player.cpf_encrypted = f"ERASURE_{anon_suffix}".encode()
+                    player.cpf_hmac = None  # invalidar índice HMAC após erasure LGPD
                     player.name_encrypted = f"ERASURE_{anon_suffix}".encode()
                     player.status = "ERASED"
                     erased_count += 1

@@ -7,6 +7,34 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.0-rc] — 2026-03-25
+
+### Added — COAF Siscoaf 97 Compliance (Portaria SPA/MF 1.143/2024)
+- **`services/api/routers/cases.py`**: tabela completa de 22 códigos de ocorrência Siscoaf (1407–1428) e 4 tipos de envolvimento (1/Titular, 8/Outros, 49/Apostador, 50/Usuário) como constantes de módulo (`SISCOAF_OCCURRENCE_CODES`, `SISCOAF_INVOLVEMENT_TYPES`).
+- **`ReportPackageIn`**: 5 novos campos — `occurrence_codes`, `involvement_types`, `valor_premio`, `valor_apostas`, `informacoes_adicionais` — com validação automática para `FILE_SAR` (obrigatório código + informações adicionais).
+- **XML COAF** (`download_coaf_xml`): novos elementos `<TabelaOcorrencias>`, `<TiposEnvolvimento>`, `<PortariaReferencia>` e `<ComunicadoSiscoaf>` conforme arts. 24–25 da Portaria SPA/MF 1.143/2024.
+- **PDF COAF** (`_build_report_pdf`): seção Siscoaf completa com tabela de resumo (valor_premio, valor_apostas, informações adicionais), tabela de códigos (cabeçalho vermelho) e tabela de tipos de envolvimento (cabeçalho roxo).
+- **`services/frontend/lib/api.ts`**: constantes `SISCOAF_OCCURRENCE_CODES` e `SISCOAF_INVOLVEMENT_TYPES` exportadas; interface `ReportPackageBody` com todos os 7 campos; assinatura `generateReportPackage` atualizada.
+- **`services/frontend/app/(protected)/cases/[id]/page.tsx`**: seção Siscoaf na aba `TabDecision` — lista scrollable com 22 checkboxes de códigos, grid de 4 tipos de envolvimento, inputs numéricos para valores, textarea para informações adicionais, validação inline para `FILE_SAR`, botão desabilitado até requisitos serem preenchidos.
+
+### Added — Performance: CPF indexed O(1) lookup
+- **`services/api/models.py`**: coluna `cpf_hmac VARCHAR(64) INDEX` no modelo `Player` (nullable para retrocompatibilidade).
+- **`services/api/auth.py`**: função `compute_cpf_hmac(cpf_plain)` com HMAC-SHA256 e separação de domínio (`sha256(pii_key + ":cpf_hmac")`); import `hmac` adicionado.
+- **`services/api/routers/search.py`**: busca de CPF de 11 dígitos via `cpf_hmac` indexado O(1); fallback bounded O(n ≤ 250) para parciais de 3–10 dígitos.
+- **`infra/migration_v21.sql`**: `ALTER TABLE players ADD COLUMN IF NOT EXISTS cpf_hmac VARCHAR(64)` + `CREATE INDEX CONCURRENTLY idx_players_tenant_cpf_hmac`.
+- **`scripts/backfill_cpf_hmac.py`**: script de backfill em lotes com `--batch-size`, `--dry-run`, Fernet decrypt + recálculo HMAC para registros existentes.
+
+### Changed — cpf_hmac lifecycle consistency
+- **`services/api/seeds.py`**: importa `compute_cpf_hmac`; todos os 50 players de seed criados com `cpf_hmac` preenchido.
+- **`services/api/routers/players.py`**: alias de erasure LGPD (`right_to_erasure_alias`) popula `cpf_hmac` do CPF anonimizado.
+- **`services/api/repositories/players.py`** (`mark_erased`): define `cpf_hmac = None` junto com zeros de `cpf_encrypted` / `name_encrypted`.
+- **`services/api/jobs.py`** (LGPD auto-expiração): define `cpf_hmac = None` na anonimização automática por `data_retention_days`.
+
+### Security
+- **`services/api/main.py`**: `JWT_SECRET` exige mínimo de 32 bytes no startup (OWASP — HMAC-SHA256 requer ≥ 256 bits); `epsilon_webhook_secret` com valor padrão de dev levanta `RuntimeError` em produção.
+
+---
+
 ## [0.9.2] — 2026-03-24
 
 ### Added — E2E resiliency hardening

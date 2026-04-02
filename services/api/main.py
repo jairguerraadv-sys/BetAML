@@ -452,6 +452,13 @@ async def _startup():
             "e defina a variável de ambiente JWT_SECRET."
         )
 
+    # Guard: comprimento mínimo obrigatório do JWT_SECRET (OWASP — HMAC-SHA256 requer ≥ 256 bits)
+    if len(settings.jwt_secret.encode()) < 32:
+        raise RuntimeError(
+            "⚠️  CRÍTICO: JWT_SECRET deve ter no mínimo 32 bytes (256 bits) para garantir segurança HMAC-SHA256. "
+            "Gere com: python -c 'import secrets; print(secrets.token_hex(32))'"
+        )
+
     # Guard: PII encryption key insegura em ambientes não-dev
     if (
         settings.environment not in ("development", "test")
@@ -462,6 +469,16 @@ async def _startup():
             "Gere uma chave com: python -c 'import secrets; print(secrets.token_urlsafe(32))' "
             "e defina a variável de ambiente PII_ENCRYPTION_KEY. "
             "ATENÇÃO: mudar a chave INVALIDA todos os CPFs criptografados no banco!"
+        )
+
+    # Guard: webhook secret inseguro em ambientes não-dev
+    if (
+        settings.environment not in ("development", "test")
+        and settings.epsilon_webhook_secret == "dev-secret-change-me"
+    ):
+        raise RuntimeError(
+            "⚠️  CRÍTICO: EPSILON_WEBHOOK_SECRET não pode ser o valor padrão em staging/produção. "
+            "Defina a variável de ambiente EPSILON_WEBHOOK_SECRET com um segredo aleatório de ≥ 32 bytes."
         )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

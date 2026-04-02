@@ -12,7 +12,7 @@ from sqlalchemy import case as sqla_case, func as sqlfunc, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import decrypt_pii, encrypt_pii, get_current_user, mask_cpf, require_roles
+from auth import compute_cpf_hmac, decrypt_pii, encrypt_pii, get_current_user, mask_cpf, require_roles
 from database import get_db
 from models import Alert, Bet, Case, DeviceEvent, FinancialTransaction, Player, ScoringConfig, User
 from repositories import PlayerRepository
@@ -297,6 +297,7 @@ async def erase_player_data(
                 external_player_id=player_id,
                 full_name=anon_name,
                 cpf_encrypted=encrypt_pii(anon_cpf),
+                cpf_hmac=compute_cpf_hmac(anon_cpf),
                 name_encrypted=encrypt_pii(anon_name),
                 status="ERASED",
                 updated_at=_utcnow(),

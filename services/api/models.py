@@ -58,6 +58,10 @@ class Player(Base):
     full_name               = Column(Text)
     cpf_encrypted           = Column(LargeBinary, nullable=False)
     name_encrypted          = Column(LargeBinary, nullable=False)
+    # cpf_hmac: HMAC-SHA256 determinístico do CPF (digits only) para lookup indexado O(1)
+    # Permite busca por CPF sem descriptografia de toda a tabela (substitui scan O(n))
+    # Gerado por auth.compute_cpf_hmac(); backfill via migration_v21.sql
+    cpf_hmac                = Column(String(64), index=True)
     birth_date              = Column(Date)
     pep_flag                = Column(Boolean, nullable=False, default=False)
     declared_income_monthly = Column(Numeric(15, 2))

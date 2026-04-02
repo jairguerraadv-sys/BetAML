@@ -112,8 +112,113 @@ def _build_report_pdf(payload: dict) -> bytes:
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f8f9fa"), colors.white]),
         ]))
         story.append(t)
+
+    # ── Siscoaf 97 — Tabela de Ocorrências (Portaria SPA/MF 1.143/2024) ──────
+    siscoaf = payload.get("siscoaf") or {}
+    occ_codes = siscoaf.get("occurrence_codes") or []
+    inv_types = siscoaf.get("involvement_types") or []
+    valor_premio = siscoaf.get("valor_premio", 0.0)
+    valor_apostas = siscoaf.get("valor_apostas", 0.0)
+    info_adicionais = siscoaf.get("informacoes_adicionais", "")
+    portaria = siscoaf.get("portaria_referencia", "SPA/MF 1.143/2024")
+
+    story.append(Spacer(1, 0.3*cm))
+    story.append(Paragraph("Siscoaf — Portaria SPA/MF 1.143/2024 (Comunicado 97)", h2))
+    story.append(Paragraph(
+        f"Portaria: <b>{portaria}</b> &nbsp;|&nbsp; Comunicado Siscoaf: <b>97</b>", small,
+    ))
+    story.append(Spacer(1, 0.2*cm))
+
+    siscoaf_meta = [
+        ["Campo", "Valor"],
+        ["Valor do Prêmio (R$)", f"{float(valor_premio):.2f}"],
+        ["Valor das Apostas (R$)", f"{float(valor_apostas):.2f}"],
+        ["Informações Adicionais", str(info_adicionais)[:200] if info_adicionais else "—"],
+    ]
+    ts = Table(siscoaf_meta, colWidths=[5.5*cm, 11.5*cm])
+    ts.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#7f1d1d")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#fff1f2"), colors.white]),
+    ]))
+    story.append(ts)
+    story.append(Spacer(1, 0.2*cm))
+
+    if occ_codes:
+        story.append(Paragraph("Códigos de Ocorrência Siscoaf", ParagraphStyle("h3", parent=normal, fontSize=9, fontName="Helvetica-Bold")))
+        occ_rows = [["Código", "Descrição"]]
+        occ_descs = siscoaf.get("occurrence_descriptions") or {}
+        for code in occ_codes:
+            occ_rows.append([str(code), str(occ_descs.get(str(code), "—"))[:80]])
+        to = Table(occ_rows, colWidths=[2*cm, 15*cm])
+        to.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#991b1b")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#fff1f2"), colors.white]),
+        ]))
+        story.append(to)
+        story.append(Spacer(1, 0.2*cm))
+
+    if inv_types:
+        story.append(Paragraph("Tipos de Envolvimento", ParagraphStyle("h3", parent=normal, fontSize=9, fontName="Helvetica-Bold")))
+        inv_rows = [["Código", "Descrição"]]
+        inv_descs = siscoaf.get("involvement_descriptions") or {}
+        for tipo in inv_types:
+            inv_rows.append([str(tipo), str(inv_descs.get(str(tipo), "—"))])
+        ti = Table(inv_rows, colWidths=[2*cm, 15*cm])
+        ti.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#7c3aed")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f5f3ff"), colors.white]),
+        ]))
+        story.append(ti)
+
     doc.build(story)
     return buf.getvalue()
+
+
+# ── COAF Siscoaf 97 — Tabelas de Ocorrência e Envolvimento (Portaria SPA/MF 1.143/2024) ─────
+# Codes from Comunicado Siscoaf 97 (30/12/2024) — vigência 01/04/2025
+SISCOAF_OCCURRENCE_CODES: dict[int, str] = {
+    1407: "Art. 24-I — Falta de fundamento econômico ou legal",
+    1408: "Art. 24-II — Incompatibilidade com práticas usuais de mercado",
+    1409: "Art. 24-III — Possível indício de lavagem de dinheiro ou financiamento ao terrorismo",
+    1410: "Art. 25-I — Pessoa envolvida em LD ou crimes financeiros",
+    1411: "Art. 25-II — Terrorismo / proliferação de armas",
+    1412: "Art. 25-III — Jurisdição GAFI de alto risco ou sob monitoramento",
+    1413: "Art. 25-IV — Resistência a fornecer informações cadastrais",
+    1414: "Art. 25-V — Informações falsas ou de difícil verificação",
+    1415: "Art. 25-VI — Aporte suspeito quanto à origem dos recursos",
+    1416: "Art. 25-VII — Prêmio suspeito de ser instrumento de LD/FTP/fraude",
+    1417: "Art. 25-VIII — Manipulação de resultados",
+    1418: "Art. 25-IX — Incompatibilidade comportamental com o perfil",
+    1419: "Art. 25-X — Utilização de ferramenta automatizada (bots)",
+    1420: "Art. 25-XI — Fracionamento / dissimulação de operações",
+    1421: "Art. 25-XII — Retirada imediata pós-depósito sem apostas",
+    1422: "Art. 25-XIII — Utilização indevida de conta de terceiro",
+    1423: "Art. 25-XIV — Agente intermediador de apostas",
+    1424: "Art. 25-XV — Aportes sugestivos de intermediação de apostas",
+    1425: "Art. 25-XVI — Uso de plataforma bet exchange para LD/FTP",
+    1426: "Art. 25-XVII — Pessoa Politicamente Exposta (PEP)",
+    1427: "Art. 25-XVIII — Dificuldade de realização cadastral",
+    1428: "Art. 25-XIX — Qualquer operação com características atípicas (catch-all)",
+}
+
+SISCOAF_INVOLVEMENT_TYPES: dict[int, str] = {
+    1:  "Titular",
+    8:  "Outros",
+    49: "Apostador",
+    50: "Usuário de Plataforma",
+}
+
+_VALID_OCCURRENCE_CODES = set(SISCOAF_OCCURRENCE_CODES.keys())
+_VALID_INVOLVEMENT_TYPES = set(SISCOAF_INVOLVEMENT_TYPES.keys())
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -132,6 +237,27 @@ class AssignRequest(BaseModel):
 class ReportPackageIn(BaseModel):
     analyst_narrative: Optional[str] = None
     decision: Optional[str] = Field(default="PENDING", pattern="^(FILE_SAR|NO_ACTION|PENDING)$")
+    # ── Siscoaf Comunicado 97 — campos obrigatórios (Portaria SPA/MF 1.143/2024) ──
+    occurrence_codes: list[int] = Field(
+        default_factory=list,
+        description="Códigos de ocorrência Siscoaf (1407–1428). Obrigatório para decision=FILE_SAR.",
+    )
+    involvement_types: list[int] = Field(
+        default_factory=lambda: [49],
+        description="Tipos de envolvimento Siscoaf: 1=Titular, 8=Outros, 49=Apostador, 50=Usuário de Plataforma.",
+    )
+    valor_premio: float = Field(
+        default=0.0, ge=0,
+        description="Valor do prêmio recebido pelo apostador (R$). ≥ 0.",
+    )
+    valor_apostas: float = Field(
+        default=0.0, ge=0,
+        description="Valor total das apostas no período analisado (R$). ≥ 0.",
+    )
+    informacoes_adicionais: Optional[str] = Field(
+        default=None,
+        description="Informações adicionais obrigatórias para todos os códigos de ocorrência.",
+    )
 
 
 class CaseEventCreate(BaseModel):
@@ -179,6 +305,11 @@ async def _build_report_payload(
     current_user: User,
     analyst_narrative: str | None,
     decision_code: str,
+    occurrence_codes: list[int] | None = None,
+    involvement_types: list[int] | None = None,
+    valor_premio: float = 0.0,
+    valor_apostas: float = 0.0,
+    informacoes_adicionais: str | None = None,
 ) -> dict[str, Any]:
     player = await db.get(Player, case_obj.player_id) if case_obj.player_id else None
     tenant = await db.get(Tenant, case_obj.tenant_id)
@@ -324,6 +455,26 @@ async def _build_report_payload(
         "decision": _map_report_decision(decision_code),
         "decisionLegacy": decision_code,
         "attachments": attachments,
+        # ── Siscoaf Comunicado 97 — campos obrigatórios (Portaria SPA/MF 1.143/2024) ──
+        "siscoaf": {
+            "occurrence_codes": [c for c in (occurrence_codes or []) if c in _VALID_OCCURRENCE_CODES],
+            "occurrence_descriptions": {
+                str(c): SISCOAF_OCCURRENCE_CODES[c]
+                for c in (occurrence_codes or [])
+                if c in _VALID_OCCURRENCE_CODES
+            },
+            "involvement_types": [t for t in (involvement_types or [49]) if t in _VALID_INVOLVEMENT_TYPES],
+            "involvement_descriptions": {
+                str(t): SISCOAF_INVOLVEMENT_TYPES[t]
+                for t in (involvement_types or [49])
+                if t in _VALID_INVOLVEMENT_TYPES
+            },
+            "valor_premio": round(valor_premio, 2),
+            "valor_apostas": round(valor_apostas, 2),
+            "informacoes_adicionais": informacoes_adicionais or "",
+            "portaria_referencia": "SPA/MF 1.143/2024",
+            "comunicado_siscoaf": "97",
+        },
         # backward-compatible fields kept for existing consumers/tests
         "report_id": report_id,
         "schema_version": "2.0",
@@ -645,6 +796,35 @@ async def generate_report_package(
     if decision == "FILE_SAR" and not body.analyst_narrative:
         raise HTTPException(400, "analyst_narrative é obrigatório quando decision=FILE_SAR (COAF Res. 36/2021 Art. 9)")
 
+    # ── Siscoaf 97: validações obrigatórias para comunicação COAF ─────────────
+    if decision == "FILE_SAR":
+        invalid_codes = [c for c in body.occurrence_codes if c not in _VALID_OCCURRENCE_CODES]
+        if invalid_codes:
+            raise HTTPException(
+                400,
+                f"Códigos de ocorrência inválidos: {invalid_codes}. "
+                f"Valores aceitos: {sorted(_VALID_OCCURRENCE_CODES)}",
+            )
+        if not body.occurrence_codes:
+            raise HTTPException(
+                400,
+                "occurrence_codes é obrigatório para decision=FILE_SAR "
+                "(Portaria SPA/MF 1.143/2024, Comunicado Siscoaf 97)",
+            )
+        invalid_types = [t for t in body.involvement_types if t not in _VALID_INVOLVEMENT_TYPES]
+        if invalid_types:
+            raise HTTPException(
+                400,
+                f"Tipos de envolvimento inválidos: {invalid_types}. "
+                f"Valores aceitos: {sorted(_VALID_INVOLVEMENT_TYPES)}",
+            )
+        if not body.informacoes_adicionais or not body.informacoes_adicionais.strip():
+            raise HTTPException(
+                400,
+                "informacoes_adicionais é obrigatório para todos os códigos de ocorrência Siscoaf "
+                "(Comunicado 97 — campo não pode ser nulo)",
+            )
+
     alerts  = (await db.execute(select(Alert).where(Alert.case_id == case_id))).scalars().all()
     events  = (await db.execute(select(CaseEvent).where(CaseEvent.case_id == case_id))).scalars().all()
 
@@ -656,6 +836,11 @@ async def generate_report_package(
         current_user=current_user,
         analyst_narrative=body.analyst_narrative,
         decision_code=decision,
+        occurrence_codes=body.occurrence_codes,
+        involvement_types=body.involvement_types,
+        valor_premio=body.valor_premio,
+        valor_apostas=body.valor_apostas,
+        informacoes_adicionais=body.informacoes_adicionais,
     )
 
     rp = ReportPackage(
@@ -1124,6 +1309,9 @@ async def download_coaf_xml(
         # CPF mascarado — obrigatório COAF Res. 36/2021 Schema MIFD v3
         cpf_plain = decrypt_pii(player.cpf_encrypted)  # type: ignore[arg-type]
         SubElement(parte, "CpfCnpjPessoa").text = mask_cpf(cpf_plain)
+        # Siscoaf 97: tipos de envolvimento (default 49=Apostador)
+        # Serão vinculados aos codes de ocorrência — pré-carregar do payload se disponível
+        SubElement(parte, "TipoEnvolvimentoPrincipal").text = "49"  # Apostador — será sobrescrito pelo payload
 
     # Operação Suspeita
     # Buscar total de transações do player (ValorOperacao — obrigatório MIFD v3)
@@ -1144,6 +1332,39 @@ async def download_coaf_xml(
     SubElement(operacao, "NaturezaOperacao").text = "APOSTA_ESPORTIVA"
     SubElement(operacao, "ValorOperacao").text = f"{total_amount:.2f}"
     SubElement(operacao, "DescricaoSuspeita").text = analyst_narrative
+
+    # ── Siscoaf Comunicado 97 — Tabela de Ocorrências (Portaria SPA/MF 1.143/2024) ──
+    siscoaf_payload: dict = {}
+    if rp is not None and isinstance(rp.payload, dict):
+        siscoaf_payload = rp.payload.get("siscoaf") or {}
+
+    occurrence_codes = siscoaf_payload.get("occurrence_codes") or []
+    involvement_types = siscoaf_payload.get("involvement_types") or [49]
+    valor_premio = siscoaf_payload.get("valor_premio", 0.0)
+    valor_apostas = siscoaf_payload.get("valor_apostas", 0.0)
+    informacoes_adicionais = siscoaf_payload.get("informacoes_adicionais") or analyst_narrative
+
+    if occurrence_codes:
+        tabelaOcorrencias = SubElement(operacao, "TabelaOcorrencias")
+        for code in occurrence_codes:
+            if code in _VALID_OCCURRENCE_CODES:
+                occ = SubElement(tabelaOcorrencias, "Ocorrencia")
+                SubElement(occ, "CodigoOcorrencia").text = str(code)
+                SubElement(occ, "DescricaoOcorrencia").text = SISCOAF_OCCURRENCE_CODES[code]
+                SubElement(occ, "InformacoesAdicionais").text = informacoes_adicionais
+                SubElement(occ, "ValorPremio").text = f"{float(valor_premio):.2f}"
+                SubElement(occ, "ValorApostasTotal").text = f"{float(valor_apostas):.2f}"
+
+    if involvement_types:
+        tabelaEnvolvimentos = SubElement(operacao, "TiposEnvolvimento")
+        for tipo in involvement_types:
+            if tipo in _VALID_INVOLVEMENT_TYPES:
+                env = SubElement(tabelaEnvolvimentos, "TipoEnvolvimento")
+                SubElement(env, "Codigo").text = str(tipo)
+                SubElement(env, "Descricao").text = SISCOAF_INVOLVEMENT_TYPES[tipo]
+
+    SubElement(operacao, "PortariaReferencia").text = "SPA/MF 1.143/2024"
+    SubElement(operacao, "ComunicadoSiscoaf").text = "97"
 
     # Serializar com pretty print
     raw = tostring(root, encoding="unicode")

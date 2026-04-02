@@ -220,6 +220,36 @@ export interface PlayerDetail {
   declared_income_monthly: number | null; last_scored_at: string | null;
 }
 
+export interface PlayerErasureResponse {
+  status: string;
+  player_id: string;
+  message: string;
+  erased_at?: string;
+}
+
+export interface PlayerDataExport {
+  export_id: string;
+  generated_at: string;
+  player_id: string;
+  personal_data: {
+    name?: string | null;
+    cpf?: string | null;
+    birth_date?: string | null;
+    email?: string | null;
+    pep_flag: boolean;
+    registered_since?: string | null;
+  };
+  financial_summary: {
+    total_transactions: number;
+    total_deposits: number;
+    total_withdrawals: number;
+    first_transaction?: string | null;
+    last_transaction?: string | null;
+  };
+  cases_count: number;
+  alerts_count: number;
+}
+
 export interface FeatureStoreCurrent {
   player_id: string;
   source: string;
@@ -295,6 +325,54 @@ export interface EconCompat {
   interpretation: string;
 }
 
+// ── COAF Siscoaf 97 — Tabelas de Ocorrência e Envolvimento (Portaria SPA/MF 1.143/2024) ──
+export const SISCOAF_OCCURRENCE_CODES: Record<number, string> = {
+  1407: 'Art. 24-I — Falta de fundamento econômico ou legal',
+  1408: 'Art. 24-II — Incompatibilidade com práticas usuais de mercado',
+  1409: 'Art. 24-III — Possível indício de lavagem de dinheiro ou financiamento ao terrorismo',
+  1410: 'Art. 25-I — Pessoa envolvida em LD ou crimes financeiros',
+  1411: 'Art. 25-II — Terrorismo / proliferação de armas',
+  1412: 'Art. 25-III — Jurisdição GAFI de alto risco ou sob monitoramento',
+  1413: 'Art. 25-IV — Resistência a fornecer informações cadastrais',
+  1414: 'Art. 25-V — Informações falsas ou de difícil verificação',
+  1415: 'Art. 25-VI — Aporte suspeito quanto à origem dos recursos',
+  1416: 'Art. 25-VII — Prêmio suspeito de ser instrumento de LD/FTP/fraude',
+  1417: 'Art. 25-VIII — Manipulação de resultados',
+  1418: 'Art. 25-IX — Incompatibilidade comportamental com o perfil',
+  1419: 'Art. 25-X — Utilização de ferramenta automatizada (bots)',
+  1420: 'Art. 25-XI — Fracionamento / dissimulação de operações',
+  1421: 'Art. 25-XII — Retirada imediata pós-depósito sem apostas',
+  1422: 'Art. 25-XIII — Utilização indevida de conta de terceiro',
+  1423: 'Art. 25-XIV — Agente intermediador de apostas',
+  1424: 'Art. 25-XV — Aportes sugestivos de intermediação de apostas',
+  1425: 'Art. 25-XVI — Uso de plataforma bet exchange para LD/FTP',
+  1426: 'Art. 25-XVII — Pessoa Politicamente Exposta (PEP)',
+  1427: 'Art. 25-XVIII — Dificuldade de realização cadastral',
+  1428: 'Art. 25-XIX — Qualquer operação com características atípicas (catch-all)',
+};
+
+export const SISCOAF_INVOLVEMENT_TYPES: Record<number, string> = {
+  1:  'Titular',
+  8:  'Outros',
+  49: 'Apostador',
+  50: 'Usuário de Plataforma',
+};
+
+export interface ReportPackageBody {
+  analyst_narrative?: string;
+  decision?: 'FILE_SAR' | 'NO_ACTION' | 'PENDING';
+  /** Códigos de ocorrência Siscoaf (1407–1428). Obrigatório para decision=FILE_SAR. */
+  occurrence_codes?: number[];
+  /** Tipos de envolvimento: 1=Titular, 8=Outros, 49=Apostador, 50=Usuário de Plataforma */
+  involvement_types?: number[];
+  /** Valor do prêmio recebido (R$) */
+  valor_premio?: number;
+  /** Valor total das apostas no período (R$) */
+  valor_apostas?: number;
+  /** Informações adicionais obrigatórias para todos os códigos de ocorrência (não pode ser nulo) */
+  informacoes_adicionais?: string;
+}
+
 export interface ReportPackageResult {
   report_package_id: string;
   status: string;
@@ -359,6 +437,19 @@ export const fetchPlayers = (params?: Record<string, string>) =>
 export const fetchPlayer = (id: string) =>
   api.get<PlayerDetail>(`/players/${id}`).then((r) => r.data);
 
+export const erasePlayerData = (playerId: string, reason?: string) =>
+  api.post<PlayerErasureResponse>(`/players/${playerId}/erase`, null, {
+    params: reason ? { reason } : undefined,
+  }).then((r) => r.data);
+
+export const requestPlayerRightToErasure = (playerId: string, reason?: string) =>
+  api.post<PlayerErasureResponse>(`/players/${playerId}/right-to-erasure`, null, {
+    params: reason ? { reason } : undefined,
+  }).then((r) => r.data);
+
+export const fetchPlayerDataExport = (playerId: string) =>
+  api.get<PlayerDataExport>(`/players/${playerId}/data-export`).then((r) => r.data);
+
 export const fetchFeatureStoreCurrent = (playerId: string) =>
   api.get<FeatureStoreCurrent>(`/feature-store/players/${playerId}/current`).then((r) => r.data);
 
@@ -382,8 +473,18 @@ export const fetchAlertRelatedTransactions = (alertId: string) =>
 
 export const generateReportPackage = (
   caseId: string,
-  body: { analyst_narrative?: string; decision?: string },
+  body: ReportPackageBody,
 ) => api.post<ReportPackageResult>(`/cases/${caseId}/report-package`, body).then((r) => r.data);
+
+export interface CaseNarrativeSuggestion {
+  case_id: string;
+  suggested_narrative: string;
+  alerts_considered: number;
+  player: Record<string, unknown>;
+}
+
+export const fetchCaseNarrativeSuggestion = (caseId: string) =>
+  api.get<CaseNarrativeSuggestion>(`/cases/${caseId}/report-package/narrative-suggest`).then((r) => r.data);
 
 export const fetchCaseReportPackages = (caseId: string) =>
   api.get<Array<{
@@ -533,6 +634,19 @@ export const ingestFile = (formData: FormData) =>
 export const triageAlert = (alertId: string, disposition: string, note: string) =>
   api.post(`/alerts/${alertId}/triage`, { disposition, note }).then((r) => r.data);
 
+export const closeAlert = (alertId: string) =>
+  api.post<{ id: string; status: string }>(`/alerts/${alertId}/close`).then((r) => r.data);
+
+export const labelAlert = (
+  alertId: string,
+  label: 'TRUE_POSITIVE' | 'FALSE_POSITIVE' | 'NEED_REVIEW',
+  labelNote?: string,
+) =>
+  api.post<{ status: string; label: string }>(`/alerts/${alertId}/label`, {
+    label,
+    label_note: labelNote,
+  }).then((r) => r.data);
+
 // ── Mappings (Módulo 1) ─────────────────────────────────────────────────────
 
 export interface MappingTemplate {
@@ -616,6 +730,12 @@ export interface MappingCreatePayload {
   change_notes?: string;
 }
 
+export interface MappingTestResponse {
+  status: 'ok' | 'error';
+  canonical?: Record<string, unknown>;
+  detail?: string;
+}
+
 export const fetchMappingTemplates = () =>
   api.get<MappingTemplate[]>('/mappings/templates').then((r) => r.data);
 
@@ -641,6 +761,9 @@ export const previewMappingConfig = (body: {
   sample_text?: string;
   format: 'json' | 'yaml';
 }) => api.post<MappingPreviewResponse>('/mappings/preview', body).then((r) => r.data);
+
+export const testMapping = (id: string, body: { sample: Record<string, unknown> }) =>
+  api.post<MappingTestResponse>(`/mappings/${id}/test`, body).then((r) => r.data);
 
 export const createMapping = (body: MappingCreatePayload) =>
   api.post('/mappings', body).then((r) => r.data);
