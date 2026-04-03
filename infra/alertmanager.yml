@@ -1,12 +1,13 @@
 global:
   resolve_timeout: 5m
-  smtp_from: '{{ getenv "ALERTMANAGER_FROM_EMAIL" "betaml-alerts@betaml.io" }}'
-  smtp_smarthost: '{{ getenv "SMTP_SMARTHOST" "localhost:587" }}'
-  smtp_auth_username: '{{ getenv "SMTP_USER" "" }}'
-  smtp_auth_password: '{{ getenv "SMTP_PASS" "" }}'
-  smtp_require_tls: true
-  # Slack global (usado por receivers que não definem api_url própria)
-  slack_api_url: '{{ getenv "SLACK_WEBHOOK_URL" "" }}'
+  smtp_from: 'betaml-alerts@betaml.io'
+  smtp_smarthost: 'localhost:587'
+  smtp_auth_username: ''
+  smtp_auth_password: ''
+  smtp_require_tls: false
+  # Slack global — em produção, defina SLACK_WEBHOOK_URL no docker-compose/Helm.
+  # O valor abaixo é um placeholder desabilitado (Alertmanager ignora url vazia).
+  slack_api_url: 'https://hooks.slack.com/services/PLACEHOLDER'
 
 route:
   group_by: ['alertname', 'severity']
@@ -35,11 +36,11 @@ receivers:
       - url: 'http://api:8000/internal/alerts/webhook'
         send_resolved: true
     email_configs:
-      - to: '{{ getenv "OPS_EMAIL" "ops@betaml.io" }}'
+      - to: 'ops@betaml.io'
         send_resolved: true
         headers:
           Subject: '[CRÍTICO] BetAML — {{ .CommonAnnotations.summary }}'
-        require_tls: true
+        require_tls: false
     slack_configs:
       - channel: '#betaml-critical'
         send_resolved: true
