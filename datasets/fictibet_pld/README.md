@@ -35,6 +35,25 @@ Objetivo:
 - Multi-currency + bonus + chargeback: `PLY-MULTI-007`
 - Falhas operacionais (status `FAILED`) para feature de quality/fraud ops
 
+## Dados Sintéticos CSV (gerados por generate.py)
+
+Além dos arquivos originais acima, o pacote inclui CSVs gerados programaticamente
+com `python datasets/fictibet_pld/generate.py` (seed fixa, reprodutível):
+
+| Arquivo | Entidade | ~Rows | Descrição |
+|---------|----------|-------|-----------|
+| `players.csv` | PLAYER | 120 | 6 cenários: normal(80), renda-incomp(10), structuring(8), rede(12), bonus-abuse(5), PEP(5) |
+| `transactions.csv` | TRANSACTION | 2.400 | Depósitos, saques, bônus, cashouts — 90 dias |
+| `bets.csv` | BET | 2.000 | Sports, casino, slots — odds e stakes por cenário |
+| `device_events.csv` | DEVICE_EVENT | 1.000 | Logins, apostas — rede compartilha device/IP |
+
+Ingestão rápida:
+
+```bash
+python scripts/ingest_fictibet_pld.py            # tudo
+python scripts/ingest_fictibet_pld.py --only players  # só jogadores
+```
+
 ## Exemplo rapido de ingestao
 
 Opção recomendada (pack completo em um comando):
