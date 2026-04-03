@@ -7,6 +7,47 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.0-rc3] — 2026-04-03
+
+### Added — Multi-Modalidade (Lei 14.790/2023 art. 3º)
+
+Ampliação do BetAML de sports-only para todas as modalidades de apostas de quota fixa:
+SPORTSBOOK, CASINO_LIVE, SLOT, INSTANT_GAME, BINGO, RASPADINHA e VIRTUAL.
+
+#### Modelo de Dados
+- **`libs/schemas.py`**: Novos enums `ProductType` (7 modalidades) e `GameCategory` (TABLE, LIVE, SLOT, INSTANT, BINGO, SCRATCH, OTHER). `BetPayload` estendido com `product_type`, `game_id`, `game_name`, `game_provider`, `game_category`, `rtp_teorico`.
+- **`services/api/models.py`**: ORM `Bet` com 6 novas colunas: `product_type`, `game_id`, `game_name`, `game_provider`, `game_category`, `rtp_teorico`.
+- **`infra/migration_v29.sql`**: Migration PostgreSQL com colunas, backfill bet_type→product_type e índices.
+- **`infra/clickhouse-init.sql`**: Tabela `bets` com `product_type`, `game_id`, `game_name`, `game_category`; `sport` agora Nullable.
+
+#### Pipeline de Ingestão
+- **`services/stream_processor/main.py`**: `_normalize_bet_payload` extrai campos multi-modalidade. `_persist_bet_oltp` e `_ch_insert_bet` persistem `product_type` + campos de jogo. Features `avg_odds_bet_7d`, `win_loss_ratio_30d`, `cashout_ratio_7d` filtram por SPORTSBOOK. Novas features: `bet_product_diversity_7d`, `slot_session_count_24h`, `casino_session_count_24h`.
+
+#### Mapping & Connectors
+- **`libs/mapping.py`**: BackofficeX BET com `product_type`, `game_id`, `game_name`, `game_provider`, `game_category`, `rtp_teorico`.
+- **`libs/connectors.py`**: ConnectorDelta e ConnectorEpsilon com campos multi-modalidade.
+
+#### Motor de Regras
+- **`services/rules_engine/main.py`**: `ctx_bet` inclui `productType` e `gameCategory`.
+- **`services/api/seeds.py`**: 4 novas regras: "Alta frequência em slots (24h)", "Diversificação de produto suspeita (7d)", "Casino chip washing", "Alta frequência em casino ao vivo (24h)".
+
+#### API
+- **`services/api/routers/alerts.py`**: Filtro opcional `?product_type=` em related-transactions.
+- **`services/api/routers/players.py`**: Filtro opcional `?product_type=` em bets-chart.
+- **`services/api/routers/reports.py`**: Breakdown `bets_by_product_type` no relatório mensal.
+
+#### Frontend
+- **`services/frontend/lib/api.ts`**: Tipo `ProductType`, enum `PRODUCT_TYPE_LABELS`, SISCOAF involvement type 51 (casino/slots).
+- **`services/frontend/.../alerts/page.tsx`**: Explicações para SLOT_FREQUENCY, CASINO_WASHING, PRODUCT_DIVERSITY.
+- **`services/frontend/.../reports/page.tsx`**: "Apostadores" → "Jogadores" (terminologia genérica).
+- **`services/frontend/.../rules/builder/page.tsx`**: 3 templates de regras casino/slots: slots frequency, chip washing, product diversity.
+- **`services/frontend/.../admin/page.tsx`**: Placeholder "FictiBet Operadora Ltda".
+
+#### Dados de Teste
+- **`datasets/fictibet_pld/generate.py`**: Catálogo de jogos casino (4) e slots (5) com RTP teórico. `make_bet()` gera campos condicionais por product_type. Cenários bonus_abuse com SPORTSBOOK/CASINO_LIVE/SLOT.
+
+---
+
 ## [1.0.0-rc2] — 2026-04-03
 
 ### Added — Production Readiness (11 GAPs closed)

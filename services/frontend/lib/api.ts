@@ -356,6 +356,7 @@ export const SISCOAF_INVOLVEMENT_TYPES: Record<number, string> = {
   8:  'Outros',
   49: 'Apostador',
   50: 'Usuário de Plataforma',
+  51: 'Jogador de Casino/Slots',
 };
 
 export interface ReportPackageBody {
@@ -1259,6 +1260,19 @@ export interface BetChartItem {
   day: string;
   stake_sum: number;
 }
+
+// Multi-modalidade (Lei 14.790/2023 art. 3º)
+export type ProductType = 'SPORTSBOOK' | 'CASINO_LIVE' | 'SLOT' | 'INSTANT_GAME' | 'BINGO' | 'RASPADINHA' | 'VIRTUAL';
+
+export const PRODUCT_TYPE_LABELS: Record<ProductType, string> = {
+  SPORTSBOOK:   'Apostas Esportivas',
+  CASINO_LIVE:  'Casino ao Vivo',
+  SLOT:         'Slots / Caça-Níqueis',
+  INSTANT_GAME: 'Jogos Instantâneos',
+  BINGO:        'Bingo Online',
+  RASPADINHA:   'Raspadinha Digital',
+  VIRTUAL:      'Esportes Virtuais',
+};
 
 export interface PaymentInstrumentSummary {
   payment_instrument: string | null;

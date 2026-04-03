@@ -253,6 +253,12 @@ class ConnectorDelta(BaseConnector):
         "stake":          "stake_amount",
         "sport":          "sport",
         "market":         "market",
+        "product_type":   "product_type",
+        "game_id":        "game_id",
+        "game_name":      "game_name",
+        "game_provider":  "game_provider",
+        "game_category":  "game_category",
+        "rtp":            "rtp_teorico",
     }
 
     def parse(self, raw: bytes | str, *, entity_type: str = "TRANSACTION") -> ParseResult:
@@ -316,6 +322,12 @@ class ConnectorEpsilon(BaseConnector):
         "bet_stake":         "stake_amount",
         "sport_category":    "sport",
         "market_name":       "market",
+        "product_type":      "product_type",
+        "game_id":           "game_id",
+        "game_name":         "game_name",
+        "game_provider":     "game_provider",
+        "game_category":     "game_category",
+        "rtp":               "rtp_teorico",
     }
 
     def __init__(self, signing_secret: str = "", secret: str | None = None):

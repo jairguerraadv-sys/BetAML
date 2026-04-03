@@ -506,6 +506,8 @@ async def evaluate_rules(
             "stakeAmount": float(payload.get("stake_amount", 0)),
             "odds":        float(payload.get("odds") or 0),
             "channel":     payload.get("channel", ""),
+            "productType": payload.get("product_type", "SPORTSBOOK"),
+            "gameCategory": payload.get("game_category", ""),
         }
         player_id = payload.get("player_id", "")
     else:

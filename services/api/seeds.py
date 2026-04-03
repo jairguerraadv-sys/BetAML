@@ -143,6 +143,39 @@ DEFAULT_RULES = [
         "condition_dsl": "transaction.type == \"DEPOSIT\" and player.declared_income_monthly != null and features.income_ratio_30d >= params.ratio_threshold",
         "params": {"ratio_threshold": 3.0},
     },
+    # ── Regras multi-modalidade (Lei 14.790/2023 art. 3º, II) ──
+    {
+        "name": "Alta frequência em slots (24h)",
+        "description": "Volume anômalo de rodadas de slots em 24h — possível automação ou lavagem via jogos de baixo RTP",
+        "severity": "MEDIUM",
+        "scope": "BET",
+        "condition_dsl": "bet.productType == \"SLOT\" and features.slot_session_count_24h >= params.threshold",
+        "params": {"threshold": 200},
+    },
+    {
+        "name": "Diversificação de produto suspeita (7d)",
+        "description": "Jogador usando muitas modalidades distintas em 7d — possível dispersão para dificultar rastreamento",
+        "severity": "MEDIUM",
+        "scope": "BET",
+        "condition_dsl": "features.bet_product_diversity_7d >= params.max_types",
+        "params": {"max_types": 4},
+    },
+    {
+        "name": "Casino chip washing",
+        "description": "Padrão de lavagem em casino ao vivo: apostas mínimas + saque alto (chips → cash)",
+        "severity": "HIGH",
+        "scope": "BET",
+        "condition_dsl": "bet.productType == \"CASINO_LIVE\" and features.casino_session_count_24h >= params.min_sessions and bet.stakeAmount <= params.max_stake",
+        "params": {"min_sessions": 50, "max_stake": 25},
+    },
+    {
+        "name": "Alta frequência em casino ao vivo (24h)",
+        "description": "Volume anômalo de sessões de casino ao vivo em 24h",
+        "severity": "MEDIUM",
+        "scope": "BET",
+        "condition_dsl": "bet.productType == \"CASINO_LIVE\" and features.casino_session_count_24h >= params.threshold",
+        "params": {"threshold": 150},
+    },
 ]
 
 TENANTS = [

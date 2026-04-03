@@ -446,7 +446,7 @@ function TenantCreateForm({ onSuccess }: { onSuccess: () => void }) {
           <input
             value={form.name}
             onChange={(e) => setForm(f => ({ ...f, name: e.target.value, slug: slugify(e.target.value) }))}
-            placeholder="Bet Esportiva Ltda"
+            placeholder="FictiBet Operadora Ltda"
             className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
           />
         </div>

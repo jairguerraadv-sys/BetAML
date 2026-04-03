@@ -100,6 +100,28 @@ class BetChannel(str, Enum):
     TERMINAL = "TERMINAL"
 
 
+class ProductType(str, Enum):
+    """Modalidade de jogo — Lei 14.790/2023 art. 3º, I e II."""
+    SPORTSBOOK   = "SPORTSBOOK"      # apostas esportivas (quota fixa em eventos reais)
+    CASINO_LIVE  = "CASINO_LIVE"     # casino ao vivo (roleta, blackjack, bacará)
+    SLOT         = "SLOT"            # caça-níqueis / slot machines
+    INSTANT_GAME = "INSTANT_GAME"    # jogos instantâneos (crash, mines, plinko)
+    BINGO        = "BINGO"           # bingo online
+    RASPADINHA   = "RASPADINHA"      # raspadinha virtual (scratch card)
+    VIRTUAL      = "VIRTUAL"         # esportes virtuais / eventos simulados
+
+
+class GameCategory(str, Enum):
+    """Categoria do jogo para modalidades não-esportivas."""
+    TABLE  = "TABLE"    # jogos de mesa (blackjack, bacará, poker)
+    LIVE   = "LIVE"     # dealer ao vivo
+    SLOT   = "SLOT"     # slot machines
+    INSTANT = "INSTANT" # jogos instantâneos (crash, mines)
+    BINGO  = "BINGO"    # bingo online
+    SCRATCH = "SCRATCH" # raspadinha digital
+    OTHER  = "OTHER"
+
+
 class PlayerStatus(str, Enum):
     ACTIVE              = "ACTIVE"           # cadastro ativo e válido
     BLOCKED             = "BLOCKED"          # bloqueio administrativo
@@ -184,6 +206,13 @@ class BetPayload(BaseModel):
     placed_at: datetime
     settled_at: Optional[datetime] = None
     status: Optional[str] = None
+    # ── Multi-modalidade (Lei 14.790/2023 art. 3º) ──
+    product_type: ProductType = ProductType.SPORTSBOOK
+    game_id: Optional[str] = None            # ID do jogo/mesa/máquina (casino/slot)
+    game_name: Optional[str] = None          # nome do jogo (ex: "Lightning Roulette")
+    game_provider: Optional[str] = None      # provedor (ex: "Evolution", "Pragmatic Play")
+    game_category: Optional[GameCategory] = None  # TABLE, LIVE, SLOT, INSTANT, etc.
+    rtp_teorico: Optional[Decimal] = None    # Return-to-Player teórico (0.0000–1.0000)
 
 
 class DeviceEventPayload(BaseModel):

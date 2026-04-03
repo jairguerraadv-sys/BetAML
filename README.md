@@ -1,6 +1,6 @@
 # BetAML
 
-Plataforma multi-tenant de PLD/FT para operadores de apostas, com ingestao industrializada, feature store online/offline, motor de regras, ML, case management, governanca, observabilidade e frontend operacional.
+Plataforma multi-tenant de PLD/FT para operadores de apostas online (esportivas, casino ao vivo, slots, jogos instantâneos, bingo e raspadinha digital), com ingestao industrializada, feature store online/offline, motor de regras, ML, case management, governanca, observabilidade e frontend operacional. Conforme Lei 14.790/2023 art. 3º e Portarias SPA/MF 1.143/2024 e 1.231/2024.
 
 ## Stack
 

@@ -341,6 +341,7 @@ async def get_alert_related_transactions(
     alert_id: str,
     window_hours: int = Query(48, ge=1, le=720),
     limit: int = Query(50, le=200),
+    product_type: str | None = Query(None, description="Filtrar apostas por modalidade (SPORTSBOOK, CASINO_LIVE, SLOT, ...)"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -376,6 +377,7 @@ async def get_alert_related_transactions(
             Bet.player_id == a.player_id,
             Bet.occurred_at >= ts_from,
             Bet.occurred_at <= ts_to,
+            *([Bet.product_type == product_type] if product_type else []),
         )
         .order_by(Bet.occurred_at.desc())
         .limit(limit)

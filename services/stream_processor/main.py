@@ -304,19 +304,22 @@ def _persist_bet_oltp(envelope: dict, payload: dict) -> None:
             return
 
         player_id = _resolve_player_id_sync(conn, tenant_id, payload.get("player_id"))
+        _product_type = payload.get("product_type") or "SPORTSBOOK"
         conn.execute(
             sa.text(
                 """
                 INSERT INTO bets (
                     id, tenant_id, player_id, external_bet_id, source_system, bet_type,
-                    stake_amount, potential_payout, actual_payout, odds, currency,
-                    status, event_name, market_name, selection_name, source_event_id,
-                    raw_payload, occurred_at, created_at
+                    product_type, stake_amount, potential_payout, actual_payout, odds, currency,
+                    status, event_name, market_name, selection_name,
+                    game_id, game_name, game_provider, game_category, rtp_teorico,
+                    source_event_id, raw_payload, occurred_at, created_at
                 ) VALUES (
                     :id, :tenant_id, :player_id, :external_bet_id, :source_system, :bet_type,
-                    :stake_amount, :potential_payout, :actual_payout, :odds, :currency,
-                    :status, :event_name, :market_name, :selection_name, :source_event_id,
-                    CAST(:raw_payload AS jsonb), :occurred_at, NOW()
+                    :product_type, :stake_amount, :potential_payout, :actual_payout, :odds, :currency,
+                    :status, :event_name, :market_name, :selection_name,
+                    :game_id, :game_name, :game_provider, :game_category, :rtp_teorico,
+                    :source_event_id, CAST(:raw_payload AS jsonb), :occurred_at, NOW()
                 )
                 """
             ),
@@ -326,7 +329,8 @@ def _persist_bet_oltp(envelope: dict, payload: dict) -> None:
                 "player_id": player_id,
                 "external_bet_id": payload.get("external_bet_id"),
                 "source_system": envelope.get("source_system") or "unknown",
-                "bet_type": payload.get("bet_type") or "SPORTS",
+                "bet_type": payload.get("bet_type") or _product_type,
+                "product_type": _product_type,
                 "stake_amount": float(payload.get("stake_amount") or 0),
                 "potential_payout": float(payload.get("potential_payout") or 0) if payload.get("potential_payout") is not None else None,
                 "actual_payout": float(payload.get("settled_payout") or 0) if payload.get("settled_payout") is not None else None,
@@ -336,6 +340,11 @@ def _persist_bet_oltp(envelope: dict, payload: dict) -> None:
                 "event_name": payload.get("sport"),
                 "market_name": payload.get("market_type"),
                 "selection_name": payload.get("selection"),
+                "game_id": payload.get("game_id"),
+                "game_name": payload.get("game_name"),
+                "game_provider": payload.get("game_provider"),
+                "game_category": payload.get("game_category"),
+                "rtp_teorico": float(payload["rtp_teorico"]) if payload.get("rtp_teorico") is not None else None,
                 "source_event_id": source_event_id,
                 "raw_payload": json.dumps(envelope.get("raw_payload") or payload, ensure_ascii=False),
                 "occurred_at": occurred_at,
@@ -469,6 +478,13 @@ def _normalize_bet_payload(payload: dict) -> dict:
         "placed_at": placed_at,
         "status": payload.get("status") or "OPEN",
         "outcome": payload.get("outcome"),
+        # Multi-modalidade (Lei 14.790/2023 art. 3º)
+        "product_type": payload.get("product_type") or payload.get("productType") or "SPORTSBOOK",
+        "game_id": payload.get("game_id") or payload.get("gameId"),
+        "game_name": payload.get("game_name") or payload.get("gameName"),
+        "game_provider": payload.get("game_provider") or payload.get("gameProvider"),
+        "game_category": payload.get("game_category") or payload.get("gameCategory"),
+        "rtp_teorico": _coerce_float(payload.get("rtp_teorico") or payload.get("rtp"), None),
     }
 
 
@@ -764,13 +780,15 @@ async def compute_features(
     weekend_txns = [e for e in txns_7d_all if _is_weekend(e)]
     weekend_ratio = len(weekend_txns) / max(len(txns_7d_all), 1)
 
-    # 5. Average odds on bets (7d)
-    odds_vals = [b.get("odds") for b in bets_7d if b.get("odds") is not None]
+    # 5. Average odds on bets (7d) — only for SPORTSBOOK (casino/slot have no meaningful odds)
+    sportsbook_bets_7d = [b for b in bets_7d if (b.get("product_type") or "SPORTSBOOK") == "SPORTSBOOK"]
+    odds_vals = [b.get("odds") for b in sportsbook_bets_7d if b.get("odds") is not None]
     avg_odds_7d = (sum(odds_vals) / len(odds_vals)) if odds_vals else None
 
-    # 6. Win/loss ratio (30d bets)
-    wins_30d  = [b for b in bets_30d if b.get("outcome") == "WIN"]
-    losses_30d = [b for b in bets_30d if b.get("outcome") == "LOSS"]
+    # 6. Win/loss ratio (30d bets) — only for SPORTSBOOK
+    sportsbook_bets_30d = [b for b in bets_30d if (b.get("product_type") or "SPORTSBOOK") == "SPORTSBOOK"]
+    wins_30d  = [b for b in sportsbook_bets_30d if b.get("outcome") == "WIN"]
+    losses_30d = [b for b in sportsbook_bets_30d if b.get("outcome") == "LOSS"]
     win_loss_30d = (len(wins_30d) / max(len(losses_30d), 1)) if losses_30d else None
 
     # 7. Average time (hours) between deposit and withdrawal (7d)
@@ -797,14 +815,22 @@ async def compute_features(
     bonus_30d = filter_type(txns, "BONUS", cutoff_30d)
     bonus_ratio_30d = len(bonus_30d) / max(len(deposits_30d) + len(bonus_30d), 1)
 
-    # 11. Cashout ratio (7d) = apostas com cashout / apostas totais
+    # 11. Cashout ratio (7d) = apostas com cashout / apostas totais (only SPORTSBOOK)
     cashout_bets_7d = [
         b
-        for b in bets_7d
+        for b in sportsbook_bets_7d
         if b.get("cashout_amount") not in (None, "", 0, 0.0)
         or str(b.get("status") or "").upper() in {"CASHOUT", "CASHED_OUT", "EARLY_CASHOUT"}
     ]
-    cashout_ratio_7d = len(cashout_bets_7d) / max(len(bets_7d), 1)
+    cashout_ratio_7d = len(cashout_bets_7d) / max(len(sportsbook_bets_7d), 1)
+
+    # 12. Multi-modality features (Lei 14.790/2023 art. 3º)
+    product_types_7d = {b.get("product_type") or "SPORTSBOOK" for b in bets_7d}
+    bet_product_diversity_7d = len(product_types_7d)
+    slot_bets_24h = [b for b in bets_24h if (b.get("product_type") or "") == "SLOT"]
+    slot_session_count_24h = len(slot_bets_24h)
+    casino_bets_24h = [b for b in bets_24h if (b.get("product_type") or "") == "CASINO_LIVE"]
+    casino_session_count_24h = len(casino_bets_24h)
 
     # ── Network features (Redis Sets) ─────────────────────────────────────────
     # player_devices: set of device_ids this player used
@@ -902,6 +928,11 @@ async def compute_features(
         "bet_count_7d":                         len(bets_7d),
         "bet_count_30d":                        len(bets_30d),
         "bet_count_90d":                        len(bets_90d),
+
+        # v3 multi-modality features (Lei 14.790/2023 art. 3º)
+        "bet_product_diversity_7d":             bet_product_diversity_7d,
+        "slot_session_count_24h":               slot_session_count_24h,
+        "casino_session_count_24h":             casino_session_count_24h,
 
         # network
         "shared_device_score":                  float(shared_device_score),
@@ -1244,13 +1275,17 @@ def _ch_insert_bet(ch_client, envelope: dict, payload: dict) -> None:
         "tenant_id":      envelope.get("tenant_id", ""),
         "source_system":  envelope.get("source_system", ""),
         "player_id":      payload.get("player_id", ""),
+        "product_type":   payload.get("product_type", "SPORTSBOOK"),
         "stake_amount":   float(payload.get("stake_amount", 0)),
         "odds":           float(payload.get("odds") or 0) or None,
         "potential_payout": float(payload.get("potential_payout") or 0) or None,
         "settled_payout": float(payload.get("settled_payout") or 0) or None,
         "market_type":    payload.get("market_type", ""),
-        "sport":          payload.get("sport", ""),
+        "sport":          payload.get("sport") or None,
         "channel":        payload.get("channel", "WEB"),
+        "game_id":        payload.get("game_id") or None,
+        "game_name":      payload.get("game_name") or None,
+        "game_category":  payload.get("game_category") or None,
         "placed_at":      placed_at,
         "settled_at":     None,
         "event_date":     placed_at.date(),

@@ -658,6 +658,7 @@ class Bet(Base):
     external_bet_id  = Column(Text)
     source_system    = Column(Text, nullable=False)
     bet_type         = Column(Text, nullable=False, default="SPORTS")
+    product_type     = Column(Text, nullable=False, default="SPORTSBOOK")  # Lei 14.790 art. 3º
     stake_amount     = Column(Numeric(15, 2), nullable=False)
     potential_payout = Column(Numeric(15, 2))
     actual_payout    = Column(Numeric(15, 2))
@@ -667,6 +668,11 @@ class Bet(Base):
     event_name       = Column(Text)
     market_name      = Column(Text)
     selection_name   = Column(Text)
+    game_id          = Column(Text)          # ID jogo/mesa/máquina (casino/slot)
+    game_name        = Column(Text)          # nome do jogo ("Lightning Roulette")
+    game_provider    = Column(Text)          # provedor ("Evolution", "Pragmatic Play")
+    game_category    = Column(Text)          # TABLE, LIVE, SLOT, INSTANT, BINGO, SCRATCH
+    rtp_teorico      = Column(Numeric(6, 4)) # Return-to-Player teórico
     source_event_id  = Column(Text)
     ingest_job_id    = Column(UUID(as_uuid=False), ForeignKey("ingest_jobs.id", ondelete="SET NULL"))
     raw_payload      = Column(JSONB, default={})

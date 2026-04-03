@@ -645,6 +645,7 @@ async def get_player_transactions_chart(
 async def get_player_bets_chart(
     player_id: str,
     days: int = Query(90, ge=7, le=365),
+    product_type: str | None = Query(None, description="Filtrar por modalidade (SPORTSBOOK, CASINO_LIVE, SLOT, ...)"),
     current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
@@ -662,6 +663,7 @@ async def get_player_bets_chart(
             Bet.tenant_id == current_user.tenant_id,
             Bet.player_id == player_id,
             Bet.occurred_at >= cutoff,
+            *([Bet.product_type == product_type] if product_type else []),
         )
         .group_by(sqlfunc.date_trunc("day", Bet.occurred_at))
         .order_by(sqlfunc.date_trunc("day", Bet.occurred_at))

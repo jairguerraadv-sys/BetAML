@@ -104,8 +104,23 @@ PAYMENT_METHODS = ["PIX", "TED", "DEBIT", "WALLET"]
 CHANNELS = ["WEB", "APP", "TERMINAL"]
 SPORTS = ["SOCCER", "BASKETBALL", "TENNIS", "MMA", "VOLLEYBALL", "ESPORTS"]
 MARKET_TYPES = ["1X2", "OVER_UNDER", "HANDICAP", "BOTH_TEAMS_SCORE", "CORRECT_SCORE"]
-BET_TYPES = ["SPORTS", "CASINO_LIVE", "SLOTS", "VIRTUAL"]
+BET_TYPES = ["SPORTSBOOK", "CASINO_LIVE", "SLOT", "VIRTUAL"]
 DEVICE_TYPES = ["MOBILE_IOS", "MOBILE_ANDROID", "DESKTOP", "TABLET"]
+
+# Multi-modalidade (Lei 14.790/2023 art. 3º)
+CASINO_GAMES = [
+    {"id": "GAME-ROULETTE-01", "name": "Lightning Roulette", "provider": "Evolution", "category": "LIVE", "rtp": 0.9730},
+    {"id": "GAME-BLACKJACK-01", "name": "Infinite Blackjack", "provider": "Evolution", "category": "LIVE", "rtp": 0.9956},
+    {"id": "GAME-BACCARAT-01", "name": "Speed Baccarat", "provider": "Evolution", "category": "TABLE", "rtp": 0.9862},
+    {"id": "GAME-POKER-01", "name": "Casino Hold'em", "provider": "Evolution", "category": "TABLE", "rtp": 0.9747},
+]
+SLOT_GAMES = [
+    {"id": "GAME-SLOT-01", "name": "Gates of Olympus", "provider": "Pragmatic Play", "category": "SLOT", "rtp": 0.9649},
+    {"id": "GAME-SLOT-02", "name": "Sweet Bonanza", "provider": "Pragmatic Play", "category": "SLOT", "rtp": 0.9651},
+    {"id": "GAME-SLOT-03", "name": "Big Bass Bonanza", "provider": "Pragmatic Play", "category": "SLOT", "rtp": 0.9670},
+    {"id": "GAME-SLOT-04", "name": "Fortune Tiger", "provider": "PG Soft", "category": "SLOT", "rtp": 0.9668},
+    {"id": "GAME-SLOT-05", "name": "Aviator", "provider": "Spribe", "category": "INSTANT", "rtp": 0.9700},
+]
 
 EVENTS = [
     "FLA_VS_COR_20260320", "PAL_VS_SAO_20260321", "GRE_VS_INT_20260322",
@@ -423,29 +438,45 @@ def make_bet(
     odds: float,
     placed_at: datetime,
     status: str = "LOST",
-    bet_type: str = "SPORTS",
+    bet_type: str = "SPORTSBOOK",
     sport: str | None = None,
     market_type: str | None = None,
 ) -> dict:
     potential = round(stake * odds, 2)
     actual = potential if status == "WON" else (round(stake * random.uniform(0.3, 0.8), 2) if status == "CASHOUT" else 0)
     settled = placed_at + timedelta(hours=random.randint(1, 72)) if status != "PENDING" else None
+
+    # Multi-modalidade: campos condicionais por product_type
+    game_info: dict = {}
+    if bet_type == "CASINO_LIVE":
+        game = random.choice(CASINO_GAMES)
+        game_info = {"game_id": game["id"], "game_name": game["name"],
+                     "game_provider": game["provider"], "game_category": game["category"],
+                     "rtp_teorico": f"{game['rtp']:.4f}"}
+    elif bet_type in ("SLOT", "INSTANT_GAME"):
+        game = random.choice(SLOT_GAMES)
+        game_info = {"game_id": game["id"], "game_name": game["name"],
+                     "game_provider": game["provider"], "game_category": game["category"],
+                     "rtp_teorico": f"{game['rtp']:.4f}"}
+
     b = {
         "external_bet_id": bet_id(),
         "external_player_id": pid,
         "stake_amount": f"{stake:.2f}",
-        "odds": f"{odds:.2f}",
+        "odds": f"{odds:.2f}" if bet_type == "SPORTSBOOK" else "",
         "potential_payout": f"{potential:.2f}",
         "settled_payout": f"{actual:.2f}",
         "bet_type": bet_type,
-        "sport": sport or random.choice(SPORTS),
-        "market_type": market_type or random.choice(MARKET_TYPES),
-        "event_id": random.choice(EVENTS),
-        "selection": random.choice(["Home Win", "Away Win", "Draw", "Over 2.5", "Under 2.5", "BTTS Yes"]),
+        "product_type": bet_type,
+        "sport": sport or (random.choice(SPORTS) if bet_type == "SPORTSBOOK" else ""),
+        "market_type": market_type or (random.choice(MARKET_TYPES) if bet_type == "SPORTSBOOK" else ""),
+        "event_id": random.choice(EVENTS) if bet_type == "SPORTSBOOK" else "",
+        "selection": random.choice(["Home Win", "Away Win", "Draw", "Over 2.5", "Under 2.5", "BTTS Yes"]) if bet_type == "SPORTSBOOK" else "",
         "channel": random.choice(CHANNELS),
         "placed_at": iso(placed_at),
         "settled_at": iso(settled) if settled else "",
         "status": status,
+        **game_info,
     }
     bets.append(b)
     return b
@@ -531,7 +562,7 @@ for p in players:
         stake = random.uniform(20, 200)
         odds = round(random.uniform(1.05, 1.5), 2)  # odds muito baixas = "aposta segura"
         dt = rand_dt(T_START, NOW)
-        bt = random.choice(["SPORTS", "CASINO_LIVE", "SLOTS"])
+        bt = random.choice(["SPORTSBOOK", "CASINO_LIVE", "SLOT"])
         status = random.choices(["WON", "WON", "LOST", "CASHOUT"], weights=[40, 40, 30, 20])[0]
         make_bet(pid, stake, odds, dt, status, bet_type=bt)
 
@@ -658,9 +689,10 @@ TX_FIELDS = [
 
 BET_FIELDS = [
     "external_bet_id", "external_player_id", "stake_amount", "odds",
-    "potential_payout", "settled_payout", "bet_type", "sport",
-    "market_type", "event_id", "selection", "channel",
+    "potential_payout", "settled_payout", "bet_type", "product_type",
+    "sport", "market_type", "event_id", "selection", "channel",
     "placed_at", "settled_at", "status",
+    "game_id", "game_name", "game_provider", "game_category", "rtp_teorico",
 ]
 
 DEVICE_FIELDS = [

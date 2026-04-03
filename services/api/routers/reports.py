@@ -133,6 +133,17 @@ async def _build_monthly_report(
             )
         )
     )).scalar_one()
+    # Breakdown by product_type for multi-modality visibility
+    pt_rows = (await db.execute(
+        select(Bet.product_type, func.count().label("cnt"))
+        .where(
+            Bet.tenant_id == tenant_id,
+            Bet.created_at >= date_from,
+            Bet.created_at <= date_to,
+        )
+        .group_by(Bet.product_type)
+    )).all()
+    bets_by_product_type = {r.product_type or "SPORTSBOOK": r.cnt for r in pt_rows}
     total_ingested_events = (tx_count or 0) + (bet_count or 0)
 
     # 6. False positive rate
@@ -200,6 +211,7 @@ async def _build_monthly_report(
         "top_rules_by_fires": top_rules_by_fires,
         "top_players_by_risk": top_players_by_risk,
         "total_ingested_events": total_ingested_events,
+        "bets_by_product_type": bets_by_product_type,
         "total_communications_generated": total_communications_generated,
         "false_positive_rate": false_positive_rate,
         "total_sar_reports": total_sar_reports,

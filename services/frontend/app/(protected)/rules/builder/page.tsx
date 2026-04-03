@@ -138,11 +138,41 @@ const TEMPLATES: RuleTemplate[] = [
   {
     id: 'self_exclusion_active',
     name: 'Aposta com Autoexclusão Ativa',
-    description: 'Apostador com autoexclusão registrada realizando apostas — violação Portaria 1.231/2024 (jogo responsável)',
+    description: 'Jogador com autoexclusão registrada realizando apostas — violação Portaria 1.231/2024 (jogo responsável)',
     icon: '🚫', tag: 'Jogo Responsável', severity: 'CRITICAL', scope: 'PLAYER',
     conditions: [
       { field: 'player.self_exclusion_flag', operator: 'eq',  value: 'true' },
       { field: 'player.risk_score',          operator: 'gte', value: '0' },
+    ],
+  },
+  {
+    id: 'slot_high_frequency',
+    name: 'Alta Frequência em Slots (24h)',
+    description: 'Volume anômalo de rodadas de slots em 24h — possível automação ou lavagem via jogos de baixo RTP',
+    icon: '🎰', tag: 'Casino/Slots', severity: 'MEDIUM', scope: 'BET',
+    conditions: [
+      { field: 'bet.productType', operator: 'eq',  value: 'SLOT' },
+      { field: 'features.slot_session_count_24h', operator: 'gte', value: '200' },
+    ],
+  },
+  {
+    id: 'casino_chip_washing',
+    name: 'Casino Chip Washing',
+    description: 'Padrão de lavagem em casino ao vivo: muitas sessões com stakes mínimos + saque alto',
+    icon: '🃏', tag: 'Casino/LD', severity: 'HIGH', scope: 'BET',
+    conditions: [
+      { field: 'bet.productType', operator: 'eq',  value: 'CASINO_LIVE' },
+      { field: 'features.casino_session_count_24h', operator: 'gte', value: '50' },
+      { field: 'bet.stakeAmount', operator: 'lte', value: '25' },
+    ],
+  },
+  {
+    id: 'product_diversity',
+    name: 'Diversificação de Produto Suspeita',
+    description: 'Jogador usando muitas modalidades distintas em 7d — possível dispersão para dificultar rastreamento',
+    icon: '🔀', tag: 'Multi-Produto', severity: 'MEDIUM', scope: 'BET',
+    conditions: [
+      { field: 'features.bet_product_diversity_7d', operator: 'gte', value: '4' },
     ],
   },
 ];
