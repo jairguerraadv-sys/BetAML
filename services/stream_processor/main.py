@@ -1144,7 +1144,7 @@ async def process_transaction(msg_value: dict, redis_client, ch_client, producer
     # Add to Redis Sorted Set window
     entry = {
         "ts":         occurred_at.isoformat(),
-        "amount":     float(payload.get("amount", 0)),
+        "amount":     _coerce_float(payload.get("amount"), 0.0),
         "type":       payload.get("type", ""),
         "status":     payload.get("status", ""),
         "method":     payload.get("method", ""),
@@ -1217,7 +1217,7 @@ def _ch_insert_transaction(ch_client, envelope: dict, payload: dict) -> None:
         "source_event_id":  envelope.get("source_event_id", ""),
         "player_id":        payload.get("player_id", ""),
         "transaction_type": payload.get("type", ""),
-        "amount":           float(payload.get("amount", 0)),
+        "amount":           _coerce_float(payload.get("amount"), 0.0),
         "currency":         payload.get("currency", "BRL"),
         "method":           payload.get("method", ""),
         "status":           payload.get("status", ""),
@@ -1242,7 +1242,7 @@ async def process_bet(msg_value: dict, redis_client, ch_client, producer):
 
     entry = {
         "ts":      placed_at.isoformat(),
-        "amount":  float(payload.get("stake_amount", 0)),
+        "amount":  _coerce_float(payload.get("stake_amount"), 0.0),
         "odds":    payload.get("odds"),
         "outcome": payload.get("outcome"),
         "status": payload.get("status"),
@@ -1276,10 +1276,10 @@ def _ch_insert_bet(ch_client, envelope: dict, payload: dict) -> None:
         "source_system":  envelope.get("source_system", ""),
         "player_id":      payload.get("player_id", ""),
         "product_type":   payload.get("product_type", "SPORTSBOOK"),
-        "stake_amount":   float(payload.get("stake_amount", 0)),
-        "odds":           float(payload.get("odds") or 0) or None,
-        "potential_payout": float(payload.get("potential_payout") or 0) or None,
-        "settled_payout": float(payload.get("settled_payout") or 0) or None,
+        "stake_amount":   _coerce_float(payload.get("stake_amount"), 0.0),
+        "odds":           _coerce_float(payload.get("odds"), 0.0) or None,
+        "potential_payout": _coerce_float(payload.get("potential_payout"), 0.0) or None,
+        "settled_payout": _coerce_float(payload.get("settled_payout"), 0.0) or None,
         "market_type":    payload.get("market_type", ""),
         "sport":          payload.get("sport") or None,
         "channel":        payload.get("channel", "WEB"),

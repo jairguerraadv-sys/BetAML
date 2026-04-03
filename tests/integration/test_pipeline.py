@@ -1541,6 +1541,8 @@ def test_generate_report_package_file_sar(headers_a):
         json={
             "analyst_narrative": "Operações de depósito fracionado abaixo do limite obrigatório de comunicação, padrão típico de Structuring (COAF/FATF Tipologia ML-01). Recomenda-se comunicação ao COAF.",
             "decision": "FILE_SAR",
+            "occurrence_codes": [1420],
+            "informacoes_adicionais": "Deposits fracionados identificados pelo sistema BetAML em janela de 7 dias.",
         },
     )
     assert resp.status_code == 201, resp.text
