@@ -7,6 +7,53 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.0-rc2] — 2026-04-03
+
+### Added — Production Readiness (11 GAPs closed)
+
+#### Alerting & Notifications (GAP-1 🔴)
+- **`infra/alertmanager.yml`**: Alertmanager agora envia notificações reais — email para `OPS_EMAIL` + Slack `#betaml-critical` (critical-receiver) e Slack `#betaml-alerts` (warning-receiver).
+- **`infra/docker-compose.yml`**: env vars `OPS_EMAIL` e `SLACK_WEBHOOK_URL` adicionadas ao alertmanager.
+
+#### Secret Manager Abstraction (GAP-2 🔴)
+- **`services/api/config.py`**: abstração `_resolve_secrets_from_provider()` com suporte a `SECRETS_PROVIDER=env|aws|azure`. AWS Secrets Manager lê via `SECRET_ARN` ou `SECRETS_PREFIX`; Azure Key Vault via `AZURE_VAULT_URL` + `DefaultAzureCredential`. Secrets injetados em `os.environ` antes do Settings() ser instanciado.
+
+#### Backup Habilitado (GAP-3 🔴)
+- **`helm/betaml/values.yaml`**: `backup.enabled: true`, `retentionDays: 30`.
+
+#### CD Pipeline Automatizado (GAP-4 🔴)
+- **`.github/workflows/deploy-staging.yml`**: workflow completo — build matrix (6 serviços → GHCR), Helm upgrade `--atomic` com `values-staging.yaml`, rollout status verify, smoke test de health, notificação Slack.
+
+#### Distributed Tracing (GAP-6 🟠)
+- **`libs/telemetry.py`**: reescrito com OpenTelemetry real — `TracerProvider`, `OTLPSpanExporter` (gRPC), `BatchSpanProcessor`. Falls back a no-op quando `OTEL_EXPORTER_OTLP_ENDPOINT` não está setado. API pública inalterada (`init_opentelemetry_stub`).
+- **`libs/pyproject.toml`**: dependências `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc` adicionadas.
+- **`infra/docker-compose.yml`**: serviço **Jaeger** (all-in-one v1.56) na porta 16686 (UI) / 4317 (OTLP gRPC). `OTEL_EXPORTER_OTLP_ENDPOINT` setado nos 4 serviços de aplicação.
+
+#### ORM Ghost Columns (GAP-7 🟠)
+- **`infra/migration_v28.sql`**: `features JSONB`, `cluster_id INTEGER`, `cluster_size INTEGER` na tabela players + índice parcial.
+- **`services/api/models.py`**: colunas `features`, `cluster_id`, `cluster_size` no model Player.
+- **`services/ml_trainer/network_clustering.py`** e **`recurrence_estimator.py`**: removidas guards `hasattr`, usa colunas ORM diretamente.
+
+#### Coverage Threshold (GAP-8 🟠)
+- **`.github/workflows/ci.yml`**: `--cov-fail-under=40` → `--cov-fail-under=65`.
+
+#### Log Aggregation (GAP-9 🟠)
+- **`infra/docker-compose.yml`**: serviços **Loki** (v2.9.6) e **Promtail** (v2.9.6) para coleta centralizada de logs Docker.
+- **`infra/configs/loki.yml`**: config Loki single-instance com TSDB schema v13, retenção 30 dias.
+- **`infra/configs/promtail.yml`**: Docker service discovery, filtra containers `betaml-*`, parse JSON structlog (level, event, timestamp).
+- **`infra/grafana/provisioning/datasources/prometheus.yml`**: datasources **Loki** e **Jaeger** adicionados com campo derivado TraceID para correlação logs→traces.
+
+#### Staging Values (GAP-10 🟠)
+- **`helm/betaml/values-staging.yaml`**: overrides de staging — recursos reduzidos, 2 replicas API (max 4), letsencrypt-staging, backup habilitado.
+
+#### Health Endpoints (GAP-11 🟠)
+- **`services/stream_processor/main.py`** e **`services/rules_engine/main.py`**: servidor HTTP de health (`/health/live`, `/health/ready`) em threads separadas para probes K8s.
+
+#### Frontend Health (GAP-15 🟡)
+- **`services/frontend/app/api/health/route.ts`**: endpoint `/api/health` para probes K8s.
+
+---
+
 ## [1.0.0-rc] — 2026-03-25
 
 ### Added — COAF Siscoaf 97 Compliance (Portaria SPA/MF 1.143/2024)

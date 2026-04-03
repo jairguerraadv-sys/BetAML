@@ -1,0 +1,47 @@
+# Promtail configuration — collects Docker container logs and ships to Loki.
+
+server:
+  http_listen_port: 9080
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project"]
+    relabel_configs:
+      # Keep only betaml containers
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "betaml-.*"
+        action: keep
+      # Extract service name from container name
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "betaml-(.*)"
+        target_label: service
+      - source_labels: ["__meta_docker_container_name"]
+        target_label: container
+    pipeline_stages:
+      # Try to parse JSON logs (structlog output)
+      - json:
+          expressions:
+            level: level
+            event: event
+            timestamp: timestamp
+      - labels:
+          level:
+          event:
+      # Timestamp from structlog if present
+      - timestamp:
+          source: timestamp
+          format: "2006-01-02T15:04:05.000Z"
+          fallback_formats:
+            - "2006-01-02T15:04:05Z07:00"
+          action_on_failure: fudge
