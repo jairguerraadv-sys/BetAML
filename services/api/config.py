@@ -14,23 +14,132 @@ RECOMENDAÇÃO FORTE para produção:
   - Rotação automática de secrets a cada 90 dias
   - Audit trail de acessos aos secrets
 
-Exemplo de migração para AWS Secrets Manager:
-  ```python
-  import boto3
-  secrets_client = boto3.client('secretsmanager', region_name='us-east-1')
-  response = secrets_client.get_secret_value(SecretId='betaml/prod/jwt-secret')
-  jwt_secret = json.loads(response['SecretString'])['jwt_secret']
-  ```
+Defina SECRETS_PROVIDER para usar um backend externo:
+  - "env"  → padrão (lê de variáveis de ambiente ou .env)
+  - "aws"  → AWS Secrets Manager (requer SECRET_ARN ou SECRETS_PREFIX)
+  - "azure" → Azure Key Vault (requer AZURE_VAULT_URL)
 
 Veja docs/security-secrets-management.md para guia completo.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 from __future__ import annotations
 
+import json
+import logging
+import os
 from typing import Literal
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
+
+_log = logging.getLogger(__name__)
+
+
+# ── Secret provider abstraction ──────────────────────────────────────────────
+def _resolve_secrets_from_provider() -> dict[str, str]:
+    """Resolve secrets de um backend externo, sobrescrevendo env vars.
+
+    Retorna um dict {ENV_VAR_NAME: value} que será injetado em ``os.environ``
+    antes de ``Settings()`` ser instanciado pelo pydantic-settings.
+
+    Providers suportados:
+      - ``env`` (default): não faz nada — secrets já estão em env vars.
+      - ``aws``: lê de AWS Secrets Manager (``SECRET_ARN`` ou ``SECRETS_PREFIX``).
+      - ``azure``: lê de Azure Key Vault (``AZURE_VAULT_URL``).
+    """
+    provider = os.getenv("SECRETS_PROVIDER", "env").lower()
+    if provider == "env":
+        return {}
+
+    if provider == "aws":
+        return _resolve_aws_secrets()
+
+    if provider == "azure":
+        return _resolve_azure_secrets()
+
+    _log.warning("unknown_secrets_provider provider=%s — falling back to env", provider)
+    return {}
+
+
+def _resolve_aws_secrets() -> dict[str, str]:
+    """Lê secrets de AWS Secrets Manager e retorna dict de env vars."""
+    try:
+        import boto3  # type: ignore[import-untyped]
+    except ImportError:
+        raise RuntimeError(
+            "SECRETS_PROVIDER=aws requires boto3. Install with: pip install boto3"
+        ) from None
+
+    secret_arn = os.getenv("SECRET_ARN", "")
+    prefix = os.getenv("SECRETS_PREFIX", "betaml/prod")
+    region = os.getenv("AWS_REGION", "us-east-1")
+
+    client = boto3.client("secretsmanager", region_name=region)
+
+    if secret_arn:
+        resp = client.get_secret_value(SecretId=secret_arn)
+        secrets = json.loads(resp["SecretString"])
+        _log.info("aws_secrets_loaded arn=%s keys=%d", secret_arn, len(secrets))
+        return {k.upper(): v for k, v in secrets.items()}
+
+    # Fallback: lê secrets individuais por convenção de nome
+    keys = [
+        ("JWT_SECRET", f"{prefix}/jwt-secret"),
+        ("PII_ENCRYPTION_KEY", f"{prefix}/pii-encryption-key"),
+        ("MINIO_SECRET_KEY", f"{prefix}/minio-secret-key"),
+        ("INTERNAL_WEBHOOK_SECRET", f"{prefix}/internal-webhook-secret"),
+        ("DATABASE_URL", f"{prefix}/database-url"),
+    ]
+    resolved: dict[str, str] = {}
+    for env_name, secret_id in keys:
+        try:
+            resp = client.get_secret_value(SecretId=secret_id)
+            resolved[env_name] = resp["SecretString"]
+        except client.exceptions.ResourceNotFoundException:
+            _log.debug("aws_secret_not_found id=%s", secret_id)
+    _log.info("aws_secrets_loaded prefix=%s keys=%d", prefix, len(resolved))
+    return resolved
+
+
+def _resolve_azure_secrets() -> dict[str, str]:
+    """Lê secrets de Azure Key Vault e retorna dict de env vars."""
+    try:
+        from azure.identity import DefaultAzureCredential  # type: ignore[import-untyped]
+        from azure.keyvault.secrets import SecretClient  # type: ignore[import-untyped]
+    except ImportError:
+        raise RuntimeError(
+            "SECRETS_PROVIDER=azure requires azure-identity and azure-keyvault-secrets. "
+            "Install with: pip install azure-identity azure-keyvault-secrets"
+        ) from None
+
+    vault_url = os.getenv("AZURE_VAULT_URL", "")
+    if not vault_url:
+        raise RuntimeError("SECRETS_PROVIDER=azure requires AZURE_VAULT_URL to be set")
+
+    client = SecretClient(vault_url=vault_url, credential=DefaultAzureCredential())
+
+    mapping = {
+        "JWT_SECRET": "betaml-jwt-secret",
+        "PII_ENCRYPTION_KEY": "betaml-pii-encryption-key",
+        "MINIO_SECRET_KEY": "betaml-minio-secret-key",
+        "INTERNAL_WEBHOOK_SECRET": "betaml-internal-webhook-secret",
+        "DATABASE_URL": "betaml-database-url",
+    }
+    resolved: dict[str, str] = {}
+    for env_name, secret_name in mapping.items():
+        try:
+            secret = client.get_secret(secret_name)
+            resolved[env_name] = secret.value
+        except Exception:
+            _log.debug("azure_secret_not_found name=%s", secret_name)
+    _log.info("azure_secrets_loaded vault=%s keys=%d", vault_url, len(resolved))
+    return resolved
+
+
+# ── Inject resolved secrets into env BEFORE Settings() ──────────────────────
+_provider_secrets = _resolve_secrets_from_provider()
+for _k, _v in _provider_secrets.items():
+    os.environ.setdefault(_k, _v)
 
 
 class Settings(BaseSettings):

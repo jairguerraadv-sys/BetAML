@@ -1,0 +1,107 @@
+# values-staging.yaml — Override para ambiente de staging
+# Uso: helm upgrade --install betaml-staging helm/betaml \
+#        -f helm/betaml/values.yaml -f helm/betaml/values-staging.yaml
+
+global:
+  imageRegistry: "ghcr.io/betaml"
+  imageTag: "latest"  # sobrescrito pelo CD workflow com SHA do commit
+
+## ─── API ────────────────────────────────────────────────────────────────────
+api:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 75
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+## ─── FRONTEND ────────────────────────────────────────────────────────────────
+frontend:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+## ─── ML TRAINER ─────────────────────────────────────────────────────────────
+mlTrainer:
+  enabled: true
+  schedule: "0 4 * * *"      # 04:00 UTC (1h após prod para evitar pico)
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+## ─── POSTGRES ────────────────────────────────────────────────────────────────
+postgresql:
+  enabled: true
+  persistence:
+    size: 20Gi
+  primary:
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+## ─── REDIS ───────────────────────────────────────────────────────────────────
+redis:
+  persistence:
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+## ─── INGRESS ─────────────────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    cert-manager.io/cluster-issuer: "letsencrypt-staging"
+  hosts:
+    - host: staging.betaml.example.com
+      paths:
+        - path: /api
+          pathType: Prefix
+          backend: api
+        - path: /
+          pathType: Prefix
+          backend: frontend
+  tls:
+    - secretName: betaml-staging-tls
+      hosts:
+        - staging.betaml.example.com
+
+## ─── CONFIG MAP ──────────────────────────────────────────────────────────────
+config:
+  ENVIRONMENT: "staging"
+  ALLOWED_ORIGINS: "https://staging.betaml.example.com"
+  MINIO_ENDPOINT: "minio:9000"
+  MINIO_BUCKET: "betaml-models"
+  LOG_LEVEL: "INFO"
+
+## ─── BACKUP (habilitado em staging) ─────────────────────────────────────────
+backup:
+  enabled: true
+  schedule: "0 3 * * *"          # 03:00 UTC daily
+  bucket: "betaml-staging-backups"

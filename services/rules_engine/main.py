@@ -19,6 +19,8 @@ import uuid
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from threading import Thread
 from typing import Any
 
 import structlog
@@ -51,6 +53,42 @@ DATABASE_URL     = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@localh
 ML_SERVICE_URL   = os.getenv("ML_SERVICE_URL", "http://ml-service:8001")
 RULE_CACHE_TTL   = 300  # 5 minutos
 METRICS_PORT     = int(os.getenv("METRICS_PORT", "8002"))
+HEALTH_PORT      = int(os.getenv("HEALTH_PORT", "8012"))
+
+# ── Health HTTP server (liveness/readiness probes para K8s) ──────────────────
+_healthy = False
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    """Minimal HTTP handler para /health/live e /health/ready."""
+
+    def do_GET(self):  # noqa: N802
+        if self.path == "/health/live":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"status":"live"}')
+        elif self.path == "/health/ready":
+            if _healthy:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"status":"ready"}')
+            else:
+                self.send_response(503)
+                self.end_headers()
+                self.wfile.write(b'{"status":"starting"}')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):  # noqa: A002
+        pass
+
+
+def _start_health_server():
+    server = HTTPServer(("0.0.0.0", HEALTH_PORT), _HealthHandler)
+    t = Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    logger.info("health_server_started", port=HEALTH_PORT)
 
 TOPICS = [
     "canonical.transactions",
@@ -914,9 +952,11 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
 
 
 async def main():
+    global _healthy
     from libs.clients import KafkaConsumerClient, KafkaProducerClient, RedisClient
 
     start_http_server(METRICS_PORT)
+    _start_health_server()
     init_opentelemetry_stub("rules-engine")
 
     redis_client = RedisClient(REDIS_URL)
@@ -936,6 +976,7 @@ async def main():
     db_task = asyncio.create_task(db_writer(db_queue, DATABASE_URL))
 
     logger.info("rules_engine_started", topics=TOPICS)
+    _healthy = True
 
     try:
         async for msg in consumer:

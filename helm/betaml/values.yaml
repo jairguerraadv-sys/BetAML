@@ -146,8 +146,9 @@ config:
 
 ## ─── BACKUP (Postgres + MinIO) ─────────────────────────────────────────────
 backup:
-  enabled: false
+  enabled: true
   schedule: "0 2 * * *"          # 02:00 UTC daily
+  retentionDays: 30              # backups mais antigos que 30 dias são removidos
   bucket: "betaml-backups"       # MinIO bucket to store backups
   pgDumpImage:
     repository: postgres

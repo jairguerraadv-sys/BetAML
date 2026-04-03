@@ -175,22 +175,18 @@ async def train_network_clustering(
     for upd in cluster_updates:
         from sqlalchemy import UUID  # noqa: PLC0415
 
-        update_values: dict = {}
-        if hasattr(Player, "cluster_id"):
-            update_values["cluster_id"] = upd["cluster_id"]
-        if hasattr(Player, "features"):
-            update_values["features"] = Player.features.op("||")(
-                {
-                    "cluster_id": upd["cluster_id"],
-                    "cluster_size": upd["cluster_size"],
-                }
-            )
-        if not update_values:
-            continue
         stmt_upd = (
             update(Player)
             .where(Player.id == UUID(upd["player_id"]))
-            .values(**update_values)
+            .values(
+                cluster_id=upd["cluster_id"],
+                features=Player.features.op("||")(
+                    {
+                        "cluster_id": upd["cluster_id"],
+                        "cluster_size": upd["cluster_size"],
+                    }
+                ),
+            )
         )
         await db.execute(stmt_upd)
 

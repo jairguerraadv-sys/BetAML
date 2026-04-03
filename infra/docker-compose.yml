@@ -40,7 +40,12 @@ services:
       - ./migration_v20.sql:/docker-entrypoint-initdb.d/20-migration.sql
       - ./migration_v21.sql:/docker-entrypoint-initdb.d/21-migration.sql
       - ./migration_v22.sql:/docker-entrypoint-initdb.d/22-migration.sql
+      - ./migration_v23.sql:/docker-entrypoint-initdb.d/23-migration.sql
+      - ./migration_v24.sql:/docker-entrypoint-initdb.d/24-migration.sql
+      - ./migration_v25.sql:/docker-entrypoint-initdb.d/25-migration.sql
       - ./migration_v26.sql:/docker-entrypoint-initdb.d/26-migration.sql
+      - ./migration_v27.sql:/docker-entrypoint-initdb.d/27-migration.sql
+      - ./migration_v28.sql:/docker-entrypoint-initdb.d/28-migration.sql
     ports:
       - "5432:5432"
     healthcheck:
@@ -365,6 +370,8 @@ services:
       SMTP_SMARTHOST: ${SMTP_SMARTHOST:-localhost:587}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
+      OPS_EMAIL: ${OPS_EMAIL:-ops@betaml.io}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
       ALERTMANAGER_WEBHOOK_URL: ${ALERTMANAGER_WEBHOOK_URL:-http://api:8000/internal/alerts/webhook}
     command:
       - '--config.file=/etc/alertmanager/alertmanager.yml'

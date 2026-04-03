@@ -17,6 +17,8 @@ import sys
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from threading import Thread
 
 import structlog
 from prometheus_client import Counter, Gauge, Histogram, REGISTRY, start_http_server
@@ -48,6 +50,43 @@ CH_HOST        = os.getenv("CLICKHOUSE_HOST", "localhost")
 CH_PORT        = int(os.getenv("CLICKHOUSE_PORT", "9000"))
 CH_DB          = os.getenv("CLICKHOUSE_DB", "betaml")
 METRICS_PORT   = int(os.getenv("METRICS_PORT", "8003"))
+HEALTH_PORT    = int(os.getenv("HEALTH_PORT", "8013"))
+
+# ── Health HTTP server (liveness/readiness probes para K8s) ──────────────────
+_healthy = False  # torna-se True quando o consumer Kafka estiver ativo
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    """Minimal HTTP handler para /health/live e /health/ready."""
+
+    def do_GET(self):  # noqa: N802
+        if self.path == "/health/live":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"status":"live"}')
+        elif self.path == "/health/ready":
+            if _healthy:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"status":"ready"}')
+            else:
+                self.send_response(503)
+                self.end_headers()
+                self.wfile.write(b'{"status":"starting"}')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):  # noqa: A002
+        pass  # silencia logs de health check
+
+
+def _start_health_server():
+    server = HTTPServer(("0.0.0.0", HEALTH_PORT), _HealthHandler)
+    t = Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    logger.info("health_server_started", port=HEALTH_PORT)
+
 
 TOPICS = [
     "canonical.transactions",
@@ -2017,9 +2056,11 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
 
 
 async def main():
+    global _healthy
     from libs.clients import KafkaConsumerClient, KafkaProducerClient, RedisClient, ClickHouseClient
 
     start_http_server(METRICS_PORT)
+    _start_health_server()
     init_opentelemetry_stub("stream-processor")
 
     redis_client = RedisClient(REDIS_URL)
@@ -2041,6 +2082,7 @@ async def main():
     await consumer.start()
 
     logger.info("stream_processor_started", topics=TOPICS)
+    _healthy = True
 
     try:
         async for msg in consumer:

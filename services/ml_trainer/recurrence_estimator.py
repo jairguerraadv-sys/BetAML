@@ -222,21 +222,19 @@ async def train_recurrence_estimator(
 
             from sqlalchemy import UUID  # noqa: PLC0415
 
-            update_values: dict = {}
-            if hasattr(Player, "features"):
-                update_values["features"] = Player.features.op("||")(
-                    {
-                        "recurrence_score": float(rec_score),
-                        "recurrence_suspect": is_suspect,
-                    }
+            stmt_upd = (
+                update(Player)
+                .where(Player.id == UUID(player_id))
+                .values(
+                    features=Player.features.op("||")(
+                        {
+                            "recurrence_score": float(rec_score),
+                            "recurrence_suspect": is_suspect,
+                        }
+                    ),
                 )
-            if update_values:
-                stmt_upd = (
-                    update(Player)
-                    .where(Player.id == UUID(player_id))
-                    .values(**update_values)
-                )
-                await db.execute(stmt_upd)
+            )
+            await db.execute(stmt_upd)
 
             if is_suspect:
                 suspicious_count += 1

@@ -74,6 +74,10 @@ class Player(Base):
     risk_score              = Column(Numeric(5, 4), nullable=False, default=0.0)
     risk_band               = Column(String(10), nullable=False, default="LOW")  # LOW / MEDIUM / HIGH
     last_scored_at          = Column(DateTime(timezone=True))
+    # ML features (network_clustering, recurrence_estimator)
+    features                = Column(JSONB, nullable=False, default={})
+    cluster_id              = Column(Integer)
+    cluster_size            = Column(Integer, nullable=False, default=0)
     created_at              = Column(DateTime(timezone=True), server_default=func.now())
     updated_at              = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
