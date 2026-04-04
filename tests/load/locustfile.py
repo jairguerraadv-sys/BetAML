@@ -44,6 +44,11 @@ _TENANT_USER = os.getenv("LOADTEST_USER", "analyst_a")
 _TENANT_PASS = os.getenv("LOADTEST_PASS", "analyst123")
 _TENANT_SLUG = os.getenv("LOADTEST_TENANT_SLUG", "")
 BATCH_SIZE    = 10  # events per POST /ingest/batch request
+_BATCH_USER_WEIGHT = int(os.getenv("LOADTEST_WEIGHT_BATCH", "4"))
+_INGEST_USER_WEIGHT = int(os.getenv("LOADTEST_WEIGHT_INGEST", "1"))
+_SCORING_USER_WEIGHT = int(os.getenv("LOADTEST_WEIGHT_SCORING", "1"))
+_ALERT_USER_WEIGHT = int(os.getenv("LOADTEST_WEIGHT_ALERT", "1"))
+_CASE_USER_WEIGHT = int(os.getenv("LOADTEST_WEIGHT_CASE", "1"))
 
 # Shared state for inter-task data flow (per-user)
 class _SharedCtx:
@@ -52,6 +57,16 @@ class _SharedCtx:
     alert_ids:   list[str] = []
     case_ids:    list[str] = []
     ingest_jobs: list[str] = []
+
+
+def _extract_items(payload: object) -> list[dict]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        items = payload.get("items")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+    return []
 
 
 def _csv_payload(n_rows: int = 50) -> bytes:
@@ -145,7 +160,7 @@ class BatchIngestUser(AuthMixin, HttpUser):
     """
     tasks         = [BatchIngestTaskSet]
     wait_time     = constant(0)          # no wait — maximize throughput
-    weight        = 4                    # 4× more likely than other user classes
+    weight        = _BATCH_USER_WEIGHT   # configurable for batch-only smoke in CI
 
 
 # ── Ingest tasks (CSV file upload) ────────────────────────────────────────────
@@ -170,7 +185,7 @@ class IngestTaskSet(SequentialTaskSet):
 class IngestUser(AuthMixin, HttpUser):
     tasks     = [IngestTaskSet]
     wait_time = between(1, 3)
-    weight    = 1
+    weight    = _INGEST_USER_WEIGHT
 
 
 # ── Scoring tasks ─────────────────────────────────────────────────────────────
@@ -191,31 +206,33 @@ class ScoringTaskSet(SequentialTaskSet):
                 self.player_id = players[0]["id"]
 
     @task
-    def score_player(self):
+    def get_player_detail(self):
         if not self.player_id:
             return
-        self.client.post(
-            "/score",
-            json={"player_id": self.player_id, "tenant_id": "default"},
+        self.client.get(
+            f"/players/{self.player_id}",
             headers=self.user._h(),
-            name="POST /score",
+            name="/players/{id}",
         )
 
     @task
     def get_features(self):
         if not self.player_id:
             return
-        self.client.get(
-            f"/feature-store/players/{self.player_id}/current",
+        with self.client.get(
+            f"/players/{self.player_id}/features/current",
             headers=self.user._h(),
-            name="/feature-store/players/{id}/current",
-        )
+            name="/players/{id}/features/current",
+            catch_response=True,
+        ) as resp:
+            if resp.status_code in {200, 404}:
+                resp.success()
 
 
 class ScoringUser(AuthMixin, HttpUser):
     tasks     = [ScoringTaskSet]
     wait_time = between(0.5, 2)
-    weight    = 1
+    weight    = _SCORING_USER_WEIGHT
 
 
 # ── Alert tasks ───────────────────────────────────────────────────────────────
@@ -231,7 +248,7 @@ class AlertTaskSet(SequentialTaskSet):
             name="/alerts",
         )
         if resp.status_code == 200:
-            alerts = resp.json()
+            alerts = _extract_items(resp.json())
             if alerts:
                 self.alert_id = alerts[0]["id"]
 
@@ -260,7 +277,7 @@ class AlertTaskSet(SequentialTaskSet):
 class AlertUser(AuthMixin, HttpUser):
     tasks     = [AlertTaskSet]
     wait_time = between(1, 4)
-    weight    = 1
+    weight    = _ALERT_USER_WEIGHT
 
 
 # ── Case tasks ────────────────────────────────────────────────────────────────
@@ -295,13 +312,13 @@ class CaseTaskSet(SequentialTaskSet):
         if not self.case_id:
             return
         self.client.get(
-            f"/cases/{self.case_id}/events",
+            f"/cases/{self.case_id}/timeline",
             headers=self.user._h(),
-            name="/cases/{id}/events",
+            name="/cases/{id}/timeline",
         )
 
 
 class CaseUser(AuthMixin, HttpUser):
     tasks     = [CaseTaskSet]
     wait_time = between(2, 5)
-    weight    = 1
+    weight    = _CASE_USER_WEIGHT

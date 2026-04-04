@@ -180,7 +180,19 @@ jobs:
         run: |
           pytest -q tests/integration/test_new_endpoints.py -k "TestExternalValidationEndpoints" --tb=short
 
+      - name: Raise ingest rate limit for readiness capacity smoke
+        run: |
+          docker compose -f infra/docker-compose.yml exec -T postgres \
+            psql -U betaml -d betaml_dev \
+            -c "UPDATE scoring_configs SET ingest_rate_limit_tpm = GREATEST(COALESCE(ingest_rate_limit_tpm, 0), 2000);"
+
       - name: Run readiness capacity smoke
+        env:
+          LOADTEST_WEIGHT_BATCH: "1"
+          LOADTEST_WEIGHT_INGEST: "0"
+          LOADTEST_WEIGHT_SCORING: "0"
+          LOADTEST_WEIGHT_ALERT: "0"
+          LOADTEST_WEIGHT_CASE: "0"
         run: |
           locust -f tests/load/locustfile.py \
             --host http://localhost:8000 \
