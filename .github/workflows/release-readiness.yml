@@ -233,8 +233,8 @@ jobs:
           E2E_AUDITOR_PASSWORD=${E2E_AUDITOR_PASSWORD}
           EOF
         env:
-          E2E_USERNAME: ${{ github.event.inputs.e2e_username || vars['E2E_USERNAME'] }}
-          E2E_PASSWORD: ${{ secrets['E2E_PASSWORD'] }}
+          E2E_USERNAME: ${{ github.event.inputs.e2e_username || 'analyst_a' }}
+          E2E_PASSWORD: analyst123
           E2E_ADMIN_USERNAME: admin_a
           E2E_ADMIN_PASSWORD: admin123
           E2E_SECONDARY_ADMIN_USERNAME: admin_b
