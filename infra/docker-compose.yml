@@ -52,7 +52,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-        test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER:-betaml}\" -d \"$${POSTGRES_DB:-betaml_dev}\""]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER:-betaml}\" -d \"$${POSTGRES_DB:-betaml_dev}\""]
       interval: 10s
       timeout: 5s
       retries: 5
