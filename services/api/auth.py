@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -21,6 +22,7 @@ from config import settings
 from database import get_db
 from models import ApiKey, Tenant, User
 
+logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
@@ -489,14 +491,21 @@ async def get_ingest_principal(
 _fernet_instance: Fernet | None = None
 
 
+def derive_pii_fernet_key(raw_secret: str) -> bytes:
+    """Normaliza o secret de PII para um Fernet key estável de 32 bytes."""
+    key_32 = hashlib.sha256(raw_secret.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(key_32)
+
+
+def derive_cpf_hmac_key(raw_secret: str) -> bytes:
+    """Deriva chave HMAC separada por domínio para CPF."""
+    return hashlib.sha256(raw_secret.encode("utf-8") + b":cpf_hmac").digest()
+
+
 def _get_fernet() -> Fernet:
     global _fernet_instance
     if _fernet_instance is None:
-        raw_key = settings.pii_encryption_key.encode("utf-8")
-        # SHA-256 sempre produz 32 bytes, compatível com Fernet (requer 32 bytes URL-safe base64)
-        key_32 = hashlib.sha256(raw_key).digest()
-        fernet_key = base64.urlsafe_b64encode(key_32)
-        _fernet_instance = Fernet(fernet_key)
+        _fernet_instance = Fernet(derive_pii_fernet_key(settings.pii_encryption_key))
     return _fernet_instance
 
 
@@ -535,7 +544,5 @@ def compute_cpf_hmac(cpf_plain: str) -> str:
         str — hex digest de 64 chars, indexável no banco (coluna cpf_hmac).
     """
     digits = "".join(c for c in cpf_plain if c.isdigit())
-    raw_key = settings.pii_encryption_key.encode("utf-8")
-    # Usa domain separation para evitar colisão com outros HMACs da mesma chave
-    hmac_key = hashlib.sha256(raw_key + b":cpf_hmac").digest()
+    hmac_key = derive_cpf_hmac_key(settings.pii_encryption_key)
     return hmac.new(hmac_key, digits.encode("utf-8"), hashlib.sha256).hexdigest()

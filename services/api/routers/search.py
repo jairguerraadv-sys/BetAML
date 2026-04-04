@@ -16,8 +16,10 @@ from auth import compute_cpf_hmac, decrypt_pii, get_current_user, mask_cpf
 from database import get_db
 from models import Alert, Case, Player, User
 from utils import write_audit
+import structlog
 
 router = APIRouter(prefix="/search", tags=["search"])
+logger = structlog.get_logger(__name__)
 
 _MAX = 5  # max results per category
 
@@ -25,7 +27,13 @@ _MAX = 5  # max results per category
 def _safe_masked_cpf(player: Player) -> str | None:
     try:
         return mask_cpf(decrypt_pii(player.cpf_encrypted))
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "search_player_cpf_decrypt_failed",
+            player_id=getattr(player, "id", None),
+            tenant_id=getattr(player, "tenant_id", None),
+            error=str(exc),
+        )
         return None
 
 

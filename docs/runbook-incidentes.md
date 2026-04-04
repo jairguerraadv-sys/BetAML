@@ -38,6 +38,7 @@
 ## 3. Mitigacao
 
 - Rollback de deploy para versao anterior estavel.
+- Antes do rollback, registrar revisao alvo, ultimo backup valido e decidir se o incidente e de aplicacao ou exige restore.
 - Reaplicar migracao idempotente se drift detectado.
 - Em falha de schema legado, marcar baseline Alembic com `stamp` e revalidar.
 - Isolar tenant impactado se necessario para manter plataforma ativa.
@@ -48,6 +49,7 @@
   - login
   - listagem de alertas
   - criacao de caso
+- Rodar `bash scripts/readiness_preflight.sh --evidence-out /tmp/betaml-incident-preflight.txt` antes de encerrar o incidente.
 - Validar fila voltando ao normal e queda de erros.
 - Monitorar por 30 min apos restauracao.
 

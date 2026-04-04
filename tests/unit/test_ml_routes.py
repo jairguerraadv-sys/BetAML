@@ -120,7 +120,7 @@ async def test_list_models_filters_by_model_type():
 async def test_promote_model_archives_champion_and_promotes_model():
     from routers.ml import promote_model
 
-    model = _make_model(model_id="model-a", status="challenger")
+    model = _make_model(model_id="model-a", status="challenger", is_challenger=True)
     # First execute → find model; second execute → bulk update champion
     call_count = [0]
     results = []
@@ -149,6 +149,7 @@ async def test_promote_model_archives_champion_and_promotes_model():
     assert response["status"] == "promoted"
     assert model.status == "champion"
     assert model.is_challenger is False
+    assert model.is_active is True
 
 
 @pytest.mark.asyncio
@@ -164,6 +165,19 @@ async def test_promote_model_returns_404_when_not_found():
     assert exc_info.value.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_promote_model_rejects_non_challenger_state():
+    from fastapi import HTTPException
+    from routers.ml import promote_model
+
+    db = _db_with_scalar(_make_model(model_id="model-a", status="STAGING", is_challenger=False))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await promote_model("model-a", db=db, current_user=_make_user())
+
+    assert exc_info.value.status_code == 409
+
+
 # ── designate_challenger ──────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -171,17 +185,29 @@ async def test_designate_challenger_sets_flag():
     from routers.ml import designate_challenger
 
     model = _make_model(model_id="model-b", status="STAGING", is_challenger=False)
-    call_count = [0]
-    find_result = MagicMock()
-    find_result.scalar_one_or_none = MagicMock(return_value=model)
+    champion = _make_model(model_id="champion-a", status="champion", is_challenger=False)
 
     db = AsyncMock()
     db.commit = AsyncMock()
     db.add = MagicMock()
+    results = []
+
+    find_result = MagicMock()
+    find_result.scalar_one_or_none = MagicMock(return_value=model)
+    results.append(find_result)
+
+    champion_result = MagicMock()
+    champion_result.scalar_one_or_none = MagicMock(return_value=champion)
+    results.append(champion_result)
+
+    results.append(MagicMock())
+
+    call_count = [0]
 
     async def execute_side_effect(stmt):
+        idx = call_count[0]
         call_count[0] += 1
-        return find_result
+        return results[idx]
 
     db.execute = execute_side_effect
 
@@ -190,6 +216,7 @@ async def test_designate_challenger_sets_flag():
 
     assert response["status"] == "challenger"
     assert model.is_challenger is True
+    assert model.champion_id == champion.id
 
 
 @pytest.mark.asyncio
@@ -217,6 +244,41 @@ async def test_designate_challenger_returns_400_for_champion():
         await designate_challenger("champ", db=db, current_user=_make_user())
 
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_designate_challenger_requires_existing_champion():
+    from fastapi import HTTPException
+    from routers.ml import designate_challenger
+
+    model = _make_model(model_id="model-b", status="STAGING", is_challenger=False)
+    results = []
+
+    find_result = MagicMock()
+    find_result.scalar_one_or_none = MagicMock(return_value=model)
+    results.append(find_result)
+
+    champion_result = MagicMock()
+    champion_result.scalar_one_or_none = MagicMock(return_value=None)
+    results.append(champion_result)
+
+    db = AsyncMock()
+    db.commit = AsyncMock()
+    db.add = MagicMock()
+
+    call_count = [0]
+
+    async def execute_side_effect(stmt):
+        idx = call_count[0]
+        call_count[0] += 1
+        return results[idx]
+
+    db.execute = execute_side_effect
+
+    with pytest.raises(HTTPException) as exc_info:
+        await designate_challenger("model-b", db=db, current_user=_make_user())
+
+    assert exc_info.value.status_code == 409
 
 
 # ── ModelRegistryOut schema ───────────────────────────────────────────────────

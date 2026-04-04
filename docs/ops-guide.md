@@ -48,13 +48,21 @@ Existe um workflow manual de readiness completo em `.github/workflows/release-re
 Ele valida em sequencia:
 
 1. Cadeia Alembic (`heads` e `history`)
-2. Subida da stack minima para smoke (postgres, redis, redpanda, topic-init, api, frontend)
-3. Dry-run de migracoes legadas (`scripts/postgres_migrate_existing.sh --dry-run`)
-4. Smoke E2E (`auth` e `cases`)
+2. Preflight operacional completo (`scripts/readiness_preflight.sh`)
+3. Restore drill em banco isolado (`scripts/restore_drill.sh`)
+4. Capacity smoke com Locust + validacao objetiva de thresholds
+5. Smoke E2E, extended e security
+6. Gate final de go/no-go (`scripts/release_decision_gate.sh`)
 
-Requer secrets/vars no repositorio:
-- `workflow_dispatch input: e2e_username`
-- `workflow_dispatch input: e2e_password`
+Requer configuracao no repositorio GitHub:
+- variable `E2E_USERNAME`
+- secret `E2E_PASSWORD`
+
+Preflight do repositorio:
+
+```bash
+bash scripts/check_github_actions_readiness.sh
+```
 
 ## 3. Inicialização do Ambiente
 
@@ -546,8 +554,36 @@ docker compose logs api | grep '"level":"error"' | jq .
 # Backup
 docker compose exec postgres pg_dump -U betaml betaml | gzip > backup_$(date +%Y%m%d).sql.gz
 
-# Restore
-gunzip -c backup_20241201.sql.gz | docker compose exec -T postgres psql -U betaml betaml
+# Restore drill automatizado com evidência anexável
+bash scripts/restore_drill.sh \
+  --backup-file ./backup_20241201.sql.gz \
+  --evidence-out /tmp/betaml-restore-drill.txt
+
+# Alternativa: recuperar o dump direto do bucket de backup
+bash scripts/restore_drill.sh \
+  --backup-object betaml-backups/postgres/postgres_20241201T020000Z.sql.gz \
+  --evidence-out /tmp/betaml-restore-drill.txt
+```
+
+Regra operacional:
+- nao use restore in-place como primeira resposta a incidente ou rollback;
+- restaure primeiro em banco isolado, valide contagens e so entao decida por restauracao produtiva;
+- registre no ticket o nome do dump, horario UTC e operador executor.
+- anexe a saida do `scripts/restore_drill.sh` como evidencia canonica do restore drill.
+
+### Backup automatizado em Helm
+
+O chart ja possui `backup.enabled=true` e CronJob diario para dump do Postgres + espelhamento do bucket MinIO.
+
+```bash
+# Ver CronJob e ultimos jobs
+kubectl get cronjob,jobs -n betaml | grep backup
+
+# Disparar backup manual antes do deploy
+kubectl create job --from=cronjob/<release>-backup <release>-backup-manual-$(date +%Y%m%d%H%M%S) -n betaml
+
+# Acompanhar evidencias
+kubectl logs job/<release>-backup-manual-YYYYMMDDHHMMSS -n betaml
 ```
 
 ### MinIO (modelos ML e evidências)
@@ -556,11 +592,26 @@ gunzip -c backup_20241201.sql.gz | docker compose exec -T postgres psql -U betam
 # Via mc (MinIO Client)
 docker run --rm --network betaml-net \
   minio/mc mirror betaml/betaml-models /backup/models
+
+# Validar objeto de backup e recuperar artefatos para drill
+docker run --rm --network betaml-net \
+  minio/mc ls betaml/betaml-backups/postgres
+docker run --rm --network betaml-net \
+  minio/mc mirror betaml/betaml-backups/minio/<timestamp> /backup/minio-restore-drill
 ```
+
+O `scripts/restore_drill.sh` valida automaticamente a existencia de `postgres/postgres_<timestamp>.sql.gz`
+e de pelo menos um artefato em `minio/<timestamp>/`, falhando o drill quando o espelhamento nao existir.
 
 ### Redis (features em memória)
 
 Redis é cache volátil — não requer backup. TTL padrão: 4 horas.
+
+### Decisao entre rollback e restore
+
+- Regressao de aplicacao com schema compativel: rollback de imagem/Helm e smoke funcional.
+- Falha de migration destrutiva, corrupcao de dados ou perda de artefatos: congelar deploy, confirmar ultimo backup valido e executar restore drill.
+- Sem backup valido recente: no-go para corte de trafego; escalar incidente e manter ambiente controlado.
 
 ## 8. Configuração de Variáveis de Ambiente
 

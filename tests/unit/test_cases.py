@@ -150,6 +150,7 @@ async def test_create_case_calls_flush_and_commit():
     assert "id" in result
     assert "title" in result
     assert "status" in result
+    assert result["reference_number"].startswith("CASE-")
 
 
 @pytest.mark.asyncio
@@ -191,6 +192,7 @@ async def test_list_cases_returns_items_from_repo():
     )
 
     assert len(result) == 3
+    assert result[0]["reference_number"].startswith("CASE-")
     repo.list_filtered.assert_awaited_once()
 
 
@@ -409,3 +411,38 @@ async def test_submit_report_package_already_filed_raises_409():
             await submit_report_package(case_id="c1", current_user=user, db=db)
 
     assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_submit_report_package_sets_case_to_reported():
+    """submit_report_package must synchronize case status with a filed COAF report."""
+    from routers.cases import submit_report_package
+
+    case = _make_case("c1", tenant_id="t1", status="PENDING_REVIEW")
+    case.closed_at = None
+    case.closed_by = None
+
+    rp = MagicMock()
+    rp.id = "rp-1"
+    rp.payload = {"decision": "FILE_SAR"}
+    rp.status = "FINAL"
+    rp.created_by = "maker-user"
+
+    db = _make_db()
+    db.get = AsyncMock(return_value=case)
+    rp_result = MagicMock()
+    rp_result.scalar_one_or_none.return_value = rp
+    db.execute = AsyncMock(return_value=rp_result)
+
+    added = []
+    db.add = MagicMock(side_effect=added.append)
+    user = _make_user(user_id="checker-user", tenant_id="t1", role="ADMIN")
+
+    with patch("routers.cases.redis_rate_limit", AsyncMock()), patch("routers.cases.write_audit", AsyncMock()):
+        result = await submit_report_package(case_id="c1", current_user=user, db=db)
+
+    assert result["status"] == "FILED"
+    assert case.status == "REPORTED"
+    assert case.closed_by == "checker-user"
+    assert case.closed_at is not None
+    assert rp.status == "FILED"

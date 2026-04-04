@@ -648,7 +648,7 @@ async def clickhouse_backfill_features_daily() -> None:
                             "avg_odds_bet_7d": _to_dec(feats.get("avg_odds_bet_7d"), q4),
                             "win_loss_ratio_30d": _to_dec(feats.get("win_loss_ratio_30d"), q4),
                             "avg_dep_to_wdraw_hours": _to_dec(feats.get("avg_deposit_to_withdrawal_hours"), q4),
-                            "multi_currency_flag": int(bool(feats.get("inconsistent_currency_flag", False))),
+                            "inconsistent_currency_flag": int(bool(feats.get("inconsistent_currency_flag", False))),
                             "chargeback_rate_30d": _to_dec(feats.get("chargeback_rate_30d"), q4),
                             "bonus_to_real_ratio_30d": _to_dec(feats.get("bonus_to_real_ratio_30d"), q4),
                             "cashout_ratio_7d": _to_dec(feats.get("cashout_ratio_7d"), q4),

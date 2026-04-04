@@ -29,6 +29,10 @@ def _tenant_filter(model, tenant_id: str):
     return model.tenant_id == tenant_id
 
 
+def _is_champion_status(status: Any) -> bool:
+    return str(status or "") in {"champion", "active", "PRODUCTION"}
+
+
 async def _write_audit(db, tenant_id, actor, action, resource_type, resource_id=None, details=None):
     db.add(AuditLog(
         tenant_id=tenant_id, user_id=actor, action=action,
@@ -511,16 +515,21 @@ async def promote_model(
     )).scalar_one_or_none()
     if model is None:
         raise HTTPException(404, "Modelo não encontrado")
+    if str(getattr(model, "status", "")) != "challenger" or not bool(getattr(model, "is_challenger", False)):
+        raise HTTPException(409, "Somente challenger designado pode ser promovido")
 
     await db.execute(
         update(ModelRegistry).where(
             _tenant_filter(ModelRegistry, current_user.tenant_id),
             ModelRegistry.model_type == model.model_type,
+            ModelRegistry.id != model_id,
             ModelRegistry.status.in_(["champion", "active", "PRODUCTION"]),
-        ).values(status="archived")
+        ).values(status="archived", is_active=False, is_challenger=False, champion_id=None)
     )
     model.status = "champion"
     model.is_challenger = False
+    model.is_active = True
+    model.champion_id = None
     model.promoted_by = current_user.id
     model.promoted_at = datetime.now(UTC)
     await _write_audit(db, current_user.tenant_id, current_user.id,
@@ -545,12 +554,36 @@ async def designate_challenger(
     )).scalar_one_or_none()
     if model is None:
         raise HTTPException(404, "Modelo não encontrado")
-    if model.status in {"champion", "active", "PRODUCTION"}:
+    if _is_champion_status(getattr(model, "status", None)):
         raise HTTPException(400, "Champion não pode ser designado como challenger diretamente; use /promote")
+    if str(getattr(model, "status", "")) != "STAGING":
+        raise HTTPException(409, "Apenas modelos STAGING podem virar challenger")
+
+    champion = (await db.execute(
+        select(ModelRegistry).where(
+            _tenant_filter(ModelRegistry, current_user.tenant_id),
+            ModelRegistry.model_type == model.model_type,
+            ModelRegistry.status.in_(["champion", "active", "PRODUCTION"]),
+        ).order_by(desc(ModelRegistry.trained_at))
+    )).scalar_one_or_none()
+    if champion is None:
+        raise HTTPException(409, "Nao existe champion ativo para comparar este challenger")
+
+    await db.execute(
+        update(ModelRegistry).where(
+            _tenant_filter(ModelRegistry, current_user.tenant_id),
+            ModelRegistry.model_type == model.model_type,
+            ModelRegistry.id != model_id,
+            ModelRegistry.is_challenger.is_(True),
+        ).values(status="STAGING", is_challenger=False, champion_id=None, is_active=False)
+    )
+
     model.is_challenger = True
     model.status = "challenger"
+    model.is_active = False
+    model.champion_id = champion.id
     await _write_audit(db, current_user.tenant_id, current_user.id,
                        "DESIGNATE_CHALLENGER", "ModelRegistry", model_id,
-                       {"model_type": model.model_type, "algorithm": model.algorithm})
+                       {"model_type": model.model_type, "algorithm": model.algorithm, "champion_id": str(champion.id)})
     await db.commit()
     return {"status": "challenger", "model_id": model_id}

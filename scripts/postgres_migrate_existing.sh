@@ -126,6 +126,12 @@ probe_applied_version() {
       # Considera aplicada quando o constraint NAO existe (idempotente).
       sql_bool "SELECT CASE WHEN to_regclass('public.players') IS NULL THEN false ELSE NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='players_status_check') END"
       ;;
+    30)
+      sql_bool "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='case_events_event_type_check' AND pg_get_constraintdef(oid) ILIKE '%REPORT_SUBMITTED%')"
+      ;;
+    31)
+      sql_bool "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='report_packages_status_check' AND pg_get_constraintdef(oid) ILIKE '%FILED%')"
+      ;;
     *)
       return 1
       ;;

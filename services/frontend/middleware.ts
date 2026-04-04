@@ -13,6 +13,7 @@
  *  O middleware apenas melhora a UX ao redirecionar antes de uma chamada 403.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { canAccessRoute } from './lib/nav-config';
 
 // Rotas que NÃO requerem autenticação
 const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/_next', '/favicon.ico', '/forbidden'];
@@ -37,27 +38,25 @@ export function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // On-prem: rotas /platform/** não existem — redirecionar para forbidden
-  if (IS_ONPREM && pathname.startsWith('/platform')) {
+  // Rotas /platform/** não possuem páginas reais no frontend atual.
+  if (pathname.startsWith('/platform')) {
     const url = req.nextUrl.clone();
     url.pathname = '/forbidden';
     return NextResponse.redirect(url);
   }
 
-  // SaaS: proteger rotas de plataforma — apenas BetAML_SuperAdmin
-  if (!IS_ONPREM && pathname.startsWith('/platform')) {
-    const rolesRaw = req.cookies.get('betaml_roles')?.value ?? '';
-    let roles: string[] = [];
-    try {
-      roles = JSON.parse(decodeURIComponent(rolesRaw)) as string[];
-    } catch {
-      // cookie inválido ou ausente
-    }
-    if (!roles.includes('BetAML_SuperAdmin')) {
-      const url = req.nextUrl.clone();
-      url.pathname = '/forbidden';
-      return NextResponse.redirect(url);
-    }
+  const rolesRaw = req.cookies.get('betaml_roles')?.value ?? '';
+  let roles: string[] = [];
+  try {
+    roles = JSON.parse(decodeURIComponent(rolesRaw)) as string[];
+  } catch {
+    // cookie inválido ou ausente
+  }
+
+  if (!canAccessRoute(pathname, roles)) {
+    const url = req.nextUrl.clone();
+    url.pathname = '/forbidden';
+    return NextResponse.redirect(url);
   }
 
   // Para chamadas de proxy ao backend, injetar o token como Authorization header

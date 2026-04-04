@@ -54,7 +54,9 @@ Used when fewer than 50 labeled samples are available.
 - Skips training if fewer than 50 feature vectors can be extracted
 
 ## Champion Promotion
-A model is auto-promoted to **champion** when:
+A model is auto-promoted to **champion** only for supervised retraining runs. Unsupervised fallback runs stay in **STAGING** for manual review.
+
+A supervised model is auto-promoted to **champion** when:
 - **GradientBoosting**: in-sample F1 score > 0.75 AND no precision regression > 5% vs current champion
 - **StructuringDetector**: F1 > 0.70
 - **NetworkClustering**: always champion (unsupervised clustering, no classification)

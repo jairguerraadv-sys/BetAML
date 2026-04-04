@@ -348,7 +348,14 @@ export default function AlertsPage() {
               alert={a}
               onOpen={(id) => router.push(`/alerts/${id}`)}
               onTriage={(alert) => { setSelected(alert); setDisp(''); setNote(''); }}
-              onNewCase={(alert) => router.push(`/cases?linkAlert=${alert.id}`)}
+              onNewCase={(alert) => {
+                const params = new URLSearchParams({
+                  linkAlert: alert.id,
+                  title: `Investigação do alerta: ${alert.title}`,
+                });
+                if (alert.player_id) params.set('playerId', alert.player_id);
+                router.push(`/cases/new?${params.toString()}`);
+              }}
               onObserve={(id) => observe.mutate(id)}
               isObserving={observingId === a.id}
               onInvestigate={(id) => router.push(`/investigate/${id}`)}

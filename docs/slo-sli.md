@@ -45,3 +45,9 @@
 - Excedeu error budget: congelar features nao criticas.
 - Abrir incidente com RCA em ate 48h.
 - Vincular acao corretiva com prazo e dono.
+
+## Evidencia operacional minima
+
+- Workflow [ .github/workflows/capacity-smoke.yml ] deve publicar artifact-capacity-smoke com CSV bruto do Locust, sumario e avaliacao objetiva de thresholds.
+- Validacao automatica usa [tests/load/validate_slo.py](tests/load/validate_slo.py) sobre o request POST /ingest/batch.
+- Execucao semanal agendada e uma smoke de capacidade; para aceite de go-live, disparar workflow manual com parametros reforcados e anexar a mesma evidencia ao ticket operacional.

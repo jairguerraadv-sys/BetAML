@@ -57,6 +57,11 @@ MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
 MINIO_ACCESS   = os.getenv("MINIO_ACCESS_KEY", "minio")
 MINIO_SECRET   = os.getenv("MINIO_SECRET_KEY", "minio123")
 BUCKET_MODELS  = os.getenv("ML_MODEL_BUCKET", "betaml-models")
+ENVIRONMENT    = os.getenv("ENVIRONMENT", "development").strip().lower()
+ML_ALLOW_SYNTHETIC_TRAINING = os.getenv("ML_ALLOW_SYNTHETIC_TRAINING", "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+NON_PROD_ENVIRONMENTS = {"development", "test"}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Feature columns usados no treinamento (mesma ordem no score)
@@ -111,6 +116,60 @@ _model_cache: dict[str, dict[str, Any]] = {}
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _is_non_prod_environment() -> bool:
+    return ENVIRONMENT in NON_PROD_ENVIRONMENTS
+
+
+def _allow_synthetic_training() -> bool:
+    return _is_non_prod_environment() or ML_ALLOW_SYNTHETIC_TRAINING
+
+
+def _clear_tenant_model_cache(tenant_id: str) -> None:
+    for cache_key in [key for key in _model_cache if key.startswith(f"{tenant_id}:")]:
+        _model_cache.pop(cache_key, None)
+
+
+def _validate_score_request(req: "ScoreRequest") -> None:
+    if not str(req.tenant_id or "").strip():
+        raise HTTPException(422, "tenant_id obrigatorio")
+    if not str(req.player_id or "").strip():
+        raise HTTPException(422, "player_id obrigatorio")
+
+
+def _handle_missing_champion_model(req: "ScoreRequest") -> "ScoreResponse":
+    logger.warning(
+        "ml_champion_model_missing",
+        tenant_id=req.tenant_id,
+        player_id=req.player_id,
+        environment=ENVIRONMENT,
+    )
+    if not _is_non_prod_environment():
+        raise HTTPException(503, "Nenhum champion ML ativo para o tenant")
+    return ScoreResponse(
+        player_id=req.player_id,
+        tenant_id=req.tenant_id,
+        anomaly_score=0.0,
+        is_anomaly=False,
+        top_drivers=[],
+        model_id=None,
+        scored_at=_utcnow().isoformat(),
+    )
+
+
+def _require_synthetic_training_allowed(*, tenant_id: str, endpoint: str, have_rows: int | None = None, minimum_rows: int | None = None) -> None:
+    if _allow_synthetic_training():
+        return
+    logger.warning(
+        "synthetic_training_blocked",
+        tenant_id=tenant_id,
+        endpoint=endpoint,
+        environment=ENVIRONMENT,
+        have_rows=have_rows,
+        minimum_rows=minimum_rows,
+    )
+    raise HTTPException(409, "Treino sintético desabilitado neste ambiente; dados reais insuficientes")
 
 
 def _stable_bucket_0_99(tenant_id: str, player_id: str) -> int:
@@ -517,6 +576,7 @@ def score(req: ScoreRequest, x_request_id: str | None = Header(None, alias="X-Re
     Online scoring: recebe features do player e retorna anomaly_score [0,1].
     Sem modelo treinado → retorna 0.0.
     """
+    _validate_score_request(req)
     normalized_features = _normalize_feature_aliases(req.features)
 
     engine = _db_engine()
@@ -530,15 +590,7 @@ def score(req: ScoreRequest, x_request_id: str | None = Header(None, alias="X-Re
         chosen_variant = "champion" if entry is not None else preferred_variant
 
     if entry is None:
-        return ScoreResponse(
-            player_id=req.player_id,
-            tenant_id=req.tenant_id,
-            anomaly_score=0.0,
-            is_anomaly=False,
-            top_drivers=[],
-            model_id=None,
-            scored_at=_utcnow().isoformat(),
-        )
+        return _handle_missing_champion_model(req)
 
     clf = entry["clf"]
     fc  = entry.get("feature_columns", FEATURE_COLS)
@@ -618,7 +670,14 @@ def train(req: TrainRequest):
     except Exception as e:
         logger.warning("clickhouse_train_load_failed", error=str(e))
 
+    synthetic_bootstrap = False
     if len(rows) < req.min_rows:
+        _require_synthetic_training_allowed(
+            tenant_id=tenant_id,
+            endpoint="/train",
+            have_rows=len(rows),
+            minimum_rows=req.min_rows,
+        )
         # Gera dados sintéticos para bootstrap (dev)
         logger.info("synthetic_data_generation", tenant_id=tenant_id, have=len(rows))
         rng = np.random.default_rng(42)
@@ -630,6 +689,7 @@ def train(req: TrainRequest):
             {col: float(synth[col][i]) for col in FEATURE_COLS}
             for i in range(n_synth)
         ]
+        synthetic_bootstrap = True
 
     # Monta matriz X
     X_list = []
@@ -657,6 +717,7 @@ def train(req: TrainRequest):
         "n_estimators":  200,
         "contamination": 0.05,
         "train_secs":    train_secs,
+        "synthetic_bootstrap": synthetic_bootstrap,
     }
 
     # Upload para MinIO
@@ -677,7 +738,7 @@ def train(req: TrainRequest):
         logger.error("model_register_failed", error=str(e))
 
     # Invalida cache para forçar reload
-    _model_cache.pop(tenant_id, None)
+    _clear_tenant_model_cache(tenant_id)
 
     logger.info("model_trained", tenant_id=tenant_id, model_id=model_id, rows=len(rows))
     return TrainResponse(
@@ -713,7 +774,7 @@ def list_models(x_tenant_id: str = Header(..., alias="X-Tenant-Id")) -> list[Mod
 @app.post("/models/reload")
 def reload_model(x_tenant_id: str = Header(..., alias="X-Tenant-Id")):
     """Invalida cache de modelo para forçar reload na próxima requisição."""
-    _model_cache.pop(x_tenant_id, None)
+    _clear_tenant_model_cache(x_tenant_id)
     return {"status": "cache_cleared", "tenant_id": x_tenant_id}
 
 
@@ -808,6 +869,8 @@ def score_ab(req: ScoreRequest):
     Score against both champion and challenger models (A/B test).
     Returns deltas for comparison.
     """
+    _validate_score_request(req)
+
     def _score_entry(tenant_id: str, model_type: str) -> tuple[float, str | None]:
         entry = _load_tenant_model(tenant_id, model_type=model_type)
         if entry is None:
@@ -820,6 +883,9 @@ def score_ab(req: ScoreRequest):
 
     champ_score, champ_id    = _score_entry(req.tenant_id, "champion")
     challenger_score, chal_id = _score_entry(req.tenant_id, "challenger")
+
+    if champ_id is None and not _is_non_prod_environment():
+        raise HTTPException(503, "Nenhum champion ML ativo para comparacao A/B")
 
     delta = round(challenger_score - champ_score, 4) if chal_id else None
     return ABScoreResponse(
@@ -884,6 +950,8 @@ def train_structuring(req: TrainRequest):
     """
     from sklearn.ensemble import GradientBoostingClassifier
 
+    _require_synthetic_training_allowed(tenant_id=req.tenant_id, endpoint="/train/structuring")
+
     tenant_id = req.tenant_id
     X_pos_list: list[list[float]] = []
     X_neg_list: list[list[float]] = []
@@ -941,6 +1009,7 @@ def train_structuring(req: TrainRequest):
         "negatives":     len(X_neg_list),
         "train_secs":    train_secs,
         "algorithm":     "GradientBoosting_StructuringDetector",
+        "synthetic_bootstrap": True,
     }
 
     try:
@@ -955,6 +1024,8 @@ def train_structuring(req: TrainRequest):
                           "StructuringDetector", metrics, STRUCTURING_COLS)
     except Exception as e:
         logger.error("model_register_failed", error=str(e))
+
+    _clear_tenant_model_cache(tenant_id)
 
     return TrainResponse(model_id=model_id, tenant_id=tenant_id,
                          algorithm="StructuringDetector",
@@ -973,6 +1044,8 @@ def train_graph(req: TrainRequest):
     """
     from sklearn.cluster import DBSCAN
     from sklearn.preprocessing import StandardScaler
+
+    _require_synthetic_training_allowed(tenant_id=req.tenant_id, endpoint="/train/graph")
 
     tenant_id = req.tenant_id
     rng = np.random.default_rng(42)
@@ -999,6 +1072,7 @@ def train_graph(req: TrainRequest):
         "eps":        0.5,
         "min_samples": 3,
         "algorithm":  "DBSCAN_GraphClustering",
+        "synthetic_bootstrap": True,
     }
 
     try:
@@ -1012,6 +1086,8 @@ def train_graph(req: TrainRequest):
                           "GraphClustering", metrics, GRAPH_COLS)
     except Exception as e:
         logger.error("graph_register_failed", error=str(e))
+
+    _clear_tenant_model_cache(tenant_id)
 
     return TrainResponse(model_id=model_id, tenant_id=tenant_id,
                          algorithm="GraphClustering",
@@ -1038,6 +1114,8 @@ def train_recurrence(req: TrainRequest):
     """
     from sklearn.neighbors import NearestNeighbors
 
+    _require_synthetic_training_allowed(tenant_id=req.tenant_id, endpoint="/train/recurrence")
+
     tenant_id = req.tenant_id
     rng = np.random.default_rng(42)
     n   = max(req.min_rows, 500)
@@ -1063,6 +1141,7 @@ def train_recurrence(req: TrainRequest):
         "n_neighbors": 5,
         "algorithm": "NearestNeighbors_RecurrenceEstimator",
         "train_secs": train_secs,
+        "synthetic_bootstrap": True,
     }
 
     try:
@@ -1076,6 +1155,8 @@ def train_recurrence(req: TrainRequest):
                           "RecurrenceEstimator", metrics, RECURRENCE_COLS)
     except Exception as e:
         logger.error("recurrence_register_failed", error=str(e))
+
+    _clear_tenant_model_cache(tenant_id)
 
     return TrainResponse(model_id=model_id, tenant_id=tenant_id,
                          algorithm="RecurrenceEstimator",
@@ -1095,21 +1176,27 @@ def _load_tenant_model(tenant_id: str, model_type: str = "champion") -> dict | N
     try:
         engine = _db_engine()
         import sqlalchemy as sa
-        status = "active" if model_type == "champion" else model_type
+        if model_type == "challenger":
+            query = sa.text(
+                "SELECT id, artifact_uri, algorithm, feature_columns "
+                "FROM model_registry WHERE tenant_id = :tid "
+                "AND status = 'challenger' AND is_challenger = true "
+                "ORDER BY trained_at DESC LIMIT 1"
+            )
+        else:
+            query = sa.text(
+                "SELECT id, artifact_uri, algorithm, feature_columns "
+                "FROM model_registry WHERE tenant_id = :tid "
+                "AND status IN ('champion', 'active', 'PRODUCTION') "
+                "AND COALESCE(is_challenger, false) = false "
+                "ORDER BY trained_at DESC LIMIT 1"
+            )
         with engine.begin() as conn:
             conn.execute(
                 sa.text("SELECT set_config('app.current_tenant', :tid, true)"),
                 {"tid": tenant_id},
             )
-            row = conn.execute(
-                sa.text(
-                    "SELECT id, artifact_uri, algorithm, feature_columns "
-                    "FROM model_registry WHERE tenant_id = :tid "
-                    "AND (status = :status OR (status = 'active' AND :status = 'champion')) "
-                    "ORDER BY trained_at DESC LIMIT 1"
-                ),
-                {"tid": tenant_id, "status": status},
-            ).fetchone()
+            row = conn.execute(query, {"tid": tenant_id}).fetchone()
         if row is None:
             return None
         clf = download_model_artifact(row.artifact_uri)

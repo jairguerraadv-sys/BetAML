@@ -226,6 +226,12 @@ class TestPII:
         with pytest.raises(ValueError):
             decrypt_pii(b"not-a-fernet-token")
 
+    def test_compute_cpf_hmac_matches_sanctions_module(self):
+        from auth import compute_cpf_hmac
+        from sanctions import _cpf_hmac
+
+        assert _cpf_hmac("123.456.789-09") == compute_cpf_hmac("12345678909")
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Testes de RBAC (require_roles)

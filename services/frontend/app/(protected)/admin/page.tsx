@@ -26,6 +26,7 @@ import {
   CheckCircle2, XCircle, Users, ChevronDown, ChevronUp,
   UserPlus, RefreshCw, Lock, BarChart3, Copy, Activity, CalendarClock, Link2, Eye,
 } from 'lucide-react';
+import { useUser } from '@/contexts/UserContext';
 const updateFlag     = (flagName: string, value: string) => api.put(`/admin/flags/${flagName}`, { value });
 
 type Tab = 'tenants' | 'keys' | 'flags' | 'users' | 'usage';
@@ -519,6 +520,7 @@ function TenantCreateForm({ onSuccess }: { onSuccess: () => void }) {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function AdminPage() {
   const qc = useQueryClient();
+  const { user } = useUser();
   const [activeTab, setActiveTab] = useState<Tab>('keys');
   const [showCreateTenant, setShowCreateTenant] = useState(false);
   const [showCreateUser, setShowCreateUser]     = useState(false);
@@ -527,11 +529,17 @@ export default function AdminPage() {
   const [selectedKey, setSelectedKey] = useState<AdminApiKey | null>(null);
   const [newKeyRaw, setNewKeyRaw]   = useState('');
   const [maintOn, setMaintOn]       = useState(false);
+  const effectiveRoles = user?.roles ?? (user?.role ? [user.role] : []);
+  const canManageTenants = effectiveRoles.includes('BetAML_SuperAdmin');
 
   // Data
   const { data: apiKeys = [], isLoading: loadingKeys }     = useQuery({ queryKey: ['api-keys'],     queryFn: fetchApiKeys });
   const { data: flags  = [], isLoading: loadingFlags }     = useQuery({ queryKey: ['system-flags'], queryFn: fetchSystemFlags });
-  const { data: tenants = [], isLoading: loadingTenants }  = useQuery({ queryKey: ['tenants'],      queryFn: fetchTenants });
+  const { data: tenants = [], isLoading: loadingTenants }  = useQuery({
+    queryKey: ['tenants'],
+    queryFn: fetchTenants,
+    enabled: canManageTenants && activeTab === 'tenants',
+  });
   const { data: users  = [], isLoading: loadingUsers }     = useQuery({ queryKey: ['admin-users'],  queryFn: fetchAdminUsers, enabled: activeTab === 'users' });
   const { data: usageStats, isLoading: loadingUsage }      = useQuery<UsageStats>({ queryKey: ['usage-stats'], queryFn: fetchUsageStats, refetchInterval: 60_000, enabled: activeTab === 'usage' });
   const { data: scoringConfig } = useQuery<ScoringConfig>({
@@ -545,6 +553,12 @@ export default function AdminPage() {
     const enabled = Boolean(maintenanceFlag && (maintenanceFlag.value as { enabled?: boolean })?.enabled);
     setMaintOn(enabled);
   }, [flags]);
+
+  useEffect(() => {
+    if (activeTab === 'tenants' && !canManageTenants) {
+      setActiveTab('keys');
+    }
+  }, [activeTab, canManageTenants]);
 
   // Mutations
   const createKey = useMutation({
@@ -575,7 +589,7 @@ export default function AdminPage() {
   });
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: 'tenants', label: 'Operadores',   icon: <Building2 size={14} /> },
+    ...(canManageTenants ? [{ id: 'tenants' as const, label: 'Operadores', icon: <Building2 size={14} /> }] : []),
     { id: 'users',   label: 'Usuários',     icon: <Users size={14} /> },
     { id: 'keys',    label: 'Chaves de API',icon: <Key size={14} /> },
     { id: 'flags',   label: 'Feature Flags',icon: <Shield size={14} /> },

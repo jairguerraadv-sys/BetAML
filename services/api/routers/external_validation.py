@@ -92,32 +92,23 @@ async def _mock_provider_call(provider: str, validation_type: str, request_id: s
 async def _dispatch_provider_call(provider: str, validation_type: str, request_id: str) -> dict:
     """Despacha para o provider configurado via EXTERNAL_VALIDATION_PROVIDER.
 
-    Em ambientes de produção, emite warning quando o mock ainda está ativo para
-    que equipes de operações percebam que validações externas não são reais.
-    Quando BETAML_ENVIRONMENT=production e o provider ainda é mock, o request
-    é rejeitado para evitar validações silenciosamente falsas.
+    Em qualquer ambiente fora de development/test, o mock é bloqueado para
+    evitar validações externas silenciosamente falsas em staging/produção.
     """
     import structlog as _slog  # noqa: PLC0415
     _logger = _slog.get_logger()
 
     if _VALIDATION_PROVIDER == "mock":
-        if _BETAML_ENV == "production":
+        if _BETAML_ENV not in ("development", "test"):
             _logger.error(
-                "external_validation_mock_blocked_in_production",
+                "external_validation_mock_blocked_outside_dev_test",
                 provider=provider,
                 validation_type=validation_type,
                 request_id=request_id,
+                environment=_BETAML_ENV,
                 hint="Configure EXTERNAL_VALIDATION_PROVIDER com um provider real.",
             )
-            raise RuntimeError("mock_provider_not_allowed_in_production")
-        if _BETAML_ENV not in ("development", "test"):
-            _logger.warning(
-                "external_validation_mock_in_non_dev",
-                provider=provider,
-                validation_type=validation_type,
-                environment=_BETAML_ENV,
-                request_id=request_id,
-            )
+            raise RuntimeError("mock_provider_not_allowed_outside_dev_test")
 
     # Aqui novos providers reais serão despachados por _VALIDATION_PROVIDER.
     # Por hora só o mock está implementado; providers reais entram nesta função.
@@ -170,14 +161,24 @@ async def _process_validation_request(request_id: str, tenant_id: str | None = N
                 if player:
                     player_cpf_hmac: str | None = getattr(player, "cpf_hmac", None)
                     player_name: str | None = None
+                    sanctions_warning: str | None = None
                     try:
                         player_name = decrypt_pii(player.name_encrypted) if player.name_encrypted else None
-                    except Exception:  # pragma: no cover
-                        pass
+                    except Exception as exc:  # pragma: no cover
+                        sanctions_warning = "player_name_unavailable_due_to_pii_decryption_error"
+                        logger.warning(
+                            "external_validation_player_name_decrypt_failed",
+                            request_id=request_id,
+                            player_id=req.player_id,
+                            tenant_id=req.tenant_id,
+                            error=str(exc),
+                        )
 
                     checker = get_sanctions_checker()
                     _sanctions_result = checker.check(cpf_hmac=player_cpf_hmac, name=player_name)
                     response["sanctions_check"] = _sanctions_result.to_dict()
+                    if sanctions_warning:
+                        response["sanctions_check"]["warning"] = sanctions_warning
             except Exception as _sanctions_exc:  # noqa: BLE001 — nunca bloqueia o resultado principal
                 response["sanctions_check"] = {"error": str(_sanctions_exc), "matched": False}
 

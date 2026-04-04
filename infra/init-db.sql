@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS case_events (
     case_id     UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
     tenant_id   UUID NOT NULL REFERENCES tenants(id),
     event_type  TEXT NOT NULL CHECK (event_type IN
-                    ('NOTE','STATUS_CHANGE','EVIDENCE_UPLOAD','ASSIGNMENT','REPORT_GENERATED')),
+                    ('NOTE','STATUS_CHANGE','EVIDENCE_UPLOAD','ASSIGNMENT','REPORT_GENERATED','REPORT_SUBMITTED')),
     content     JSONB NOT NULL DEFAULT '{}',
     created_by  UUID REFERENCES users(id),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()

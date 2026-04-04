@@ -27,6 +27,7 @@ from prometheus_client import Counter, Histogram
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from case_refs import build_case_reference_number
 from config import settings
 from models import Alert, Case, CaseEvent, Player
 
@@ -128,7 +129,12 @@ async def _process_alert_event(payload: dict, Session: async_sessionmaker) -> No
     alert_id    = payload.get("alert_id")  # pode vir já persistido pelo rules_engine
 
     if not tenant_id:
-        logger.warning("alert_processor_missing_tenant", payload=payload)
+        logger.warning(
+            "alert_processor_missing_tenant",
+            payload_keys=sorted(payload.keys()),
+            source_event_id=source_eid,
+            player_id=player_id,
+        )
         return
 
     async with Session() as db:
@@ -304,6 +310,8 @@ async def _process_alert_event(payload: dict, Session: async_sessionmaker) -> No
                 )
                 db.add(case)
                 await db.flush()
+                if not case.reference_number:
+                    case.reference_number = build_case_reference_number(case)
 
                 alert.case_id = case.id
                 evt = CaseEvent(

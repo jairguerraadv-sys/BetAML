@@ -61,7 +61,6 @@ const SECTION_GESTAO: NavSection = {
     { path: '/rules/builder',    label: 'Construtor de Regras',     icon: 'Wand2',              tooltip: 'Editor visual de condições de risco' },
     { path: '/rules/compound',   label: 'Regras Compostas',         icon: 'GitBranch',          tooltip: 'Combinações de regras e macros' },
     { path: '/player-lists',     label: 'Listas de Monitoramento',  icon: 'List',               tooltip: 'Listas PEP, sanções e monitoramento especial' },
-    { path: '/reports/kpi',      label: 'Indicadores de PLD',       icon: 'BarChart3',          tooltip: 'KPIs e SLAs do programa PLD/FT' },
   ],
 };
 
@@ -72,7 +71,7 @@ const SECTION_INTEGRACAO: NavSection = {
     { path: '/mappings',      label: 'Integração de Dados',    icon: 'Plug',         tooltip: 'Configure mapeamentos de campos dos conectores' },
     { path: '/ingest-jobs',   label: 'Jobs de Ingestão',       icon: 'Activity',     tooltip: 'Histórico de envios de dados ao BetAML' },
     { path: '/ingest-errors', label: 'Quarentena de Erros',    icon: 'AlertOctagon', tooltip: 'Registros com falha de validação ou mapeamento' },
-    { path: '/admin/users',   label: 'Usuários do Operador',   icon: 'Shield',       tooltip: 'Gerencie usuários do seu tenant' },
+    { path: '/admin',         label: 'Usuários do Operador',   icon: 'Shield',       tooltip: 'Gerencie usuários, chaves e flags do seu tenant' },
     { path: '/settings',      label: 'Parâmetros de Sistema',  icon: 'Settings',     tooltip: 'Configurações técnicas do tenant' },
     { path: '/audit-logs',    label: 'Log de Auditoria',       icon: 'ScrollText',   tooltip: 'Registro de ações da plataforma' },
   ],
@@ -82,11 +81,11 @@ const SECTION_INTEGRACAO: NavSection = {
 const SECTION_PLATAFORMA: NavSection = {
   label: 'Plataforma BetAML',
   items: [
-    { path: '/platform/tenants',   label: 'Operadores (Tenants)',   icon: 'Building2',    tooltip: 'Gerenciar operadores de apostas na plataforma' },
-    { path: '/platform/templates', label: 'Templates Globais',      icon: 'LayoutTemplate', tooltip: 'Regras e mapeamentos globais para novos tenants' },
-    { path: '/platform/ml',        label: 'Modelos ML Globais',     icon: 'BrainCircuit', tooltip: 'Registry e versionamento de modelos analíticos' },
-    { path: '/platform/metrics',   label: 'Métricas da Plataforma', icon: 'BarChart3',    tooltip: 'Visão consolidada de todos os tenants' },
-    { path: '/platform/audit',     label: 'Auditoria da Plataforma',icon: 'ShieldCheck',  tooltip: 'Log de ações de SuperAdmin e mudanças de RBAC' },
+    { path: '/admin',            label: 'Operadores (Tenants)',    icon: 'Building2',      tooltip: 'Gerencie operadores e recursos administrativos da plataforma' },
+    { path: '/admin/onboarding', label: 'Onboarding de Operadores', icon: 'LayoutTemplate', tooltip: 'Fluxo guiado de criação e bootstrap de novos tenants' },
+    { path: '/model-registry',   label: 'Modelos Analíticos',      icon: 'BrainCircuit',   tooltip: 'Registry e versionamento de modelos analíticos' },
+    { path: '/admin/ops',        label: 'Métricas da Plataforma',  icon: 'BarChart3',      tooltip: 'Saúde operacional e indicadores consolidados' },
+    { path: '/audit-logs',       label: 'Auditoria da Plataforma', icon: 'ShieldCheck',    tooltip: 'Log de ações administrativas e trilha de auditoria' },
   ],
 };
 
@@ -120,15 +119,21 @@ export const ROUTE_ROLES: Array<{ pattern: RegExp; roles: AppRole[] }> = [
   // Integração — apenas AdminTecnico
   { pattern: /^\/mappings/,      roles: ['Operador_AdminTecnico'] },
   { pattern: /^\/ingest/,        roles: ['Operador_AdminTecnico'] },
-  { pattern: /^\/admin\/users/,  roles: ['Operador_AdminTecnico'] },
+  { pattern: /^\/admin\/onboarding/, roles: ['BetAML_SuperAdmin'] },
+  { pattern: /^\/admin\/ops/,   roles: ['Operador_Gestor', 'BetAML_SuperAdmin'] },
+  { pattern: /^\/admin(?:\/)?$/, roles: ['Operador_AdminTecnico', 'BetAML_SuperAdmin'] },
   { pattern: /^\/settings/,      roles: ['Operador_AdminTecnico'] },
   { pattern: /^\/audit-logs/,    roles: ['Operador_AdminTecnico', 'Operador_Gestor', 'Operador_Analista'] },
   // Plataforma — apenas SuperAdmin
   { pattern: /^\/platform/,      roles: ['BetAML_SuperAdmin'] },
-  { pattern: /^\/admin\//,       roles: ['Operador_AdminTecnico', 'BetAML_SuperAdmin'] },
   { pattern: /^\/model-registry/,roles: ['BetAML_SuperAdmin'] },
   { pattern: /^\/feature-store/, roles: ['Operador_Gestor', 'BetAML_SuperAdmin'] },
 ];
+
+export function getAllowedRolesForPath(path: string): AppRole[] | null {
+  const match = ROUTE_ROLES.find(({ pattern }) => pattern.test(path));
+  return match?.roles ?? null;
+}
 
 /**
  * Retorna as seções de navegação para o conjunto de papéis do usuário.
@@ -163,9 +168,9 @@ export function getNavSections(
  * Retorna true se o usuário tem acesso à rota especificada.
  */
 export function canAccessRoute(path: string, userRoles: string[]): boolean {
-  const match = ROUTE_ROLES.find(({ pattern }) => pattern.test(path));
-  if (!match) return true;  // rotas sem guard são públicas dentro do layout protegido
-  return match.roles.some((r) => userRoles.includes(r));
+  const allowedRoles = getAllowedRolesForPath(path);
+  if (!allowedRoles) return true;  // rotas sem guard são públicas dentro do layout protegido
+  return allowedRoles.some((r) => userRoles.includes(r));
 }
 
 /**

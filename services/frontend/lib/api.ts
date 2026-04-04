@@ -150,7 +150,7 @@ export interface User {
 export interface Alert {
   id: string; title: string; severity: string; status: string;
   player_id: string; alert_type: string; created_at: string; rule_id?: string;
-  anomaly_score?: number; case_id?: string;
+  anomaly_score?: number; case_id?: string; case_reference_number?: string | null;
 }
 
 export interface AlertDetail extends Alert {
@@ -164,6 +164,8 @@ export interface AlertDetail extends Alert {
   label?: string;
   label_note?: string;
   labeled_at?: string;
+  case_status?: string | null;
+  case_title?: string | null;
 }
 
 export interface AlertExplainabilityFeature {
@@ -430,7 +432,7 @@ export const createCase = (body: {
   description?: string;
   player_id?: string;
   severity?: string;
-}) => api.post<{ id: string; title: string; status: string }>('/cases', body).then((r) => r.data);
+}) => api.post<{ id: string; title: string; status: string; reference_number?: string }>('/cases', body).then((r) => r.data);
 
 export const fetchPlayers = (params?: Record<string, string>) =>
   api.get<Player[]>('/players', { params }).then((r) => r.data);

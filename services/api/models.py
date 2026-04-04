@@ -1,6 +1,7 @@
 """SQLAlchemy ORM models (OLTP — PostgreSQL) — BetAML v2."""
 from __future__ import annotations
 
+import logging
 import uuid
 
 from sqlalchemy import (
@@ -11,6 +12,8 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
 from database import Base
+
+logger = logging.getLogger(__name__)
 
 
 def _uuid():
@@ -95,7 +98,15 @@ class Player(Base):
         try:
             from auth import decrypt_pii  # lazy import para evitar circular
             return decrypt_pii(raw)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "player_full_name_decrypt_failed",
+                extra={
+                    "player_id": getattr(self, "id", None),
+                    "tenant_id": getattr(self, "tenant_id", None),
+                    "error": str(exc),
+                },
+            )
             return None
 
     @full_name.setter
@@ -110,9 +121,8 @@ class Player(Base):
         try:
             from auth import encrypt_pii  # lazy import para evitar circular
             self.name_encrypted = encrypt_pii(value)
-        except Exception:
-            # Fallback seguro: não gravar em claro, deixar name_encrypted inalterado
-            pass
+        except Exception as exc:
+            raise ValueError("unable to encrypt player full_name") from exc
 
 
 # ── Ingest ────────────────────────────────────────────────────────────────────

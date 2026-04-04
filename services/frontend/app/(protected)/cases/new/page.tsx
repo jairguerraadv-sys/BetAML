@@ -1,25 +1,32 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useMutation } from '@tanstack/react-query';
-import { createCase } from '@/lib/api';
+import { createCase, linkAlertToCase } from '@/lib/api';
 
 export default function NewCasePage() {
   const router = useRouter();
-  const [title, setTitle] = useState('');
+  const searchParams = useSearchParams();
+  const linkAlertId = searchParams.get('linkAlert') ?? '';
+  const [title, setTitle] = useState(searchParams.get('title') ?? '');
   const [description, setDescription] = useState('');
-  const [playerId, setPlayerId] = useState('');
+  const [playerId, setPlayerId] = useState(searchParams.get('playerId') ?? '');
   const [severity, setSeverity] = useState('HIGH');
 
   const createMut = useMutation({
-    mutationFn: () =>
-      createCase({
+    mutationFn: async () => {
+      const created = await createCase({
         title,
         description: description || undefined,
         player_id: playerId || undefined,
         severity,
-      }),
+      });
+      if (linkAlertId) {
+        await linkAlertToCase(created.id, linkAlertId);
+      }
+      return created;
+    },
     onSuccess: (data) => {
       router.push(`/cases/${data.id}`);
     },
@@ -30,6 +37,9 @@ export default function NewCasePage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Novo Caso</h1>
         <p className="text-sm text-gray-500">Abra uma investigação manual para um alerta ou apostador.</p>
+        {linkAlertId && (
+          <p className="mt-1 text-xs text-indigo-600">O alerta será vinculado automaticamente quando o caso for criado.</p>
+        )}
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm space-y-4">

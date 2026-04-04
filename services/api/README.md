@@ -35,10 +35,12 @@ pip install -r requirements.txt
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Seed initial tenants and users:
+Seed initial tenants and users manually when needed:
 ```bash
 python seeds.py
 ```
+
+In Docker Compose, automatic seeding is now disabled outside `development` and `test` by default. To force bootstrap in a controlled environment, set `API_AUTO_SEED=true` explicitly.
 
 ## Kafka Topics
 | Direction | Topic | Description |

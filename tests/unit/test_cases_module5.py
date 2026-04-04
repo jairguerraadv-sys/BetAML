@@ -157,6 +157,7 @@ async def test_create_case_default_sla_when_no_scoring_config():
 
     case_obj = next((obj for obj in added_objects if hasattr(obj, "sla_due_at")), None)
     assert case_obj is not None
+    assert case_obj.reference_number.startswith("CASE-")
     expected_min = before + timedelta(hours=24) - timedelta(seconds=5)
     expected_max = after  + timedelta(hours=24) + timedelta(seconds=5)
     assert expected_min <= case_obj.sla_due_at <= expected_max
@@ -395,6 +396,76 @@ async def test_link_alert_wrong_tenant_raises_404():
         with patch("routers.cases.write_audit", AsyncMock()):
             await link_alert_to_case(case_id="c1", body=body, current_user=_make_user(), db=db)
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_link_alert_to_case_sets_case_context_from_alert():
+    from routers.cases import link_alert_to_case
+    from libs.schemas import CaseLinkAlertIn
+
+    db = _make_db()
+    c = _make_case(tenant_id="t1")
+    c.player_id = None
+    c.source_alert_id = None
+    c.reference_number = None
+
+    alert_mock = MagicMock()
+    alert_mock.id = "a1"
+    alert_mock.tenant_id = "t1"
+    alert_mock.player_id = "player-1"
+    alert_mock.title = "Spike"
+    alert_mock.severity = "HIGH"
+    alert_mock.case_id = None
+
+    async def _db_get(model, pk):
+        from models import Case, Alert
+        if model is Case:
+            return c
+        return alert_mock
+
+    db.get = AsyncMock(side_effect=_db_get)
+
+    body = CaseLinkAlertIn(alert_id="a1")
+    with patch("routers.cases.write_audit", AsyncMock()):
+        result = await link_alert_to_case(case_id="c1", body=body, current_user=_make_user(), db=db)
+
+    assert result["status"] == "linked"
+    assert c.player_id == "player-1"
+    assert c.source_alert_id == "a1"
+    assert c.reference_number.startswith("CASE-")
+
+
+@pytest.mark.asyncio
+async def test_link_alert_to_case_rejects_player_mismatch():
+    from routers.cases import link_alert_to_case
+    from libs.schemas import CaseLinkAlertIn
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    db = _make_db()
+    c = _make_case(tenant_id="t1")
+    c.player_id = "player-a"
+    c.source_alert_id = None
+
+    alert_mock = MagicMock()
+    alert_mock.id = "a1"
+    alert_mock.tenant_id = "t1"
+    alert_mock.player_id = "player-b"
+    alert_mock.title = "Spike"
+    alert_mock.severity = "HIGH"
+
+    async def _db_get(model, pk):
+        from models import Case, Alert
+        if model is Case:
+            return c
+        return alert_mock
+
+    db.get = AsyncMock(side_effect=_db_get)
+
+    body = CaseLinkAlertIn(alert_id="a1")
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        with patch("routers.cases.write_audit", AsyncMock()):
+            await link_alert_to_case(case_id="c1", body=body, current_user=_make_user(), db=db)
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio

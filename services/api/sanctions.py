@@ -37,12 +37,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+from auth import compute_cpf_hmac
+
 logger = logging.getLogger(__name__)
 UTC = timezone.utc
 
 # ── Configurações via env ─────────────────────────────────────────────────────
 _DEFAULT_CSV = "/data/sanctions.csv"
-_ENV_KEY = os.getenv("PII_ENCRYPTION_KEY", "betaml-dev-key-change-in-prod")
 
 
 # ── Tipos ─────────────────────────────────────────────────────────────────────
@@ -92,13 +93,8 @@ def _normalize_name(name: str) -> str:
 
 
 def _cpf_hmac(cpf_plain: str) -> str:
-    """Calcula HMAC-SHA256 do CPF (somente dígitos)."""
-    digits = re.sub(r"\D", "", cpf_plain)
-    return hmac.new(
-        _ENV_KEY.encode(),
-        f"cpf:{digits}".encode(),
-        hashlib.sha256,
-    ).hexdigest()
+    """Calcula HMAC-SHA256 do CPF usando a mesma derivação do auth."""
+    return compute_cpf_hmac(cpf_plain)
 
 
 # ── SanctionsChecker ──────────────────────────────────────────────────────────

@@ -21,6 +21,8 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
+from fastapi import HTTPException
+
 # ── Path setup ───────────────────────────────────────────────────────────────
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _ML_MAIN = os.path.join(_ROOT, "services", "ml_service", "main.py")
@@ -257,7 +259,7 @@ class TestABTrafficSplit(unittest.TestCase):
 
     def test_pct_zero_always_champion(self):
         ml = _load_module()
-        req = ml.ScoreRequest(player_id="p1", tenant_id="t1", features={})
+        req = ml.ScoreRequest(player_id="p1", tenant_id="t1", features={"deposit_sum_24h": 1})
 
         calls = []
 
@@ -276,7 +278,7 @@ class TestABTrafficSplit(unittest.TestCase):
 
     def test_pct_hundred_uses_challenger_when_available(self):
         ml = _load_module()
-        req = ml.ScoreRequest(player_id="p1", tenant_id="t1", features={})
+        req = ml.ScoreRequest(player_id="p1", tenant_id="t1", features={"deposit_sum_24h": 1})
 
         def _load_side_effect(tenant_id: str, model_type: str = "champion"):
             if model_type == "challenger":
@@ -293,7 +295,7 @@ class TestABTrafficSplit(unittest.TestCase):
 
     def test_pct_hundred_falls_back_to_champion_when_challenger_missing(self):
         ml = _load_module()
-        req = ml.ScoreRequest(player_id="p1", tenant_id="t1", features={})
+        req = ml.ScoreRequest(player_id="p1", tenant_id="t1", features={"deposit_sum_24h": 1})
 
         calls = []
 
@@ -311,6 +313,47 @@ class TestABTrafficSplit(unittest.TestCase):
 
         self.assertEqual(resp.model_id, "00000000-0000-0000-0000-000000000001")
         self.assertEqual(calls, ["challenger", "champion"])
+
+    def test_score_without_model_raises_503_in_production(self):
+        ml = _load_module()
+        req = ml.ScoreRequest(player_id="p1", tenant_id="t1", features={"deposit_sum_24h": 1})
+
+        with patch.object(ml, "ENVIRONMENT", "production"), \
+             patch.object(ml, "_db_engine", return_value=MagicMock()), \
+             patch.object(ml, "_get_ml_challenger_pct", return_value=0), \
+             patch.object(ml, "_load_tenant_model", return_value=None):
+            with self.assertRaises(HTTPException) as exc:
+                ml.score(req)
+
+        self.assertEqual(exc.exception.status_code, 503)
+
+    def test_train_blocks_synthetic_bootstrap_in_production(self):
+        ml = _load_module()
+
+        with patch.object(ml, "ENVIRONMENT", "production"), \
+             patch.object(ml, "ML_ALLOW_SYNTHETIC_TRAINING", False), \
+             patch.object(ml, "upload_model_artifact", return_value="memory://test/model.pkl"), \
+             patch.object(ml, "register_model_db", return_value=None), \
+             patch.object(ml, "_db_engine", return_value=MagicMock()):
+            req = ml.TrainRequest(tenant_id="tenant-test", min_rows=50)
+            with self.assertRaises(HTTPException) as exc:
+                ml.train(req)
+
+        self.assertEqual(exc.exception.status_code, 409)
+
+    def test_reload_model_clears_all_variants_for_tenant(self):
+        ml = _load_module()
+        ml._model_cache.clear()
+        ml._model_cache["tenant-a:champion"] = {"clf": object()}
+        ml._model_cache["tenant-a:challenger"] = {"clf": object()}
+        ml._model_cache["tenant-b:champion"] = {"clf": object()}
+
+        resp = ml.reload_model(x_tenant_id="tenant-a")
+
+        self.assertEqual(resp["status"], "cache_cleared")
+        self.assertNotIn("tenant-a:champion", ml._model_cache)
+        self.assertNotIn("tenant-a:challenger", ml._model_cache)
+        self.assertIn("tenant-b:champion", ml._model_cache)
 
 
 if __name__ == "__main__":

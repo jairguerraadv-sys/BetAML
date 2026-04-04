@@ -210,6 +210,21 @@ async def test_global_search_supports_cpf_digits():
     assert result["players"][0]["cpf_masked"] == "***.***.***-09"
 
 
+def test_safe_masked_cpf_logs_decrypt_failure():
+    from routers.search import _safe_masked_cpf
+
+    player = MagicMock()
+    player.id = "p-1"
+    player.tenant_id = "t-1"
+    player.cpf_encrypted = b"broken"
+
+    with patch("routers.search.decrypt_pii", side_effect=ValueError("invalid pii")), \
+         patch("routers.search.logger.warning") as mock_warning:
+        assert _safe_masked_cpf(player) is None
+
+    mock_warning.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_global_search_case_result_shape():
     """Case items have id, reference_number, title, status keys."""

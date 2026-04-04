@@ -16,15 +16,35 @@ BEGIN;
 -- ── 1. CompoundRule — unificar logic + component_rule_ids ─────────────────────
 
 -- Sincronizar antes de remover aliases
-UPDATE compound_rules
-    SET logic = operator
-    WHERE logic IS NULL AND operator IS NOT NULL;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'compound_rules' AND column_name = 'operator'
+    ) THEN
+        EXECUTE $sql$
+            UPDATE compound_rules
+               SET logic = operator
+             WHERE logic IS NULL AND operator IS NOT NULL
+        $sql$;
+    END IF;
+END $$;
 
-UPDATE compound_rules
-    SET component_rule_ids = child_rule_ids
-    WHERE (component_rule_ids IS NULL OR component_rule_ids = '[]'::jsonb)
-      AND child_rule_ids IS NOT NULL
-      AND child_rule_ids != '[]'::jsonb;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'compound_rules' AND column_name = 'child_rule_ids'
+    ) THEN
+        EXECUTE $sql$
+            UPDATE compound_rules
+               SET component_rule_ids = child_rule_ids
+             WHERE (component_rule_ids IS NULL OR component_rule_ids = '[]'::jsonb)
+               AND child_rule_ids IS NOT NULL
+               AND child_rule_ids != '[]'::jsonb
+        $sql$;
+    END IF;
+END $$;
 
 -- Garantir que logic tenha valor padrão em todas as linhas
 UPDATE compound_rules
@@ -39,17 +59,47 @@ ALTER TABLE compound_rules
 -- ── 2. ModelRegistry — unificar is_active, artifact_uri, training_rows ────────
 
 -- Sincronizar antes de remover aliases
-UPDATE model_registry
-    SET is_active = active
-    WHERE is_active IS DISTINCT FROM active AND active IS NOT NULL;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'model_registry' AND column_name = 'active'
+    ) THEN
+        EXECUTE $sql$
+            UPDATE model_registry
+               SET is_active = active
+             WHERE is_active IS DISTINCT FROM active AND active IS NOT NULL
+        $sql$;
+    END IF;
+END $$;
 
-UPDATE model_registry
-    SET artifact_uri = artifact_path
-    WHERE artifact_uri IS NULL AND artifact_path IS NOT NULL;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'model_registry' AND column_name = 'artifact_path'
+    ) THEN
+        EXECUTE $sql$
+            UPDATE model_registry
+               SET artifact_uri = artifact_path
+             WHERE artifact_uri IS NULL AND artifact_path IS NOT NULL
+        $sql$;
+    END IF;
+END $$;
 
-UPDATE model_registry
-    SET training_rows = sample_count
-    WHERE training_rows IS NULL AND sample_count IS NOT NULL;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'model_registry' AND column_name = 'sample_count'
+    ) THEN
+        EXECUTE $sql$
+            UPDATE model_registry
+               SET training_rows = sample_count
+             WHERE training_rows IS NULL AND sample_count IS NOT NULL
+        $sql$;
+    END IF;
+END $$;
 
 -- Remover campos duplicados
 ALTER TABLE model_registry
@@ -67,10 +117,20 @@ ALTER TABLE model_registry
 -- Proteção retroativa: se alguma linha tiver name_encrypted vazio mas
 -- full_name preenchido, marcamos com sentinela para reprocessamento posterior.
 
-UPDATE players
-    SET name_encrypted = 'PENDING_MIGRATION'::bytea
-    WHERE (name_encrypted IS NULL OR length(name_encrypted) = 0)
-      AND full_name IS NOT NULL AND full_name <> '';
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'players' AND column_name = 'full_name'
+    ) THEN
+        EXECUTE $sql$
+            UPDATE players
+               SET name_encrypted = 'PENDING_MIGRATION'::bytea
+             WHERE (name_encrypted IS NULL OR length(name_encrypted) = 0)
+               AND full_name IS NOT NULL AND full_name <> ''
+        $sql$;
+    END IF;
+END $$;
 
 ALTER TABLE players
     DROP COLUMN IF EXISTS full_name;

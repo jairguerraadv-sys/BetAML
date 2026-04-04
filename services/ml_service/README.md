@@ -15,6 +15,8 @@ Docker + docker-compose OR Python 3.11+
 | `MINIO_ACCESS_KEY` | `minio` | MinIO access key |
 | `MINIO_SECRET_KEY` | `minio123` | MinIO secret key |
 | `CLICKHOUSE_HOST` | `localhost` | ClickHouse host used for training data loading |
+| `ENVIRONMENT` | `development` | Controla comportamento fail-closed de scoring e treino sintético |
+| `ML_ALLOW_SYNTHETIC_TRAINING` | unset | Reabilita treino sintético explicitamente fora de `development`/`test` |
 
 ## Running Locally
 ```bash
@@ -37,6 +39,9 @@ uvicorn main:app --host 0.0.0.0 --port 8001
 | `GET` | `/models` | List model registry entries for a tenant (`X-Tenant-Id` header required) |
 | `POST` | `/models/reload` | Invalidate in-memory model cache for a tenant |
 | `GET` | `/models/{model_id}/ab-metrics` | A/B test metrics for a specific model version |
+
+## Runtime Hardening
+In `staging` and `production`, online scoring now fails closed with HTTP 503 when no champion model is available for the tenant. Synthetic training paths are blocked by default outside `development` and `test`; override only with `ML_ALLOW_SYNTHETIC_TRAINING=true` for controlled bootstrap workflows.
 
 ## Kafka Topics
 Not applicable — this service exposes a REST API. It does not consume or produce Kafka messages directly.

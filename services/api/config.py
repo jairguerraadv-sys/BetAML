@@ -34,6 +34,11 @@ from pydantic_settings import BaseSettings
 
 _log = logging.getLogger(__name__)
 
+DEFAULT_JWT_SECRET = "dev-secret-change-me"
+DEFAULT_EPSILON_WEBHOOK_SECRET = "dev-secret-change-me"
+DEFAULT_PII_ENCRYPTION_KEY = "ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5"
+DEFAULT_INTERNAL_WEBHOOK_SECRET = "dev-webhook-secret-change-me"
+
 
 # ── Secret provider abstraction ──────────────────────────────────────────────
 def _resolve_secrets_from_provider() -> dict[str, str]:
@@ -170,10 +175,10 @@ class Settings(BaseSettings):
     # JWT
     # AVISO: altere JWT_SECRET para um valor aleatório em staging/prod.
     # Gere com: python -c "import secrets; print(secrets.token_hex(32))"
-    jwt_secret: str = "dev-secret-change-me"
+    jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
     access_token_expire_min: int = 60
-    epsilon_webhook_secret: str = "dev-secret-change-me"
+    epsilon_webhook_secret: str = DEFAULT_EPSILON_WEBHOOK_SECRET
 
     # CORS
     # Em produção, defina CORS_ALLOW_ORIGINS como lista separada por vírgula,
@@ -197,14 +202,14 @@ class Settings(BaseSettings):
     stream_processor_metrics_url: str = "http://stream-processor:8003/metrics"
 
     # Encryption key for PII (AES-256 — base64 encoded 32 bytes)
-    pii_encryption_key: str = "ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5"
+    pii_encryption_key: str = DEFAULT_PII_ENCRYPTION_KEY
 
     # Ingest DLQ
     dlq_max_retries: int = 3
 
     # Internal webhook secret (AlertManager → /internal/alerts/webhook)
     # Em produção, gere com: python -c "import secrets; print(secrets.token_hex(32))"
-    internal_webhook_secret: str = "dev-webhook-secret-change-me"
+    internal_webhook_secret: str = DEFAULT_INTERNAL_WEBHOOK_SECRET
 
     @field_validator("debug", mode="before")
     @classmethod
@@ -220,22 +225,47 @@ class Settings(BaseSettings):
             return False
         return value
 
+    @field_validator("environment", mode="before")
+    @classmethod
+    def normalize_environment(cls, value):
+        if value is None:
+            return "development"
+        return str(value).strip().lower()
+
+    @field_validator(
+        "pii_encryption_key",
+        "jwt_secret",
+        "epsilon_webhook_secret",
+        "internal_webhook_secret",
+        mode="before",
+    )
+    @classmethod
+    def reject_blank_security_secrets(cls, value):
+        if value is None or not str(value).strip():
+            raise ValueError("Security secret cannot be blank")
+        return value
+
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
         """Rejeita secrets padrão em ambientes não-dev na instanciação."""
         if self.environment not in ("development", "test"):
-            if self.jwt_secret == "dev-secret-change-me":
+            if self.jwt_secret == DEFAULT_JWT_SECRET:
                 raise ValueError(
                     "JWT_SECRET must be changed from default in staging/production. "
                     "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
                 )
-            if self.pii_encryption_key == "ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5":
+            if self.epsilon_webhook_secret == DEFAULT_EPSILON_WEBHOOK_SECRET:
+                raise ValueError(
+                    "EPSILON_WEBHOOK_SECRET must be changed from default in staging/production. "
+                    "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
+                )
+            if self.pii_encryption_key == DEFAULT_PII_ENCRYPTION_KEY:
                 raise ValueError(
                     "PII_ENCRYPTION_KEY must be changed from default in staging/production. "
                     "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(32))\". "
                     "WARNING: changing this key invalidates all encrypted CPFs in the database!"
                 )
-            if self.internal_webhook_secret == "dev-webhook-secret-change-me":
+            if self.internal_webhook_secret == DEFAULT_INTERNAL_WEBHOOK_SECRET:
                 raise ValueError(
                     "INTERNAL_WEBHOOK_SECRET must be changed from default in staging/production. "
                     "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""

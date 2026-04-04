@@ -1000,7 +1000,7 @@ def _ch_insert_features(ch_client, features: dict, feature_date) -> None:
         "avg_odds_bet_7d":            _f("avg_odds_bet_7d"),
         "win_loss_ratio_30d":         _f("win_loss_ratio_30d"),
         "avg_dep_to_wdraw_hours":     _f("avg_deposit_to_withdrawal_hours"),
-        "multi_currency_flag":        int(bool(features.get("inconsistent_currency_flag", False))),
+        "inconsistent_currency_flag": int(bool(features.get("inconsistent_currency_flag", False))),
         "chargeback_rate_30d":        _f("chargeback_rate_30d"),
         "bonus_to_real_ratio_30d":    _f("bonus_to_real_ratio_30d"),
         "cashout_ratio_7d":           _f("cashout_ratio_7d"),
@@ -1026,6 +1026,10 @@ def _persist_feature_snapshot(features: dict, feature_date) -> None:
     if not _is_uuid(resolved_player_id) and _is_uuid(tenant_id):
         try:
             with engine.connect() as conn:
+                conn.execute(
+                    sa.text("SELECT set_config('app.current_tenant', :tenant_id, true)"),
+                    {"tenant_id": str(tenant_id)},
+                )
                 mapped = conn.execute(
                     sa.text(
                         """
@@ -1058,6 +1062,10 @@ def _persist_feature_snapshot(features: dict, feature_date) -> None:
     try:
         if _is_uuid(resolved_player_id) and _is_uuid(tenant_id):
             with engine.begin() as conn:
+                conn.execute(
+                    sa.text("SELECT set_config('app.current_tenant', :tenant_id, true)"),
+                    {"tenant_id": str(tenant_id)},
+                )
                 conn.execute(
                     sa.text(
                         """

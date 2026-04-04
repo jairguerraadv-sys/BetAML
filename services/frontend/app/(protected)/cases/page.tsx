@@ -41,6 +41,7 @@ function CaseRow({ c, onClick }: { c: Case; onClick: () => void }) {
   const status   = STATUS_CONFIG[c.status]   ?? { label: c.status,   cls: 'bg-gray-100 text-gray-600' };
   const priority = PRIORITY_CONFIG[c.priority] ?? { label: c.priority, cls: 'text-gray-600' };
   const isUrgent = !!c.sla_due_at && (new Date(c.sla_due_at).getTime() - Date.now()) < 2 * 3600000;
+  const caseReference = c.reference_number || `CASE-${c.id.slice(0, 8).toUpperCase()}`;
 
   return (
     <div
@@ -59,7 +60,7 @@ function CaseRow({ c, onClick }: { c: Case; onClick: () => void }) {
           )}
         </div>
         <p className="mt-0.5 text-[10px] font-mono text-gray-400">
-          {c.reference_number} ·{' '}
+          {caseReference} ·{' '}
           {new Date(c.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
         </p>
       </div>

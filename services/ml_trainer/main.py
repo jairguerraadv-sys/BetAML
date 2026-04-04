@@ -140,9 +140,10 @@ async def retrain_isolation_forest() -> None:
                 y_labeled.append(1 if alert.label == "TRUE_POSITIVE" else 0)
 
             labeled_sample_count = len(X_labeled)
+            supervised_mode = labeled_sample_count >= 50
 
             # ── 3. Decide training mode ─────────────────────────────────────────
-            if labeled_sample_count >= 50:
+            if supervised_mode:
                 # ────────────────────────────────────────────────────────────────
                 # MODO SUPERVISIONADO: GradientBoostingClassifier
                 # Usa X e y com labels TRUE_POSITIVE=1 / FALSE_POSITIVE=0
@@ -330,12 +331,20 @@ async def retrain_isolation_forest() -> None:
                 if current_champion else 0.0
             )
 
-            # Critérios de promoção: F1 > 0.75 E sem regressão de precision > 5%
+            # Critérios de promoção: apenas treino supervisionado pode auto-promover.
+            # Treino não supervisionado continua em STAGING para revisão controlada.
             precision_regression = (
                 champion_precision > 0.0
                 and precision < champion_precision * 0.95
             )
-            is_champion = f1 > 0.75 and not precision_regression
+            is_champion = supervised_mode and f1 > 0.75 and not precision_regression
+
+            if not supervised_mode:
+                logger.info(
+                    "ml_champion_promotion_skipped",
+                    reason="unsupervised_training_requires_manual_review",
+                    model_type=model_type,
+                )
 
             if precision_regression:
                 logger.warning(

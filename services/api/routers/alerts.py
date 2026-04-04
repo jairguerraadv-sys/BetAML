@@ -244,6 +244,15 @@ async def get_alert(
     a = await db.get(Alert, alert_id)
     if not a or a.tenant_id != current_user.tenant_id:
         raise HTTPException(404, "Alerta não encontrado")
+    case_reference_number = None
+    case_status = None
+    case_title = None
+    if a.case_id:
+        case_obj = await db.get(Case, a.case_id)
+        if case_obj and case_obj.tenant_id == current_user.tenant_id:
+            case_reference_number = case_obj.reference_number
+            case_status = case_obj.status
+            case_title = case_obj.title
     return {
         "id": a.id, "severity": a.severity, "status": a.status,
         "title": a.title, "description": a.description,
@@ -254,6 +263,9 @@ async def get_alert(
         "score_breakdown": a.score_breakdown or {},
         "source_event_id": a.source_event_id,
         "case_id": a.case_id, "created_at": a.created_at,
+        "case_reference_number": case_reference_number,
+        "case_status": case_status,
+        "case_title": case_title,
         "triaged_by": a.triaged_by, "triaged_at": a.triaged_at,
         "label": a.label, "label_note": a.label_note, "labeled_at": a.labeled_at,
     }
@@ -330,6 +342,12 @@ async def link_alert_to_case(
         raise HTTPException(404, "Alerta não encontrado")
     if not c or c.tenant_id != current_user.tenant_id:
         raise HTTPException(404, "Caso não encontrado")
+    if c.player_id and a.player_id and str(c.player_id) != str(a.player_id):
+        raise HTTPException(400, "Alerta pertence a outro jogador e não pode ser vinculado a este caso")
+    if not c.player_id and a.player_id:
+        c.player_id = a.player_id
+    if not c.source_alert_id:
+        c.source_alert_id = a.id
     a.case_id = body.case_id
     await write_audit(db, current_user.tenant_id, current_user.id, "LINK_CASE", "Alert", alert_id, after={"case_id": body.case_id})
     await db.commit()

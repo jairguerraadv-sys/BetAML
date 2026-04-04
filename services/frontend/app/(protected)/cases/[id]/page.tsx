@@ -1361,6 +1361,7 @@ export default function CaseDetailPage() {
   if (!data)  return null;
 
   const c = data as CaseDetail;
+  const caseReference = c.reference_number || `CASE-${c.id.slice(0, 8).toUpperCase()}`;
 
   return (
     <div className="pb-20">
@@ -1376,7 +1377,7 @@ export default function CaseDetailPage() {
       <div className="mb-5 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-mono text-gray-400">{(c as unknown as Record<string, string>).reference_number}</p>
+            <p className="text-xs font-mono text-gray-400">{caseReference}</p>
             <h1 className="mt-0.5 text-xl font-bold text-gray-900">{c.title}</h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">

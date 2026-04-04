@@ -15,6 +15,7 @@ from sqlalchemy import func as sqlfunc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import AppRole, decrypt_pii, get_current_user, get_effective_roles, mask_cpf, require_roles, require_role, require_role_any, require_permission
+from case_refs import build_case_reference_number
 from database import get_db
 from models import Alert, Bet, Case, CaseEvent, DeviceEvent, FinancialTransaction, Notification, Player, ReportPackage, ScoringConfig, Tenant, User
 from repositories import CaseRepository
@@ -35,6 +36,16 @@ _STATUS_TRANSITIONS: dict[str, list[str]] = {
     "CLOSED":         ["OPEN"],    # allow re-opening
     "REPORTED":       [],          # terminal — no further transitions
 }
+
+
+async def _ensure_case_reference_number(db: AsyncSession, case_obj: Case) -> str:
+    reference_number = getattr(case_obj, "reference_number", None)
+    if reference_number:
+        return str(reference_number)
+    reference_number = build_case_reference_number(case_obj)
+    case_obj.reference_number = reference_number
+    db.add(case_obj)
+    return reference_number
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -418,7 +429,7 @@ async def _build_report_payload(
     final_payload = {
         "reportId": report_id,
         "tenantId": str(case_obj.tenant_id),
-        "caseNumber": str(case_obj.reference_number or case_obj.id),
+        "caseNumber": str(case_obj.reference_number or build_case_reference_number(case_obj)),
         "generatedAt": generated_at.isoformat(),
         "generatedBy": generated_by,
         "subject": subject,
@@ -603,8 +614,9 @@ async def create_case(
         "LOW":      int(sc.sla_low_hours)       if sc else 168,
     }
     c.sla_due_at = datetime.now(UTC) + timedelta(hours=_sla_hours.get(body.severity, 24))
+    reference_number = await _ensure_case_reference_number(db, c)
     await write_audit(db, current_user.tenant_id, current_user.id, "CREATE", "Case", c.id, after=body.model_dump())
-    response_payload = {"id": c.id, "title": c.title, "status": c.status}
+    response_payload = {"id": c.id, "title": c.title, "status": c.status, "reference_number": reference_number}
     await db.commit()
     try:
         await db.refresh(c)
@@ -629,11 +641,20 @@ async def list_cases(
         limit=limit,
         offset=offset,
     )
+    repo_db = getattr(repo, "db", None)
+    missing_references = False
+    if repo_db is not None:
+        for case_obj in cases:
+            if not getattr(case_obj, "reference_number", None):
+                await _ensure_case_reference_number(repo_db, case_obj)
+                missing_references = True
+        if missing_references:
+            await repo_db.commit()
     return [
         {
             "id": c.id, "title": c.title, "status": c.status, "severity": c.severity,
             "player_id": c.player_id, "assigned_to": c.assigned_to, "created_at": c.created_at,
-            "reference_number": getattr(c, "reference_number", None),
+            "reference_number": getattr(c, "reference_number", None) or build_case_reference_number(c),
             "priority": getattr(c, "priority", "MEDIUM"),
             "sla_due_at": getattr(c, "sla_due_at", None),
             "auto_created": getattr(c, "auto_created", False),
@@ -652,6 +673,9 @@ async def get_case(
     c = await repo.get_by_id(current_user.tenant_id, case_id)
     if not c:
         raise HTTPException(404, "Caso não encontrado")
+    if not getattr(c, "reference_number", None):
+        await _ensure_case_reference_number(db, c)
+        await db.commit()
     alerts = (await db.execute(select(Alert).where(Alert.case_id == case_id))).scalars().all()
     events = (await db.execute(
         select(CaseEvent).where(CaseEvent.case_id == case_id).order_by(CaseEvent.created_at)
@@ -668,7 +692,7 @@ async def get_case(
         "id": c.id, "title": c.title, "status": c.status, "severity": c.severity,
         "description": c.description, "player_id": c.player_id,
         "assigned_to": c.assigned_to, "created_at": c.created_at,
-        "reference_number": getattr(c, "reference_number", None),
+        "reference_number": getattr(c, "reference_number", None) or build_case_reference_number(c),
         "priority": getattr(c, "priority", "MEDIUM"),
         "sla_due_at": getattr(c, "sla_due_at", None),
         "auto_created": getattr(c, "auto_created", False),
@@ -791,6 +815,7 @@ async def generate_report_package(
     c = await db.get(Case, case_id)
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
+    await _ensure_case_reference_number(db, c)
     decision = body.decision or "PENDING"
     persisted_decision = _map_report_decision(decision)
     if decision == "FILE_SAR" and not body.analyst_narrative:
@@ -1009,6 +1034,12 @@ async def submit_report_package(
 
     # Marcar como FILED
     rp.status = "FILED"  # type: ignore[assignment]
+    if str(c.status) != "REPORTED":
+        c.status = "REPORTED"  # type: ignore[assignment]
+    if not c.closed_at:
+        c.closed_at = datetime.now(UTC)  # type: ignore[assignment]
+    if not c.closed_by:
+        c.closed_by = current_user.id  # type: ignore[assignment]
 
     # Registrar evento no caso
     import uuid as _uuid
@@ -1020,6 +1051,7 @@ async def submit_report_package(
         content={
             "report_package_id": rp.id,
             "tracking_id": tracking_id,
+            "case_status": c.status,
             "submitted_by": current_user.id,
             "submitted_at": datetime.now(UTC).isoformat(),
             "channel": "STUB_MANUAL",
@@ -1034,7 +1066,7 @@ async def submit_report_package(
     await write_audit(
         db, current_user.tenant_id, current_user.id,
         "SUBMIT_COAF_REPORT", "Case", case_id,
-        after={"report_package_id": rp.id, "tracking_id": tracking_id},
+        after={"report_package_id": rp.id, "tracking_id": tracking_id, "case_status": c.status},
     )
     await db.commit()
 
@@ -1421,6 +1453,13 @@ async def link_alert_to_case(
     a = await db.get(Alert, body.alert_id)
     if not a or str(a.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Alerta não encontrado")
+    if c.player_id and a.player_id and str(c.player_id) != str(a.player_id):
+        raise HTTPException(400, "Alerta pertence a outro jogador e não pode ser vinculado a este caso")
+    if not c.player_id and a.player_id:
+        c.player_id = a.player_id  # type: ignore[assignment]
+    if not c.source_alert_id:
+        c.source_alert_id = a.id  # type: ignore[assignment]
+    await _ensure_case_reference_number(db, c)
     a.case_id = case_id  # type: ignore[assignment]
     db.add(CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,
@@ -1430,6 +1469,7 @@ async def link_alert_to_case(
             "alert_id": body.alert_id,
             "alert_title": a.title,
             "severity": a.severity,
+            "case_reference_number": c.reference_number,
         },
         created_by=current_user.id,
     ))

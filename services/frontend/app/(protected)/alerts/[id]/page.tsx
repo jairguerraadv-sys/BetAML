@@ -177,7 +177,7 @@ export default function AlertDetailPage() {
           {alert.case_id && (
             <KV label="Caso vinculado" value={
               <a href={`/cases/${alert.case_id}`} className="text-brand hover:underline font-mono text-xs">
-                {alert.case_id.slice(0, 8)}…
+                {alert.case_reference_number ?? `${alert.case_id.slice(0, 8)}…`}
               </a>
             } />
           )}
@@ -377,7 +377,7 @@ export default function AlertDetailPage() {
             href={`/cases/${alert.case_id}`}
             className="rounded-lg border px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
           >
-            Ver Caso
+            {alert.case_reference_number ? `Ver ${alert.case_reference_number}` : 'Ver Caso'}
           </a>
         )}
       </div>

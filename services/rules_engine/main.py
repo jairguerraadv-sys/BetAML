@@ -251,10 +251,10 @@ async def load_macros(tenant_id: str) -> dict[str, str]:
         import sqlalchemy as sa
         with engine.connect() as conn:
             rows = conn.execute(
-                sa.text("SELECT name, expression FROM rule_macros WHERE tenant_id = :tid"),
+                sa.text("SELECT name, body_dsl FROM rule_macros WHERE tenant_id = :tid"),
                 {"tid": tenant_id},
             )
-            macros = {r.name: r.expression for r in rows}
+            macros = {r.name: r.body_dsl for r in rows}
         _rule_cache[cache_key] = macros
         _rule_cache_ts[cache_key] = now
         return macros

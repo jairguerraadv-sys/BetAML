@@ -583,6 +583,47 @@ class TestMLTrainerSupervisedPath:
         ]
         assert any("isolation_forest" in name for name in object_names)
 
+    @pytest.mark.asyncio
+    async def test_unsupervised_model_stays_staging_even_with_high_f1(self):
+        labeled = []
+        all_alerts = [_unlabeled_alert() for _ in range(60)]
+
+        def cfg_labeled(r):
+            r.scalars.return_value.all.return_value = labeled
+
+        def cfg_all(r):
+            r.scalars.return_value.all.return_value = all_alerts
+
+        def cfg_champion(r):
+            r.scalar_one_or_none.return_value = None
+
+        def cfg_admins(r):
+            r.scalars.return_value.all.return_value = []
+
+        factory, session = _session([cfg_labeled, cfg_all, cfg_champion, cfg_admins])
+        mock_models_mod = _mock_models()
+        mock_minio_mod, _ = _mock_minio()
+
+        if_inst = MagicMock()
+        if_inst.predict.side_effect = lambda X: np.full(len(X), -1)
+
+        with ExitStack() as stack:
+            _apply_patches(
+                stack,
+                session_factory=factory,
+                mock_models_mod=mock_models_mod,
+                mock_minio_mod=mock_minio_mod,
+                if_instance=if_inst,
+                f1=0.95,
+                precision=0.95,
+                recall=0.95,
+            )
+            from main import retrain_isolation_forest
+            await retrain_isolation_forest()
+
+        registry_call_kwargs = mock_models_mod.ModelRegistry.call_args.kwargs
+        assert registry_call_kwargs.get("status") == "STAGING"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TestMLTrainerNoChampion
