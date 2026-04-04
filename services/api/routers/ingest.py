@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import IngestPrincipal, get_ingest_principal, require_roles
 from config import settings
 from database import AsyncSessionLocal, get_db
+from rate_limit import limiter
 from libs.connectors import (
     EPSILON_SIGNATURE_HEADER,
     EPSILON_TIMESTAMP_HEADER,
@@ -558,6 +559,7 @@ async def _build_ingest_stream_snapshot(db: AsyncSession, tenant_id: str) -> dic
 
 
 @router.post("/ingest/event", status_code=202)
+@limiter.exempt
 async def ingest_event(
     body: IngestEventRequest,
     principal: IngestPrincipal = Depends(get_ingest_principal),
@@ -644,6 +646,7 @@ async def ingest_event(
 
 
 @router.post("/ingest/batch", status_code=202)
+@limiter.exempt
 async def ingest_batch(
     events: list[IngestEventRequest],
     principal: IngestPrincipal = Depends(get_ingest_principal),
@@ -744,6 +747,7 @@ async def ingest_batch(
 
 
 @router.post("/ingest/file", status_code=202)
+@limiter.exempt
 async def ingest_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -843,6 +847,7 @@ async def ingest_file(
 
 
 @router.post("/ingest/webhook/epsilon", status_code=202)
+@limiter.exempt
 async def ingest_epsilon_webhook(
     request: Request,
     principal: IngestPrincipal = Depends(get_ingest_principal),
@@ -1658,6 +1663,7 @@ async def ingest_websocket(websocket: WebSocket):
 
 
 @router.post("/ingest/connectors/{connector_name}/parse", status_code=202)
+@limiter.exempt
 async def parse_connector_payload(
     connector_name: str,
     file: UploadFile = File(...),
