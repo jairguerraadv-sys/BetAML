@@ -184,7 +184,7 @@ jobs:
         run: |
           docker compose -f infra/docker-compose.yml exec -T postgres \
             psql -U betaml -d betaml_dev \
-            -c "UPDATE scoring_configs SET ingest_rate_limit_tpm = GREATEST(COALESCE(ingest_rate_limit_tpm, 0), 2000);"
+            -c "UPDATE scoring_configs SET ingest_rate_limit_tpm = GREATEST(COALESCE(ingest_rate_limit_tpm, 0), 100000);"
 
       - name: Run readiness capacity smoke
         env:

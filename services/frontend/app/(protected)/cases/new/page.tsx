@@ -1,11 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useMutation } from '@tanstack/react-query';
 import { createCase, linkAlertToCase } from '@/lib/api';
 
-export default function NewCasePage() {
+function NewCasePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const linkAlertId = searchParams.get('linkAlert') ?? '';
@@ -119,5 +119,13 @@ export default function NewCasePage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function NewCasePage() {
+  return (
+    <Suspense fallback={<div className="mx-auto max-w-2xl p-4 text-sm text-gray-500">Carregando formulario...</div>}>
+      <NewCasePageContent />
+    </Suspense>
   );
 }
