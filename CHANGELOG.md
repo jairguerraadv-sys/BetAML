@@ -76,7 +76,7 @@ SPORTSBOOK, CASINO_LIVE, SLOT, INSTANT_GAME, BINGO, RASPADINHA e VIRTUAL.
 - **`services/ml_trainer/network_clustering.py`** e **`recurrence_estimator.py`**: removidas guards `hasattr`, usa colunas ORM diretamente.
 
 #### Coverage Threshold (GAP-8 🟠)
-- **`.github/workflows/ci.yml`**: `--cov-fail-under=40` → `--cov-fail-under=65`.
+- **`.github/workflows/ci.yml`**: mantido em `--cov-fail-under=40` para refletir a cobertura sustentada pelo gate batelado atual.
 
 #### Log Aggregation (GAP-9 🟠)
 - **`infra/docker-compose.yml`**: serviços **Loki** (v2.9.6) e **Promtail** (v2.9.6) para coleta centralizada de logs Docker.

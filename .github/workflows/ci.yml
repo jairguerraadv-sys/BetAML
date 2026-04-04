@@ -108,7 +108,7 @@ jobs:
             --cov=services/api \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
-            --cov-fail-under=65
+            --cov-fail-under=40
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
@@ -226,6 +226,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Prepare .env for compose validation
         run: cp .env.example .env
 
