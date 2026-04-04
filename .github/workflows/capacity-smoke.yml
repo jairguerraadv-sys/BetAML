@@ -2,8 +2,54 @@ name: Capacity Smoke
 
 "on":
   workflow_dispatch:
+    inputs:
+      locust_users:
+        description: "Numero de usuarios Locust"
+        required: false
+        default: "20"
+        type: string
+      locust_spawn_rate:
+        description: "Taxa de spawn por segundo"
+        required: false
+        default: "5"
+        type: string
+      locust_run_time:
+        description: "Duracao do teste (ex.: 120s, 5m)"
+        required: false
+        default: "120s"
+        type: string
+      min_rps:
+        description: "Minimo de requests/s aceito para POST /ingest/batch"
+        required: false
+        default: "15"
+        type: string
+      min_event_rps:
+        description: "Minimo de eventos/s aceito para POST /ingest/batch"
+        required: false
+        default: "150"
+        type: string
+      max_p95_ms:
+        description: "Maximo de p95 em ms aceito para POST /ingest/batch"
+        required: false
+        default: "2000"
+        type: string
+      max_failure_rate_pct:
+        description: "Maximo de percentual de falhas aceito"
+        required: false
+        default: "1"
+        type: string
   schedule:
     - cron: "0 3 * * 2"
+
+env:
+  LOCUST_USERS: ${{ github.event.inputs.locust_users || '20' }}
+  LOCUST_SPAWN_RATE: ${{ github.event.inputs.locust_spawn_rate || '5' }}
+  LOCUST_RUN_TIME: ${{ github.event.inputs.locust_run_time || '120s' }}
+  LOAD_MIN_RPS: ${{ github.event.inputs.min_rps || '15' }}
+  LOAD_MIN_EVENT_RPS: ${{ github.event.inputs.min_event_rps || '150' }}
+  LOAD_MAX_P95_MS: ${{ github.event.inputs.max_p95_ms || '2000' }}
+  LOAD_MAX_FAILURE_RATE_PCT: ${{ github.event.inputs.max_failure_rate_pct || '1' }}
+  LOAD_BATCH_SIZE: "10"
 
 jobs:
   load-smoke:
@@ -58,11 +104,45 @@ jobs:
           locust -f tests/load/locustfile.py \
             --host http://localhost:8000 \
             --headless \
-            --users 20 \
-            --spawn-rate 5 \
-            --run-time 120s \
-            --only-summary \
+            --users "${LOCUST_USERS}" \
+            --spawn-rate "${LOCUST_SPAWN_RATE}" \
+            --run-time "${LOCUST_RUN_TIME}" \
+            --csv /tmp/betaml_load_results \
+            --html /tmp/betaml_load_report.html \
             --exit-code-on-error 1
+
+      - name: Generate load summary
+        run: |
+          python tests/load/generate_report.py /tmp/betaml_load_results --output /tmp/betaml_load_summary.csv
+
+      - name: Validate SLO thresholds
+        run: |
+          python tests/load/validate_slo.py /tmp/betaml_load_results \
+            --request-name "POST /ingest/batch" \
+            --batch-size "${LOAD_BATCH_SIZE}" \
+            --min-rps "${LOAD_MIN_RPS}" \
+            --min-event-rps "${LOAD_MIN_EVENT_RPS}" \
+            --max-p95-ms "${LOAD_MAX_P95_MS}" \
+            --max-failure-rate-pct "${LOAD_MAX_FAILURE_RATE_PCT}" \
+            --evidence-out /tmp/betaml_load_slo.txt
+
+      - name: Dump docker logs on failure
+        if: failure()
+        run: docker compose -f infra/docker-compose.yml logs --no-color > /tmp/capacity-smoke-docker-logs.txt || true
+
+      - name: Upload capacity smoke artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-capacity-smoke
+          path: |
+            /tmp/betaml_load_results_*.csv
+            /tmp/betaml_load_report.html
+            /tmp/betaml_load_summary.csv
+            /tmp/betaml_load_slo.txt
+            /tmp/capacity-smoke-docker-logs.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Stop services
         if: always()

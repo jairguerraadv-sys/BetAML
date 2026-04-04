@@ -153,21 +153,36 @@ docker compose -f infra/docker-compose.yml exec -T postgres \
 
 ## 4. Onboarding de novo tenant
 
-### 4.1 O que é criado automaticamente
+### 4.1 Bootstrap controlado de ambiente
 
-Ao iniciar a API com `docker compose up api`, o `seeds.py` verifica se já há
-tenants e, se não houver, cria:
+O `seeds.py` nao deve mais ser assumido como passo implicito de startup fora de `development` e `test`.
+No compose local, o auto-seed so roda em `development`/`test` por padrao ou quando `API_AUTO_SEED=true` for definido explicitamente.
 
-- 2 tenants de demonstração (`OperadorA`, `OperadorB`)
+Quando executado de forma controlada, o bootstrap cria:
+
+- 2 tenants de demonstracao (`OperadorA`, `OperadorB`)
 - 3 usuários por tenant (admin, analyst, auditor)
 - 50 players sintéticos com cenários PLD
 - 13 regras DSL default (incluindo `Incompatibilidade renda/volume 30d`)
 - 1 `ScoringConfig` por tenant
 
+Execucao manual:
+
+```bash
+cd services/api
+python seeds.py
+```
+
+Execucao explicita via compose:
+
+```bash
+API_AUTO_SEED=true docker compose -f infra/docker-compose.yml up api
+```
+
 ### 4.2 Criar tenant de produção via API
 
 ```bash
-# 1. Fazer login como superadmin (tenant bootstrap ou ADMIN global)
+# 1. Fazer login com principal bootstrap criado de forma controlada (seed manual ou provisionamento administrativo equivalente)
 TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin_a","password":"admin123"}' | jq -r .access_token)
@@ -242,6 +257,45 @@ curl -s -X POST "http://localhost:8000/admin/api-keys" \
 ---
 
 ## 5. Rollout de nova versão
+
+### 5.0 Disparo seguro dos workflows de readiness
+
+Nao envie senha E2E por `workflow_dispatch`. O workflow manual usa `secrets.E2E_PASSWORD`
+e `vars.E2E_USERNAME` por padrao; o username pode ser sobrescrito sem expor segredo.
+
+Disparar capacity smoke manual:
+
+```bash
+bash scripts/dispatch_capacity_smoke.sh \
+  --users 40 \
+  --spawn-rate 10 \
+  --run-time 180s \
+  --min-rps 30 \
+  --min-event-rps 300
+```
+
+Disparar release readiness manual:
+
+```bash
+bash scripts/dispatch_release_readiness.sh \
+  --backup-reference "2026-04-04T07:00Z betaml-backups/postgres/postgres_20260404T070000Z.sql.gz" \
+  --rollback-target "helm revision 42" \
+  --oncall-owner "ops-primary" \
+  --capacity-users 20 \
+  --capacity-spawn-rate 5 \
+  --capacity-run-time 120s
+```
+
+Observacao operacional:
+- os wrappers usam `env -u GITHUB_TOKEN gh ...` para evitar que o token de integracao ativo no Codespace atrapalhe o dispatch quando houver PAT local com escopo `workflow`.
+- antes do corte, rode `bash scripts/check_github_actions_readiness.sh` e confirme `github_actions_readiness=PASS`.
+- antes do dispatch, rode `bash scripts/check_github_workflow_sync.sh` e confirme `github_workflow_sync=PASS`; se falhar, o remoto ainda nao recebeu a versao atual de `.github/workflows/*.yml`.
+- se faltar configuracao, use:
+
+```bash
+env -u GITHUB_TOKEN gh variable set E2E_USERNAME --repo jairguerraadv-sys/BetAML --body "analyst_a"
+printf '%s' 'senha-e2e-aqui' | env -u GITHUB_TOKEN gh secret set E2E_PASSWORD --repo jairguerraadv-sys/BetAML
+```
 
 ### 5.1 Deploy zero-downtime com Helm
 
@@ -358,11 +412,33 @@ curl -sf -H "Authorization: Bearer $TOKEN" \
 # Verificar versão do schema Alembic
 cd services/api
 DATABASE_URL="$DATABASE_URL" alembic current
+
+# Preflight operacional com evidência anexável
+cd /workspaces/BetAML
+bash scripts/readiness_preflight.sh --evidence-out /tmp/betaml-readiness-preflight.txt
 ```
 
 ---
 
 ## 8. Rollback
+
+Antes de qualquer rollback:
+
+- congelar novos deploys e registrar o horario de inicio do incidente;
+- identificar a revisao alvo (Helm revision ou tag da imagem anterior);
+- referenciar o ultimo backup valido e confirmar se o problema e apenas aplicacao ou tambem schema/dados;
+- se houver risco de perda de dados, executar restore drill em ambiente isolado antes de restaurar producao.
+
+Use rollback de aplicacao quando a migracao for retrocompativel e o defeito estiver em codigo/configuracao.
+Use restore apenas para corrupcao de dados, migracao nao retrocompativel ou perda de artefatos.
+
+Restore drill recomendado antes de qualquer restauracao produtiva:
+
+```bash
+bash scripts/restore_drill.sh \
+  --backup-object betaml-backups/postgres/postgres_YYYYMMDDTHHMMSSZ.sql.gz \
+  --evidence-out /tmp/betaml-restore-drill.txt
+```
 
 ### 8.1 Rollback Alembic (schema)
 
@@ -400,6 +476,19 @@ docker compose -f infra/docker-compose.yml up -d --no-deps \
   -e API_IMAGE_TAG=v2.3.0 api
 ```
 
+### 8.4 Validacao pos-rollback
+
+```bash
+curl -sf http://localhost:8000/health/live  && echo "live OK"
+curl -sf http://localhost:8000/health/ready && echo "ready OK"
+bash scripts/readiness_preflight.sh --evidence-out /tmp/betaml-rollback-preflight.txt
+```
+
+Rollback so e considerado concluido depois de:
+- probes `live` e `ready` verdes;
+- smoke minimo de login, alertas e casos sem regressao;
+- registro do horario de rollback e da revisao efetivamente restaurada.
+
 ---
 
 ## 9. Variáveis de ambiente obrigatórias
@@ -426,6 +515,7 @@ docker compose -f infra/docker-compose.yml up -d --no-deps \
 ### Deploy de nova versão
 
 - [ ] `git pull` + verificar CHANGELOG.md
+- [ ] `bash scripts/readiness_preflight.sh --evidence-out /tmp/betaml-readiness-preflight.txt`
 - [ ] `scripts/postgres_migrate_existing.sh --dry-run` — revisar SQL
 - [ ] `alembic upgrade head` em staging primeiro
 - [ ] Testes de smoke: `pytest tests/unit -x -q`

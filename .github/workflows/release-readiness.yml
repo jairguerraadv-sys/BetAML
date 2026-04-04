@@ -5,11 +5,54 @@ name: Release Readiness
     inputs:
       e2e_username:
         description: "Usuario para smoke E2E"
+        required: false
+        type: string
+      backup_reference:
+        description: "Referencia do ultimo backup valido (timestamp + bucket/caminho)"
         required: true
         type: string
-      e2e_password:
-        description: "Senha para smoke E2E"
+      rollback_target:
+        description: "Revisao alvo de rollback (Helm revision, tag ou imagem)"
         required: true
+        type: string
+      oncall_owner:
+        description: "Responsavel on-call pela janela de go-live"
+        required: true
+        type: string
+      capacity_users:
+        description: "Usuarios do Locust no smoke de capacidade do readiness"
+        required: true
+        default: "20"
+        type: string
+      capacity_spawn_rate:
+        description: "Spawn rate do Locust no smoke de capacidade do readiness"
+        required: true
+        default: "5"
+        type: string
+      capacity_run_time:
+        description: "Duracao do smoke de capacidade no readiness"
+        required: true
+        default: "120s"
+        type: string
+      capacity_min_rps:
+        description: "Minimo de requests/s aceito para POST /ingest/batch no readiness"
+        required: true
+        default: "15"
+        type: string
+      capacity_min_event_rps:
+        description: "Minimo de eventos/s aceito para POST /ingest/batch no readiness"
+        required: true
+        default: "150"
+        type: string
+      capacity_max_p95_ms:
+        description: "Maximo de p95 em ms aceito para POST /ingest/batch no readiness"
+        required: true
+        default: "2000"
+        type: string
+      capacity_max_failure_rate_pct:
+        description: "Maximo de percentual de falhas aceito no readiness"
+        required: true
+        default: "1"
         type: string
 
 env:
@@ -17,6 +60,16 @@ env:
   NODE_VERSION: "20"
   BASE_URL: "http://localhost:3000"
   E2E_API_URL: "http://localhost:8000"
+  BACKUP_REFERENCE: ${{ github.event.inputs.backup_reference }}
+  ROLLBACK_TARGET: ${{ github.event.inputs.rollback_target }}
+  ONCALL_OWNER: ${{ github.event.inputs.oncall_owner }}
+  CAPACITY_USERS: ${{ github.event.inputs.capacity_users }}
+  CAPACITY_SPAWN_RATE: ${{ github.event.inputs.capacity_spawn_rate }}
+  CAPACITY_RUN_TIME: ${{ github.event.inputs.capacity_run_time }}
+  CAPACITY_MIN_RPS: ${{ github.event.inputs.capacity_min_rps }}
+  CAPACITY_MIN_EVENT_RPS: ${{ github.event.inputs.capacity_min_event_rps }}
+  CAPACITY_MAX_P95_MS: ${{ github.event.inputs.capacity_max_p95_ms }}
+  CAPACITY_MAX_FAILURE_RATE_PCT: ${{ github.event.inputs.capacity_max_failure_rate_pct }}
 
 jobs:
   readiness:
@@ -84,20 +137,41 @@ jobs:
           docker compose -f infra/docker-compose.yml up -d \
             postgres redis minio clickhouse redpanda topic-init api frontend stream-processor rules-engine ml-service
 
-      - name: Wait for API and frontend health
+      - name: Run operational preflight and capture evidence
         run: |
-          for i in $(seq 1 40); do
-            curl -sf http://localhost:8000/health && break
-            echo "Waiting for API... ($i/40)" && sleep 3
-          done
+          bash scripts/readiness_preflight.sh \
+            --compose-file infra/docker-compose.yml \
+            --api-url http://localhost:8000 \
+            --frontend-url http://localhost:3000 \
+            --evidence-out /tmp/release-readiness-preflight.txt
 
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:3000 && break
-            echo "Waiting for frontend... ($i/30)" && sleep 3
-          done
+      - name: Prepare restore drill fixture
+        run: |
+          set -euo pipefail
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+          mkdir -p /tmp/betaml-restore-drill
+          docker compose -f infra/docker-compose.yml exec -T postgres \
+            pg_dump -U betaml betaml_dev | gzip -c > "/tmp/betaml-restore-drill/postgres_${TS}.sql.gz"
+          printf 'restore-drill artifact %s\n' "$TS" > /tmp/betaml-restore-drill/probe.txt
+          docker run --rm \
+            --add-host host.docker.internal:host-gateway \
+            --entrypoint /bin/sh \
+            -v /tmp/betaml-restore-drill:/work \
+            minio/mc:RELEASE.2024-10-29T15-34-59Z \
+            -c 'mc alias set backup "$1" "$2" "$3" >/dev/null \
+              && mc mb --ignore-existing backup/betaml-backups >/dev/null \
+              && mc cp "/work/postgres_${4}.sql.gz" "backup/betaml-backups/postgres/postgres_${4}.sql.gz" >/dev/null \
+              && mc cp /work/probe.txt "backup/betaml-backups/minio/${4}/probe.txt" >/dev/null' \
+            sh http://host.docker.internal:9000 minio minio123 "$TS"
+          echo "RESTORE_DRILL_TIMESTAMP=$TS" >> "$GITHUB_ENV"
 
-      - name: Validate legacy migration dry-run
-        run: bash scripts/postgres_migrate_existing.sh --dry-run
+      - name: Run restore drill and capture evidence
+        run: |
+          bash scripts/restore_drill.sh \
+            --backup-object "betaml-backups/postgres/postgres_${RESTORE_DRILL_TIMESTAMP}.sql.gz" \
+            --backup-timestamp "${RESTORE_DRILL_TIMESTAMP}" \
+            --drop-restore-db \
+            --evidence-out /tmp/release-readiness-restore-drill.txt
 
       - name: Run external validation integration smoke
         env:
@@ -105,6 +179,33 @@ jobs:
           API_URL: "http://localhost:8000"
         run: |
           pytest -q tests/integration/test_new_endpoints.py -k "TestExternalValidationEndpoints" --tb=short
+
+      - name: Run readiness capacity smoke
+        run: |
+          locust -f tests/load/locustfile.py \
+            --host http://localhost:8000 \
+            --headless \
+            --users "${CAPACITY_USERS}" \
+            --spawn-rate "${CAPACITY_SPAWN_RATE}" \
+            --run-time "${CAPACITY_RUN_TIME}" \
+            --csv /tmp/release-readiness-load \
+            --html /tmp/release-readiness-load.html \
+            --exit-code-on-error 1
+
+      - name: Generate readiness capacity summary
+        run: |
+          python tests/load/generate_report.py /tmp/release-readiness-load --output /tmp/release-readiness-load-summary.csv
+
+      - name: Validate readiness capacity thresholds
+        run: |
+          python tests/load/validate_slo.py /tmp/release-readiness-load \
+            --request-name "POST /ingest/batch" \
+            --batch-size 10 \
+            --min-rps "${CAPACITY_MIN_RPS}" \
+            --min-event-rps "${CAPACITY_MIN_EVENT_RPS}" \
+            --max-p95-ms "${CAPACITY_MAX_P95_MS}" \
+            --max-failure-rate-pct "${CAPACITY_MAX_FAILURE_RATE_PCT}" \
+            --evidence-out /tmp/release-readiness-capacity.txt
 
       - name: Install Playwright deps
         working-directory: e2e
@@ -116,7 +217,7 @@ jobs:
         working-directory: e2e
         run: |
           if [ -z "${E2E_USERNAME}" ] || [ -z "${E2E_PASSWORD}" ]; then
-            echo "e2e_username/e2e_password nao informados no workflow_dispatch." >&2
+            echo "Credenciais E2E ausentes. Configure vars.E2E_USERNAME e secrets.E2E_PASSWORD ou informe apenas e2e_username." >&2
             exit 1
           fi
           cat > .env.e2e <<EOF
@@ -132,8 +233,8 @@ jobs:
           E2E_AUDITOR_PASSWORD=${E2E_AUDITOR_PASSWORD}
           EOF
         env:
-          E2E_USERNAME: ${{ github.event.inputs.e2e_username }}
-          E2E_PASSWORD: ${{ github.event.inputs.e2e_password }}
+          E2E_USERNAME: ${{ github.event.inputs.e2e_username || vars['E2E_USERNAME'] }}
+          E2E_PASSWORD: ${{ secrets['E2E_PASSWORD'] }}
           E2E_ADMIN_USERNAME: admin_a
           E2E_ADMIN_PASSWORD: admin123
           E2E_SECONDARY_ADMIN_USERNAME: admin_b
@@ -165,6 +266,18 @@ jobs:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: readiness-security.xml
         run: npm run test:security -- --reporter=html,junit
 
+      - name: Evaluate go/no-go decision
+        run: |
+          bash scripts/release_decision_gate.sh \
+            --preflight-evidence /tmp/release-readiness-preflight.txt \
+            --restore-evidence /tmp/release-readiness-restore-drill.txt \
+            --capacity-evidence /tmp/release-readiness-capacity.txt \
+            --junit-dir e2e/test-results-readiness \
+            --backup-reference "${BACKUP_REFERENCE}" \
+            --rollback-target "${ROLLBACK_TARGET}" \
+            --oncall-owner "${ONCALL_OWNER}" \
+            --evidence-out /tmp/release-readiness-decision.txt
+
       - name: Upload readiness Playwright report
         uses: actions/upload-artifact@v4
         if: always()
@@ -193,6 +306,46 @@ jobs:
         with:
           name: artifact-readiness-docker-logs
           path: /tmp/release-readiness-docker-logs.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload readiness preflight evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-readiness-preflight
+          path: /tmp/release-readiness-preflight.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload readiness restore drill evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-readiness-restore-drill
+          path: /tmp/release-readiness-restore-drill.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload readiness capacity evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-readiness-capacity-smoke
+          path: |
+            /tmp/release-readiness-load_*.csv
+            /tmp/release-readiness-load.html
+            /tmp/release-readiness-load-summary.csv
+            /tmp/release-readiness-capacity.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload readiness go-no-go decision
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-readiness-go-no-go
+          path: /tmp/release-readiness-decision.txt
           if-no-files-found: ignore
           retention-days: 14
 
