@@ -47,10 +47,12 @@ services:
       - ./migration_v27.sql:/docker-entrypoint-initdb.d/27-migration.sql
       - ./migration_v28.sql:/docker-entrypoint-initdb.d/28-migration.sql
       - ./migration_v29.sql:/docker-entrypoint-initdb.d/29-migration.sql
+      - ./migration_v30.sql:/docker-entrypoint-initdb.d/30-migration.sql
+      - ./migration_v31.sql:/docker-entrypoint-initdb.d/31-migration.sql
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U betaml"]
+        test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER:-betaml}\" -d \"$${POSTGRES_DB:-betaml_dev}\""]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -161,12 +163,20 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        for topic in raw.players raw.transactions raw.bets raw.device_events \
-                     canonical.players canonical.transactions canonical.bets canonical.device_events \
-                     features.player_daily scoring.alerts cases.events ingest.jobs; do
-          rpk topic create $$topic --brokers redpanda:29092 --partitions 6 --replicas 1 2>/dev/null || true
-        done
-        echo "Tópicos criados."
+          for topic in raw.players raw.transactions raw.bets raw.device_events \
+                       canonical.players canonical.transactions canonical.bets canonical.device_events \
+                       scoring.alerts cases.events ingest.jobs; do
+            rpk topic create $$topic --brokers redpanda:29092 --partitions 6 --replicas 1 2>/dev/null || true
+          done
+
+          for topic in canonical.kyc_events canonical.responsible_gambling_events canonical.account_status_changes \
+                       features.player_daily ingest.jobs.reprocess feedback.labels \
+                       canonical.transactions.dlq canonical.bets.dlq canonical.device_events.dlq \
+                       canonical.kyc_events.dlq canonical.responsible_gambling_events.dlq canonical.account_status_changes.dlq \
+                       ingest.jobs.dlq ingest.jobs.reprocess.dlq; do
+            rpk topic create $$topic --brokers redpanda:29092 --partitions 1 --replicas 1 2>/dev/null || true
+          done
+          echo "Tópicos criados."
     networks: [betaml-net]
     restart: "no"
 
@@ -220,7 +230,16 @@ services:
       bash -c "set -euo pipefail; \
       APP_DATABASE_URL=\"$$DATABASE_URL\"; \
       SEED_DATABASE_URL=\"postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@postgres:5432/$$POSTGRES_DB\"; \
-      DATABASE_URL=\"$$SEED_DATABASE_URL\" python seeds.py; \
+      AUTO_SEED=\"$${API_AUTO_SEED:-}\"; \
+      if [ -z \"$$AUTO_SEED\" ]; then \
+        if [ \"$$ENVIRONMENT\" = \"development\" ] || [ \"$$ENVIRONMENT\" = \"test\" ]; then AUTO_SEED=true; else AUTO_SEED=false; fi; \
+      fi; \
+      if [ \"$$AUTO_SEED\" = \"true\" ]; then \
+        echo 'Running API seed bootstrap'; \
+        DATABASE_URL=\"$$SEED_DATABASE_URL\" python seeds.py; \
+      else \
+        echo 'Skipping API seed bootstrap'; \
+      fi; \
       DATABASE_URL=\"$$APP_DATABASE_URL\" uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=2).read()"]

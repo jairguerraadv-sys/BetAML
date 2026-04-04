@@ -80,7 +80,7 @@ jobs:
           docker compose -f infra/docker-compose.yml up -d postgres
 
           for i in $(seq 1 80); do
-            docker compose -f infra/docker-compose.yml exec -T postgres pg_isready -U betaml >/dev/null 2>&1 && break
+              docker compose -f infra/docker-compose.yml exec -T postgres pg_isready -U betaml -d betaml_dev >/dev/null 2>&1 && break
             echo "Waiting for postgres... ($i/80)"
             sleep 3
           done

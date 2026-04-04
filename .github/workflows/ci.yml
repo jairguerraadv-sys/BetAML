@@ -226,7 +226,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+                    if docker compose -f infra/docker-compose.yml exec -T postgres pg_isready -U betaml -d betaml_dev >/dev/null 2>&1; then
 
       - name: Prepare .env for compose validation
         run: cp .env.example .env
