@@ -7,6 +7,31 @@ test.describe('Ingest Connectors', () => {
     const session = await apiLoginAsAdmin(request);
     const headers = authHeaders(session.access_token);
 
+    const mappingResponse = await request.post(`${API_URL}/mappings`, {
+      headers,
+      data: {
+        name: `Gamma strict ${Date.now()}`,
+        source_system: 'ConnectorGamma',
+        entity_type: 'TRANSACTION',
+        format: 'json',
+        config_json: {
+          source_system: 'ConnectorGamma',
+          entity_type: 'TRANSACTION',
+          fields: [
+            { target: 'external_transaction_id', source: 'event_id', transform: 'copy', required: true },
+            { target: 'player_cpf', source: 'external_player_id', transform: 'copy', required: true },
+            { target: 'type', source: 'transaction_type', transform: 'copy', required: true },
+            { target: 'amount', source: 'amount', transform: 'coerceDecimal', required: true },
+            { target: 'currency', source: 'currency', transform: 'copy', required: true },
+            { target: 'occurred_at', source: 'occurred_at', transform: 'parseDate', required: true },
+          ],
+        },
+        change_notes: 'Strict gamma mapping for e2e connector failures',
+      },
+    });
+    expect(mappingResponse.ok()).toBeTruthy();
+    const mapping = await mappingResponse.json() as { id: string };
+
     const xmlPayload = [
       '<Events>',
       '  <Transaction>',
@@ -22,7 +47,7 @@ test.describe('Ingest Connectors', () => {
       '    <EventId>gamma-bad-1</EventId>',
       '    <PlayerId>CPF-GAMMA-2</PlayerId>',
       '    <Type>DEPOSIT</Type>',
-      '    <Amount currency="BRL">-25.00</Amount>',
+      '    <Amount currency="BRL">not-a-number</Amount>',
       '    <Timestamp>2026-03-20T10:05:00Z</Timestamp>',
       '    <Instrument><Type>PIX</Type><Token>pix-gamma-bad</Token></Instrument>',
       '    <DeviceId>dev-gamma-2</DeviceId>',
@@ -34,6 +59,7 @@ test.describe('Ingest Connectors', () => {
       headers,
       multipart: {
         entity_type: 'TRANSACTION',
+        mapping_config_id: mapping.id,
         file: {
           name: `gamma-${Date.now()}.xml`,
           mimeType: 'application/xml',
@@ -86,6 +112,31 @@ test.describe('Ingest Connectors', () => {
     const session = await apiLoginAsAdmin(request);
     const headers = authHeaders(session.access_token);
 
+    const mappingResponse = await request.post(`${API_URL}/mappings`, {
+      headers,
+      data: {
+        name: `Delta strict ${Date.now()}`,
+        source_system: 'ConnectorDelta',
+        entity_type: 'TRANSACTION',
+        format: 'json',
+        config_json: {
+          source_system: 'ConnectorDelta',
+          entity_type: 'TRANSACTION',
+          fields: [
+            { target: 'external_transaction_id', source: 'id', transform: 'copy', required: true },
+            { target: 'player_cpf', source: 'uid', transform: 'copy', required: true },
+            { target: 'type', source: 'evt_type', transform: 'copy', required: true },
+            { target: 'amount', source: 'val', transform: 'coerceDecimal', required: true },
+            { target: 'currency', source: 'ccy', transform: 'copy', required: true },
+            { target: 'occurred_at', source: 'ts', transform: 'parseDate', required: true },
+          ],
+        },
+        change_notes: 'Strict delta mapping for e2e connector failures',
+      },
+    });
+    expect(mappingResponse.ok()).toBeTruthy();
+    const mapping = await mappingResponse.json() as { id: string };
+
     const ndjsonPayload = [
       JSON.stringify({
         id: `delta-ok-${Date.now()}`,
@@ -101,7 +152,7 @@ test.describe('Ingest Connectors', () => {
         uid: 'CPF-DELTA-3',
         evt_type: 'DEPOSIT',
         ts: '2026-03-20T12:05:00Z',
-        val: -10,
+        val: 'not-a-number',
         ccy: 'BRL',
       }),
     ].join('\n');
@@ -110,6 +161,7 @@ test.describe('Ingest Connectors', () => {
       headers,
       multipart: {
         entity_type: 'TRANSACTION',
+        mapping_config_id: mapping.id,
         file: {
           name: `delta-${Date.now()}.ndjson`,
           mimeType: 'application/x-ndjson',

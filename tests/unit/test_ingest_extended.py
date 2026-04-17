@@ -583,7 +583,7 @@ async def test_parse_connector_payload_keeps_flow_when_refresh_fails():
     parse_result = MagicMock()
     parse_result.total = 1
     parse_result.failed = 0
-    parse_result.records = [{"event_id": "g-1", "external_player_id": "P-1", "transaction_type": "DEPOSIT", "amount": 100}]
+    parse_result.records = [{"event_id": "g-1", "external_player_id": "P-1", "transaction_type": "DEPOSIT", "amount": 100, "occurred_at": "2026-03-20T10:00:00Z"}]
     parse_result.errors = []
     connector = MagicMock()
     connector.parse.return_value = parse_result

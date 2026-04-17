@@ -1,5 +1,4 @@
 """routers/ingest.py — ingest event/batch/file/jobs + streaming + webhook connectors."""
-from __future__ import annotations
 
 import asyncio
 import json
@@ -37,7 +36,7 @@ from libs.connectors import (
     ConnectorEpsilon,
     get_connector,
 )
-from libs.mapping import MappingEngine, get_default_mapping
+from libs.mapping import MappingEngine, get_default_mapping, validate_canonical_ingest_payload
 from models import IngestError, IngestJob, MappingConfig, ScoringConfig, SystemFlag, User
 from utils import get_producer, redis_rate_limit
 
@@ -191,6 +190,7 @@ class ReplayIngestErrorRequest(BaseModel):
     corrected_payload: dict[str, Any]
     entity_type: Optional[str] = None
     mapping_config_id: Optional[str] = None
+    mapping_version_id: Optional[str] = None
     apply_mapping: bool = True
     resolve_original: bool = True
     note: Optional[str] = None
@@ -1230,6 +1230,7 @@ async def replay_ingest_error(
 
     entity_type = (body.entity_type or err.entity_type or "TRANSACTION").upper()
     effective_mapping_id: str | None = None
+    requested_mapping_id = body.mapping_version_id or body.mapping_config_id
     mapped_payload = dict(body.corrected_payload)
     if body.apply_mapping:
         effective_mapping_id, mapping_cfg = await _resolve_effective_mapping_config(
@@ -1237,16 +1238,16 @@ async def replay_ingest_error(
             tenant_id=str(current_user.tenant_id),
             source_system=str(err.source_system),
             entity_type=entity_type,
-            mapping_config_id=body.mapping_config_id,
+            mapping_config_id=requested_mapping_id,
         )
         try:
             mapped_payload = _apply_mapping_config(mapping_cfg, body.corrected_payload)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(400, f"Falha ao aplicar mapping no replay manual: {exc}") from exc
-    elif body.mapping_config_id:
-        mc = await db.get(MappingConfig, body.mapping_config_id)
+    elif requested_mapping_id:
+        mc = await db.get(MappingConfig, requested_mapping_id)
         if not mc or mc.tenant_id != current_user.tenant_id:
-            raise HTTPException(404, "MappingConfig não encontrado para o tenant")
+            raise HTTPException(404, "Mapping version/config não encontrada para o tenant")
         effective_mapping_id = str(mc.id)
 
     source_event_id = str(
@@ -1296,6 +1297,7 @@ async def replay_ingest_error(
             "source_event_id": source_event_id,
             "entity_type": entity_type,
             "mapping_config_id": effective_mapping_id,
+            "mapping_version_id": effective_mapping_id,
             "apply_mapping": body.apply_mapping,
             "status": "QUEUED",
             "note": body.note,
@@ -1313,6 +1315,7 @@ async def replay_ingest_error(
         "source_event_id": source_event_id,
         "ingest_error_id": err.id,
         "mapping_config_id": effective_mapping_id,
+        "mapping_version_id": effective_mapping_id,
         "mapping_applied": body.apply_mapping,
         "resolved": err.resolved,
     }
@@ -1760,6 +1763,26 @@ async def parse_connector_payload(
                     raw_payload=json.dumps(rec, ensure_ascii=False),
                     error_reason=reason,
                     error_detail={"connector": name, "stage": "mapping", "mapping_config_id": effective_mapping_id},
+                    resolved=False,
+                )
+            )
+            continue
+
+        payload_validation = validate_canonical_ingest_payload(entity_type, mapped_rec)
+        if not payload_validation.get("valid", False):
+            failed += 1
+            validation_errors = payload_validation.get("validation_errors") or ["payload incompatível com schema canônico"]
+            reason = f"validation_failed: {'; '.join(str(error) for error in validation_errors)}"
+            error_rows.append({"line": None, "reason": reason, "raw": rec})
+            db.add(
+                IngestError(
+                    tenant_id=current_user.tenant_id,
+                    ingest_job_id=job_pk,
+                    source_system=source_system,
+                    entity_type=entity_type,
+                    raw_payload=json.dumps(rec, ensure_ascii=False),
+                    error_reason=reason,
+                    error_detail={"connector": name, "stage": "validation", "mapping_config_id": effective_mapping_id},
                     resolved=False,
                 )
             )

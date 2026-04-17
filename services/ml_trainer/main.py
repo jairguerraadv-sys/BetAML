@@ -45,6 +45,15 @@ _url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
 engine = create_async_engine(_url, echo=False)
 Session = async_sessionmaker(engine, expire_on_commit=False)
 
+NON_PROD_ENVIRONMENTS = {"development", "test"}
+ML_ALLOW_SYNTHETIC_TRAINING = os.getenv("ML_ALLOW_SYNTHETIC_TRAINING", "").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+
+
+def _allow_synthetic_bootstrap() -> bool:
+    return str(settings.environment or "development").strip().lower() in NON_PROD_ENVIRONMENTS or ML_ALLOW_SYNTHETIC_TRAINING
+
 # Feature columns expected in alert.evidence["features"]
 FEATURE_COLUMNS = [
     "deposit_sum_24h",
@@ -83,6 +92,39 @@ def _extract_feature_vector(alert) -> list[float] | None:
     if not features:
         return None
     return [float(features.get(col, 0) or 0) for col in FEATURE_COLUMNS]
+
+
+def _normalize_registry_model_type(model_type: str | None) -> str:
+    raw = str(model_type or "ANOMALY").strip()
+    mapping = {
+        "structuring_detection": "STRUCTURING",
+        "network_detection": "NETWORK",
+        "recurrence_detection": "RECURRENCE",
+    }
+    return mapping.get(raw.lower(), raw.upper())[:20] or "ANOMALY"
+
+
+async def _resolve_registry_tenant_id(db, tenant_id: str | None = None) -> str | None:
+    explicit_tenant_id = str(tenant_id or "").strip()
+    if explicit_tenant_id and explicit_tenant_id.upper() != "ALL":
+        return explicit_tenant_id
+
+    from models import Tenant  # noqa: PLC0415
+
+    tenant_ids = [
+        str(item)
+        for item in (
+            await db.execute(
+                select(Tenant.id)
+                .where(Tenant.active.is_(True))
+                .order_by(Tenant.created_at.asc())
+                .limit(2)
+            )
+        ).scalars().all()
+    ]
+    if len(tenant_ids) == 1:
+        return tenant_ids[0]
+    return None
 
 
 async def retrain_isolation_forest() -> None:
@@ -316,20 +358,32 @@ async def retrain_isolation_forest() -> None:
             logger.info("ml_metrics_persisted", filename=metrics_filename, run_id=run_id)
 
             # ── 6. Registra no model_registry ───────────────────────────────────
-            # Busca champion atual para comparação de regressão de qualidade
-            current_champion = (
-                await db.execute(
-                    select(ModelRegistry)
-                    .where(ModelRegistry.status == "champion")
-                    .order_by(ModelRegistry.trained_at.desc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
+            registry_tenant_id = await _resolve_registry_tenant_id(db)
+            current_champion = None
+            champion_precision = 0.0
+            if registry_tenant_id:
+                current_champion = (
+                    await db.execute(
+                        select(ModelRegistry)
+                        .where(
+                            ModelRegistry.tenant_id == registry_tenant_id,
+                            ModelRegistry.status == "champion",
+                        )
+                        .order_by(ModelRegistry.trained_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
 
-            champion_precision = (
-                (current_champion.metrics or {}).get("precision", 0.0)
-                if current_champion else 0.0
-            )
+                champion_precision = (
+                    (current_champion.metrics or {}).get("precision", 0.0)
+                    if current_champion else 0.0
+                )
+            else:
+                logger.warning(
+                    "model_registry_entry_skipped_without_tenant",
+                    model_name=model_type,
+                    reason="multiple_or_missing_active_tenants",
+                )
 
             # Critérios de promoção: apenas treino supervisionado pode auto-promover.
             # Treino não supervisionado continua em STAGING para revisão controlada.
@@ -360,29 +414,32 @@ async def retrain_isolation_forest() -> None:
                 current_champion.status = "archived"
                 db.add(current_champion)
 
-            registry_entry = ModelRegistry(
-                model_name=model_type,
-                model_type="ANOMALY",
-                model_version=version,
-                algorithm=model_type,
-                artifact_uri=f"s3://{bucket}/{model_filename}",
-                training_rows=len(X_arr),
-                feature_columns=FEATURE_COLUMNS,
-                metrics={
-                    "run_id": run_id,
-                    "metrics_artifact_uri": f"s3://{bucket}/{metrics_filename}",
-                    "precision": precision,
-                    "recall": recall,
-                    "f1_score": f1,
-                    "auc_roc": auc_roc,
-                    **training_metadata,
-                },
-                status="champion" if is_champion else "STAGING",
-                is_challenger=False,
-                trained_at=datetime.now(UTC),
-            )
-            db.add(registry_entry)
-            await db.flush()  # gera ID antes de criar notificações
+            registry_entry = None
+            if registry_tenant_id:
+                registry_entry = ModelRegistry(
+                    tenant_id=registry_tenant_id,
+                    model_name=model_type,
+                    model_type="ANOMALY",
+                    model_version=version,
+                    algorithm=model_type,
+                    artifact_uri=f"s3://{bucket}/{model_filename}",
+                    training_rows=len(X_arr),
+                    feature_columns=FEATURE_COLUMNS,
+                    metrics={
+                        "run_id": run_id,
+                        "metrics_artifact_uri": f"s3://{bucket}/{metrics_filename}",
+                        "precision": precision,
+                        "recall": recall,
+                        "f1_score": f1,
+                        "auc_roc": auc_roc,
+                        **training_metadata,
+                    },
+                    status="champion" if is_champion else "STAGING",
+                    is_challenger=False,
+                    trained_at=datetime.now(UTC),
+                )
+                db.add(registry_entry)
+                await db.flush()  # gera ID antes de criar notificações
 
             # ── 7. Notifica ADMINs ──────────────────────────────────────────────
             admins = (
@@ -417,8 +474,8 @@ async def retrain_isolation_forest() -> None:
                         type="ML_TRAINING_COMPLETED",
                         title=f"Modelo {model_type} retreinado automaticamente",
                         body=body,
-                        reference_type="ModelRegistry",
-                        reference_id=str(registry_entry.id),
+                        reference_type="ModelRegistry" if registry_entry else None,
+                        reference_id=str(registry_entry.id) if registry_entry else None,
                     )
                 )
 
@@ -466,24 +523,33 @@ async def _train_structuring_detector_job() -> None:
             # Registra no model_registry
             from models import ModelRegistry, Notification, User  # noqa: PLC0415
 
-            registry_entry = ModelRegistry(
-                tenant_id=None,  # modelo global multi-tenant
-                model_name=result["model_name"],
-                model_type=result["model_type"],
-                algorithm=result["algorithm"],
-                model_version=result["model_version"],
-                artifact_uri=result["artifact_uri"],
-                training_rows=result["training_rows"],
-                feature_columns=result["feature_columns"],
-                metrics=result["metrics"],
-                status="STAGING",
-                trained_at=datetime.now(UTC),
+            registry_entry = None
+            registry_tenant_id = await _resolve_registry_tenant_id(
+                db,
+                result.get("training_metadata", {}).get("tenant_id"),
             )
-            db.add(registry_entry)
+            if registry_tenant_id:
+                registry_entry = ModelRegistry(
+                    tenant_id=registry_tenant_id,
+                    model_name=result["model_name"],
+                    model_type=_normalize_registry_model_type(result["model_type"]),
+                    algorithm=result["algorithm"],
+                    model_version=result["model_version"],
+                    artifact_uri=result["artifact_uri"],
+                    training_rows=result["training_rows"],
+                    feature_columns=result["feature_columns"],
+                    metrics=result["metrics"],
+                    status="STAGING",
+                    trained_at=datetime.now(UTC),
+                )
+                db.add(registry_entry)
+                await db.flush()
+            else:
+                logger.warning("structuring_detector_registry_skipped", reason="multiple_or_missing_active_tenants")
 
             # Auto-promove se F1 > 0.70
             f1 = result["metrics"]["f1_score"]
-            if f1 > 0.70:
+            if f1 > 0.70 and registry_entry is not None:
                 registry_entry.status = "champion"
                 logger.info("structuring_detector_promoted", f1=f1)
 
@@ -505,8 +571,8 @@ async def _train_structuring_detector_job() -> None:
                         type="ML_TRAINING_COMPLETED",
                         title="Structuring Detector retreinado",
                         body=f"Precision={result['metrics']['precision']:.3f}, F1={f1:.3f}",
-                        reference_type="ModelRegistry",
-                        reference_id=str(registry_entry.id),
+                        reference_type="ModelRegistry" if registry_entry else None,
+                        reference_id=str(registry_entry.id) if registry_entry else None,
                     )
                 )
 
@@ -545,20 +611,29 @@ async def _train_network_clustering_job() -> None:
             # Registra no model_registry
             from models import ModelRegistry, Notification, User  # noqa: PLC0415
 
-            registry_entry = ModelRegistry(
-                tenant_id=None,
-                model_name=result["model_name"],
-                model_type=result["model_type"],
-                algorithm=result["algorithm"],
-                model_version=result["model_version"],
-                artifact_uri=result["artifact_uri"],
-                training_rows=result["training_rows"],
-                feature_columns=result["feature_columns"],
-                metrics=result["metrics"],
-                status="champion",  # sempre champion (não é supervisionado)
-                trained_at=datetime.now(UTC),
+            registry_entry = None
+            registry_tenant_id = await _resolve_registry_tenant_id(
+                db,
+                result.get("training_metadata", {}).get("tenant_id"),
             )
-            db.add(registry_entry)
+            if registry_tenant_id:
+                registry_entry = ModelRegistry(
+                    tenant_id=registry_tenant_id,
+                    model_name=result["model_name"],
+                    model_type=_normalize_registry_model_type(result["model_type"]),
+                    algorithm=result["algorithm"],
+                    model_version=result["model_version"],
+                    artifact_uri=result["artifact_uri"],
+                    training_rows=result["training_rows"],
+                    feature_columns=result["feature_columns"],
+                    metrics=result["metrics"],
+                    status="champion",  # sempre champion (não é supervisionado)
+                    trained_at=datetime.now(UTC),
+                )
+                db.add(registry_entry)
+                await db.flush()
+            else:
+                logger.warning("network_clustering_registry_skipped", reason="multiple_or_missing_active_tenants")
 
             # Notifica ADMINs
             admins = (
@@ -578,8 +653,8 @@ async def _train_network_clustering_job() -> None:
                         type="ML_TRAINING_COMPLETED",
                         title="Network Clustering concluído",
                         body=f"Clusters detectados: {result['metrics']['n_clusters']}, Suspeitos: {result['metrics']['suspicious_clusters_count']}",
-                        reference_type="ModelRegistry",
-                        reference_id=str(registry_entry.id),
+                        reference_type="ModelRegistry" if registry_entry else None,
+                        reference_id=str(registry_entry.id) if registry_entry else None,
                     )
                 )
 
@@ -618,20 +693,29 @@ async def _train_recurrence_estimator_job() -> None:
             # Registra no model_registry
             from models import ModelRegistry, Notification, User  # noqa: PLC0415
 
-            registry_entry = ModelRegistry(
-                tenant_id=None,
-                model_name=result["model_name"],
-                model_type=result["model_type"],
-                algorithm=result["algorithm"],
-                model_version=result["model_version"],
-                artifact_uri=result["artifact_uri"],
-                training_rows=result["training_rows"],
-                feature_columns=result["feature_columns"],
-                metrics=result["metrics"],
-                status="champion",  # sempre champion (é scoring, não classificação)
-                trained_at=datetime.now(UTC),
+            registry_entry = None
+            registry_tenant_id = await _resolve_registry_tenant_id(
+                db,
+                result.get("training_metadata", {}).get("tenant_id"),
             )
-            db.add(registry_entry)
+            if registry_tenant_id:
+                registry_entry = ModelRegistry(
+                    tenant_id=registry_tenant_id,
+                    model_name=result["model_name"],
+                    model_type=_normalize_registry_model_type(result["model_type"]),
+                    algorithm=result["algorithm"],
+                    model_version=result["model_version"],
+                    artifact_uri=result["artifact_uri"],
+                    training_rows=result["training_rows"],
+                    feature_columns=result["feature_columns"],
+                    metrics=result["metrics"],
+                    status="champion",  # sempre champion (é scoring, não classificação)
+                    trained_at=datetime.now(UTC),
+                )
+                db.add(registry_entry)
+                await db.flush()
+            else:
+                logger.warning("recurrence_estimator_registry_skipped", reason="multiple_or_missing_active_tenants")
 
             # Notifica ADMINs
             admins = (
@@ -651,8 +735,8 @@ async def _train_recurrence_estimator_job() -> None:
                         type="ML_TRAINING_COMPLETED",
                         title="Recurrence Estimator retreinado",
                         body=f"Players suspeitos identificados: {result['metrics'].get('suspicious_count', 0)}",
-                        reference_type="ModelRegistry",
-                        reference_id=str(registry_entry.id),
+                        reference_type="ModelRegistry" if registry_entry else None,
+                        reference_id=str(registry_entry.id) if registry_entry else None,
                     )
                 )
 
@@ -679,6 +763,14 @@ async def bootstrap_model_if_needed() -> None:
     automaticamente pelo primeiro ciclo de treino diário quando houver
     histórico suficiente (>= 50 alertas com feature vectors).
     """
+    if not _allow_synthetic_bootstrap():
+        logger.warning(
+            "ml_bootstrap_blocked_outside_non_prod",
+            environment=str(settings.environment or "development").strip().lower(),
+            hint="Defina ML_ALLOW_SYNTHETIC_TRAINING=true apenas para bootstrap controlado.",
+        )
+        return
+
     try:
         from minio import Minio  # noqa: PLC0415
 
@@ -776,29 +868,34 @@ async def bootstrap_model_if_needed() -> None:
             )
 
             artifact_uri = f"s3://{bucket}/{model_filename}"
-            registry_entry = ModelRegistry(
-                model_name="IsolationForest",
-                model_type="ANOMALY",
-                model_version=version,
-                algorithm="IsolationForest",
-                artifact_uri=artifact_uri,
-                training_rows=n_samples,
-                feature_columns=FEATURE_COLUMNS,
-                metrics={
-                    "note": "Bootstrap sintético — substitua com treino real",
-                    "contamination": 0.10,
-                    "n_estimators": 50,
-                    "training_samples": n_samples,
-                    "synthetic": True,
-                },
-                # "bootstrap" indica que não é um modelo produtivo;
-                # o ml_service deve reconhecer este status como "champion fallback".
-                status="bootstrap",
-                is_active=True,
-                is_challenger=False,
-                trained_at=datetime.now(UTC),
-            )
-            db.add(registry_entry)
+            registry_tenant_id = await _resolve_registry_tenant_id(db)
+            if registry_tenant_id:
+                registry_entry = ModelRegistry(
+                    tenant_id=registry_tenant_id,
+                    model_name="IsolationForest",
+                    model_type="ANOMALY",
+                    model_version=version,
+                    algorithm="IsolationForest",
+                    artifact_uri=artifact_uri,
+                    training_rows=n_samples,
+                    feature_columns=FEATURE_COLUMNS,
+                    metrics={
+                        "note": "Bootstrap sintético — substitua com treino real",
+                        "contamination": 0.10,
+                        "n_estimators": 50,
+                        "training_samples": n_samples,
+                        "synthetic": True,
+                    },
+                    # "bootstrap" indica que não é um modelo produtivo;
+                    # o ml_service deve reconhecer este status como "champion fallback".
+                    status="bootstrap",
+                    is_active=True,
+                    is_challenger=False,
+                    trained_at=datetime.now(UTC),
+                )
+                db.add(registry_entry)
+            else:
+                logger.warning("ml_bootstrap_registry_skipped", reason="multiple_or_missing_active_tenants")
             await db.commit()
 
             logger.info(

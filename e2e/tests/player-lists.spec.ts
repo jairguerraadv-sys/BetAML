@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-import { login } from './helpers';
+import { loginAsAdmin } from './helpers';
 
 test.describe('Player Lists', () => {
   test.beforeEach(async ({ page }) => {
-    await login(page);
+    await loginAsAdmin(page);
     await page.goto('/player-lists');
   });
 

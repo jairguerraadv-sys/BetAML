@@ -1,7 +1,7 @@
 # Stream Processor
 
 ## Purpose
-Consumes canonical events from Kafka and computes rolling feature windows (1h / 24h / 7d / 30d / 90d) per player. Writes the online feature store to Redis and the Gold layer to ClickHouse, then publishes `features.player_daily` and candidate `scoring.alerts`.
+Consumes canonical events from Kafka and computes rolling feature windows (1h / 24h / 7d / 30d / 90d) per player. Writes the online feature store to Redis and the Gold layer to ClickHouse, then publishes `features.player_daily`.
 
 ## Prerequisites
 Docker + docker-compose OR Python 3.11+
@@ -31,7 +31,11 @@ python main.py
 | Consumed | `ingest.jobs` | Ingest job lifecycle signals |
 | Consumed | `ingest.jobs.reprocess` | Reprocess triggers for failed ingests |
 | Produced | `features.player_daily` | Aggregated daily feature snapshots per player |
-| Produced | `scoring.alerts` | Candidate alerts for the Alert Processor |
+
+## Current Runtime Note
+
+- O stream processor nao e mais a fonte primaria de `scoring.alerts`.
+- A materializacao de alertas hoje depende de `rules_engine` e do alert processor na API, o que ainda precisa ser consolidado.
 
 ## Feature Windows
 The processor maintains Redis Sorted Sets keyed as `betaml:{tenant_id}:txn:{player_id}` (score = Unix timestamp, TTL = 90 days) and derives:

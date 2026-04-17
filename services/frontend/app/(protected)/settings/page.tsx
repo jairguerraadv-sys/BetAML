@@ -92,7 +92,7 @@ const GROUPS: Group[] = [
         key: 'ingest_rate_limit_tpm',
         label: 'Limite de velocidade de ingestão',
         hint: 'Máximo de registros processados por minuto na entrada de dados.',
-        step: '1', min: 10, max: 10000, unit: 'reg/min',
+        step: '1', min: 10, max: 1000000, unit: 'reg/min',
       },
       {
         key: 'ml_challenger_pct',

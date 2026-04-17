@@ -40,7 +40,7 @@ Seed initial tenants and users manually when needed:
 python seeds.py
 ```
 
-In Docker Compose, automatic seeding is now disabled outside `development` and `test` by default. To force bootstrap in a controlled environment, set `API_AUTO_SEED=true` explicitly.
+In Docker Compose, automatic seeding is disabled by default in all environments. To force bootstrap in a controlled environment, set `API_AUTO_SEED=true` explicitly.
 
 ## Kafka Topics
 | Direction | Topic | Description |
@@ -53,7 +53,7 @@ In Docker Compose, automatic seeding is now disabled outside `development` and `
 | Produced | `canonical.device_events` | Normalised device events (Silver layer) |
 | Produced | `ingest.jobs` | Ingest job lifecycle events |
 | Produced | `ingest.jobs.reprocess` | Reprocess triggers |
-| Consumed | `scoring.alerts` | Alerts from Rules Engine consumed by the embedded Alert Processor |
+| Consumed | `scoring.alerts` | Optional legacy consumer. Disabled by default; the rules engine is the authoritative alert/case materializer |
 
 ## Key Endpoints
 | Method | Path | Role | Description |

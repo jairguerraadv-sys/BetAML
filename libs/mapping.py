@@ -598,6 +598,47 @@ def validate_mapped_payload_against_canonical_schema(entity_type: str, payload: 
     }
 
 
+def validate_canonical_ingest_payload(entity_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    validation = validate_mapped_payload_against_canonical_schema(entity_type, payload)
+    errors: list[str] = []
+
+    missing_groups = validation.get("missing_required_groups") or []
+    if missing_groups:
+        errors.append(f"missing_required_groups={missing_groups}")
+
+    empty_fields = validation.get("empty_required_fields") or []
+    if empty_fields:
+        errors.append(f"empty_required_fields={empty_fields}")
+
+    unknown_fields = validation.get("unknown_fields") or []
+    if unknown_fields:
+        errors.append(f"unknown_fields={unknown_fields}")
+
+    normalized_entity = entity_type.strip().upper()
+    if normalized_entity == "TRANSACTION":
+        amount = payload.get("amount")
+        try:
+            decimal_amount = Decimal(str(amount))
+        except (InvalidOperation, TypeError, ValueError):
+            errors.append(f"amount inválido: {amount!r}")
+        else:
+            if decimal_amount <= 0:
+                errors.append(f"amount deve ser maior que zero: {amount!r}")
+
+        occurred_at = payload.get("occurred_at")
+        if occurred_at not in (None, "", []):
+            try:
+                datetime.fromisoformat(str(occurred_at).replace("Z", "+00:00"))
+            except ValueError:
+                errors.append(f"occurred_at inválido: {occurred_at!r}")
+
+    return {
+        **validation,
+        "valid": validation.get("valid", False) and not errors,
+        "validation_errors": errors,
+    }
+
+
 # ──────────────────────────────────────────────────
 # New connector configs (Gamma / Delta / Epsilon)
 # ──────────────────────────────────────────────────

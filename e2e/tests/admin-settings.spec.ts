@@ -21,10 +21,10 @@ test.describe('Admin And Settings', () => {
     await loginAsAdmin(page);
     await page.goto('/settings');
 
-    await expect(page.getByRole('heading', { name: /configurações/i })).toBeVisible();
-    await expect(page.getByLabel(/peso — regras dsl/i)).toBeVisible();
+    await expect(page.getByRole('heading', { name: /parâmetros do sistema|configurações/i })).toBeVisible();
+    await expect(page.getByLabel(/condições de risco cadastradas|peso — regras dsl/i)).toBeVisible();
 
-    await page.getByRole('button', { name: /salvar configuração/i }).click();
+    await page.getByRole('button', { name: /salvar alterações|salvar configuração/i }).click();
     await expect(page.getByText(/salvo com sucesso/i)).toBeVisible({ timeout: 10_000 });
   });
 });

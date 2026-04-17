@@ -483,40 +483,29 @@ async def test_label_alert_forbidden_for_auditor():
     from routers.alerts import label_alert, AlertLabelIn
     from fastapi import BackgroundTasks, HTTPException
 
-    alert = _make_alert(tenant_id="t1")
     db = _make_db()
-
-@pytest.mark.asyncio
-async def test_label_alert_auditor_can_label_after_rbac_migration():
-    """AUDITOR (legado) agora mapeia para Operador_Analista e PODE rotular alertas.
-
-    No RBAC refatorado, AUDITOR → Operador_Analista via _LEGACY_ROLE_MAP.
-    Analistas têm permissão alerts:rw, portanto podem rotular.
-    Para um papel somente-leitura futuro, use uma conta com papel específico.
-    """
-    from routers.alerts import label_alert, AlertLabelIn
-    from fastapi import BackgroundTasks
-
-    alert = _make_alert(tenant_id="t1")
-    alert.label = None
-    db = _make_db()
-
-    async def _execute(stmt):
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = alert
-        result.scalars.return_value.all.return_value = []
-        return result
-
-    db.execute = _execute
     user = _make_user(tenant_id="t1", role="AUDITOR")
-    body = AlertLabelIn(label="FALSE_POSITIVE", label_note="auditor can label now")
+    body = AlertLabelIn(label="FALSE_POSITIVE", label_note="blocked for auditor")
     bg = BackgroundTasks()
 
-    with patch("routers.alerts.write_audit", new_callable=AsyncMock):
-        result = await label_alert(alert_id="a1", body=body, background_tasks=bg, db=db, current_user=user)
+    with pytest.raises(HTTPException) as exc:
+        await label_alert(alert_id="a1", body=body, background_tasks=bg, db=db, current_user=user)
 
-    assert result["status"] == "labeled"
-    assert alert.label == "FALSE_POSITIVE"
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_triage_alert_forbidden_for_auditor():
+    from routers.alerts import triage_alert, TriageRequest
+    from fastapi import HTTPException
+
+    db = _make_db(get_result=_make_alert(tenant_id="t1"))
+    user = _make_user(tenant_id="t1", role="AUDITOR")
+
+    with pytest.raises(HTTPException) as exc:
+        await triage_alert(alert_id="a1", body=TriageRequest(), current_user=user, db=db)
+
+    assert exc.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------

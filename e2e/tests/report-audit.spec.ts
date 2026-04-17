@@ -29,6 +29,11 @@ test.describe('Report Audit Trail', () => {
     const report = await createReportPackageViaApi(request, analystSession.access_token, caseItem.id, {
       decision: 'FILE_SAR',
       analyst_narrative: 'Narrativa regulatória gerada pela suíte E2E para validar exportações.',
+      occurrence_codes: [1407],
+      involvement_types: [49],
+      valor_premio: 12500,
+      valor_apostas: 9800,
+      informacoes_adicionais: 'Comunicação regulatória E2E para validar exportações e trilha de auditoria.',
     });
 
     const jsonResponse = await request.get(
@@ -50,8 +55,9 @@ test.describe('Report Audit Trail', () => {
     expect(xmlResponse.ok()).toBeTruthy();
     expect(xmlResponse.headers()['content-type'] ?? '').toContain('application/xml');
     const xmlBody = await xmlResponse.text();
-    expect(xmlBody).toContain('<ComunicacaoMifd');
-    expect(xmlBody).toContain('<DescricaoSuspeita>');
+    expect(xmlBody).toContain('<ComunicacaoOperacoesSuspeitas');
+    expect(xmlBody).toContain('<NarrativaAnalista>');
+    expect(xmlBody).toContain('<InformacoesAdicionais>');
 
     const auditorSession = await apiLoginAsAuditor(request);
     const auditResponse = await request.get(`${API_URL}/audit-logs`, {

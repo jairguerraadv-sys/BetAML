@@ -43,6 +43,7 @@ import {
   fetchPlayerEconCompat,
   linkAlertToCase,
   triageAlert,
+  type AlertTriageDisposition,
 } from '@/lib/api';
 
 // ── Dicionários de tradução ──────────────────────────────────────────────────
@@ -513,9 +514,17 @@ function StepTransactions({ tx }: { tx?: RelatedTransactions }) {
 
 // ── Step 4: Decisão ──────────────────────────────────────────────────────────
 
-const DISPOSITIONS = [
+const DISPOSITIONS: Array<{
+  value: AlertTriageDisposition;
+  label: string;
+  sub: string;
+  color: string;
+  activeColor: string;
+  icon: typeof ShieldAlert;
+  iconCls: string;
+}> = [
   {
-    value:       'TRUE_POSITIVE',
+    value:       'CONFIRMED',
     label:       'Confirmado: risco real',
     sub:         'A suspeita se justifica — vou abrir ou vincular um caso de investigação.',
     color:       'border-red-300 bg-red-50',
@@ -524,7 +533,7 @@ const DISPOSITIONS = [
     iconCls:     'text-red-600',
   },
   {
-    value:       'UNDER_REVIEW',
+    value:       'IN_REVIEW',
     label:       'Manter em análise',
     sub:         'Ainda preciso investigar mais antes de concluir.',
     color:       'border-yellow-300 bg-yellow-50',
@@ -551,8 +560,8 @@ function StepDecision({
   openCase,
   setOpenCase,
 }: {
-  disposition: string;
-  setDisposition: (v: string) => void;
+  disposition: AlertTriageDisposition | '';
+  setDisposition: (v: AlertTriageDisposition) => void;
   note: string;
   setNote: (v: string) => void;
   openCase: boolean;
@@ -597,7 +606,7 @@ function StepDecision({
       </div>
 
       {/* Opção de criar caso */}
-      {disposition === 'TRUE_POSITIVE' && (
+      {disposition === 'CONFIRMED' && (
         <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 transition-colors hover:bg-indigo-100">
           <input
             type="checkbox"
@@ -674,7 +683,7 @@ export default function InvestigateWizard() {
   const router      = useRouter();
 
   const [step, setStep]           = useState(1);
-  const [disposition, setDisp]    = useState('');
+  const [disposition, setDisp]    = useState<AlertTriageDisposition | ''>('');
   const [note, setNote]           = useState('');
   const [openCase, setOpenCase]   = useState(false);
   const [createdCaseId, setCaseId] = useState<string | undefined>();
@@ -717,9 +726,12 @@ export default function InvestigateWizard() {
   // ── Mutations ──────────────────────────────────────────────────────────────
   const submit = useMutation({
     mutationFn: async () => {
+      if (!disposition) {
+        throw new Error('Selecione uma disposição antes de concluir a investigação.');
+      }
       await triageAlert(alertId, disposition, note);
 
-      if (openCase && disposition === 'TRUE_POSITIVE') {
+      if (openCase && disposition === 'CONFIRMED') {
         const newCase = await createCase({
           title: alert?.title ?? 'Caso aberto via investigação',
           description: note || undefined,

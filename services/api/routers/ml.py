@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import get_current_user, require_roles
+from auth import AppRole, require_role_any
 from database import get_db
 from libs.models import Alert, AuditLog, ModelInferenceLog, ModelRegistry, ScoringConfig
 from libs.schemas import (
@@ -23,6 +23,8 @@ from libs.schemas import (
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["ml"])
+
+MODEL_REGISTRY_ROLES = [AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN]
 
 
 def _tenant_filter(model, tenant_id: str):
@@ -370,7 +372,7 @@ def _build_ab_metrics(
 async def list_models(
     model_type: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_role_any(MODEL_REGISTRY_ROLES)),
 ):
     stmt = select(ModelRegistry).where(_tenant_filter(ModelRegistry, current_user.tenant_id))
     if model_type:
@@ -384,7 +386,7 @@ async def list_models(
 async def get_model_performance_summary(
     days: int = Query(30, ge=1, le=180),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+    current_user=Depends(require_role_any(MODEL_REGISTRY_ROLES)),
 ):
     since = datetime.now(UTC) - timedelta(days=days)
 
@@ -419,7 +421,7 @@ async def get_model_performance_summary(
 async def get_model(
     model_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_role_any(MODEL_REGISTRY_ROLES)),
 ):
     model = (await db.execute(
         select(ModelRegistry).where(
@@ -437,7 +439,7 @@ async def get_model_ab_metrics(
     model_id: str,
     days: int = Query(30, ge=1, le=180),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+    current_user=Depends(require_role_any(MODEL_REGISTRY_ROLES)),
 ):
     model = (await db.execute(
         select(ModelRegistry).where(
@@ -504,7 +506,7 @@ async def get_model_ab_metrics(
 async def promote_model(
     model_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_roles("ADMIN")),
+    current_user=Depends(require_role_any(MODEL_REGISTRY_ROLES)),
 ):
     """Promove um modelo challenger para champion, arquivando o champion atual."""
     model = (await db.execute(
@@ -543,7 +545,7 @@ async def promote_model(
 async def designate_challenger(
     model_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_roles("ADMIN")),
+    current_user=Depends(require_role_any(MODEL_REGISTRY_ROLES)),
 ):
     """Designa um modelo STAGING como challenger para A/B evaluation."""
     model = (await db.execute(

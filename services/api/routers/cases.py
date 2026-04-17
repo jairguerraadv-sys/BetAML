@@ -2,7 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import io
+import json
+import mimetypes
+import os
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
@@ -13,9 +19,9 @@ from fastapi.responses import Response as FastAPIResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func as sqlfunc, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from auth import AppRole, decrypt_pii, get_current_user, get_effective_roles, mask_cpf, require_roles, require_role, require_role_any, require_permission
 from case_refs import build_case_reference_number
+from config import settings
 from database import get_db
 from models import Alert, Bet, Case, CaseEvent, DeviceEvent, FinancialTransaction, Notification, Player, ReportPackage, ScoringConfig, Tenant, User
 from repositories import CaseRepository
@@ -26,15 +32,24 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["cases"])
 
+REPORTS_BUCKET = "betaml-reports"
+EVIDENCE_BUCKET = "betaml-evidence"
+
+try:
+    MAX_EVIDENCE_UPLOAD_BYTES = max(1024, int(os.getenv("CASE_EVIDENCE_MAX_BYTES", str(20 * 1024 * 1024))))
+except ValueError:
+    MAX_EVIDENCE_UPLOAD_BYTES = 20 * 1024 * 1024
+
+
 # ── Case status transition graph ─────────────────────────────────────────────
 # Maps each status to the list of valid next statuses.
 # REPORTED is terminal: no outbound transitions allowed.
 _STATUS_TRANSITIONS: dict[str, list[str]] = {
-    "OPEN":           ["INVESTIGATING", "CLOSED"],
-    "INVESTIGATING":  ["PENDING_REVIEW", "CLOSED", "OPEN"],
+    "OPEN": ["INVESTIGATING", "CLOSED"],
+    "INVESTIGATING": ["PENDING_REVIEW", "CLOSED", "OPEN"],
     "PENDING_REVIEW": ["INVESTIGATING", "CLOSED", "REPORTED"],
-    "CLOSED":         ["OPEN"],    # allow re-opening
-    "REPORTED":       [],          # terminal — no further transitions
+    "CLOSED": ["OPEN"],
+    "REPORTED": [],
 }
 
 
@@ -46,6 +61,83 @@ async def _ensure_case_reference_number(db: AsyncSession, case_obj: Case) -> str
     case_obj.reference_number = reference_number
     db.add(case_obj)
     return reference_number
+
+
+def _safe_filename(filename: str | None) -> str:
+    raw = os.path.basename(str(filename or "evidence.bin"))
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._")
+    return sanitized or "evidence.bin"
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _sha256_json(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _build_minio_client():
+    try:
+        from minio import Minio  # noqa: PLC0415
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("minio client library is not installed") from exc
+
+    endpoint = settings.minio_endpoint.replace("http://", "").replace("https://", "")
+    secure = settings.minio_endpoint.startswith("https://")
+    return Minio(
+        endpoint,
+        access_key=settings.minio_access_key,
+        secret_key=settings.minio_secret_key,
+        secure=secure,
+    )
+
+
+def _store_binary_object(bucket: str, object_name: str, payload: bytes, content_type: str) -> str:
+    client = _build_minio_client()
+    if not client.bucket_exists(bucket):
+        client.make_bucket(bucket)
+    client.put_object(
+        bucket_name=bucket,
+        object_name=object_name,
+        data=io.BytesIO(payload),
+        length=len(payload),
+        content_type=content_type,
+    )
+    return f"minio://{bucket}/{object_name}"
+
+
+def _load_binary_object(bucket: str, object_name: str) -> bytes:
+    client = _build_minio_client()
+    response = client.get_object(bucket, object_name)
+    try:
+        return response.read()
+    finally:
+        try:
+            response.close()
+        except Exception:
+            pass
+        try:
+            response.release_conn()
+        except Exception:
+            pass
+
+
+def _serialize_evidence_event(event: CaseEvent, case_id: str) -> dict[str, Any]:
+    content = event.content if isinstance(event.content, dict) else {}
+    return {
+        "event_id": str(event.id),
+        "file_name": content.get("file_name"),
+        "description": content.get("description"),
+        "content_type": content.get("content_type"),
+        "size_bytes": int(content.get("size_bytes") or content.get("size") or 0),
+        "sha256": content.get("sha256"),
+        "storage_backend": content.get("storage_backend"),
+        "uploaded_at": content.get("uploaded_at") or (event.created_at.isoformat() if event.created_at else None),
+        "download_path": f"/cases/{case_id}/evidence/{event.id}/download",
+    }
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -418,12 +510,19 @@ async def _build_report_payload(
 
     attachments = [
         {
-            "eventId": str(event.id),
-            "fileName": event.content.get("file_name"),
-            "description": event.content.get("description"),
+            "eventId": evidence["event_id"],
+            "fileName": evidence["file_name"],
+            "description": evidence["description"],
+            "contentType": evidence["content_type"],
+            "sizeBytes": evidence["size_bytes"],
+            "sha256": evidence["sha256"],
+            "storageBackend": evidence["storage_backend"],
+            "uploadedAt": evidence["uploaded_at"],
+            "downloadPath": evidence["download_path"],
         }
         for event in events
-        if event.event_type == "EVIDENCE_UPLOAD" and isinstance(event.content, dict)
+        if event.event_type == "EVIDENCE_UPLOAD"
+        for evidence in [_serialize_evidence_event(event, str(case_obj.id))]
     ]
 
     final_payload = {
@@ -531,6 +630,13 @@ async def _build_report_payload(
         "analyst_narrative": analyst_narrative or "",
         "decision_basis": "Análise conforme COAF Res. 36/2021 e regulamentação Bacen/MF",
     }
+    final_payload["chain_of_custody"] = {
+        "report_payload_sha256": _sha256_json(final_payload),
+        "attachments_count": len(attachments),
+        "attachments_sha256": [a["sha256"] for a in attachments if a.get("sha256")],
+        "generated_at": generated_at.isoformat(),
+        "generated_by": generated_by,
+    }
     return final_payload
 
 def _suggest_analyst_narrative(case_obj: Case, alerts: list[Alert], player_info: dict) -> str:
@@ -565,7 +671,7 @@ def _suggest_analyst_narrative(case_obj: Case, alerts: list[Alert], player_info:
 @router.post("/cases", status_code=201)
 async def create_case(
     body: CaseCreate,
-    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN])),
     db: AsyncSession = Depends(get_db),
 ):
     resolved_player_id: Optional[str] = None
@@ -631,7 +737,7 @@ async def list_cases(
     player_id: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN])),
     repo: CaseRepository = Depends(get_case_repo),
 ):
     cases = await repo.list_filtered(
@@ -666,7 +772,7 @@ async def list_cases(
 @router.get("/cases/{case_id}")
 async def get_case(
     case_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN])),
     repo: CaseRepository = Depends(get_case_repo),
     db: AsyncSession = Depends(get_db),
 ):
@@ -700,6 +806,11 @@ async def get_case(
         "timeline": [
             {"id": e.id, "event_type": e.event_type, "content": e.content, "created_at": e.created_at}
             for e in events
+        ],
+        "evidence_files": [
+            _serialize_evidence_event(e, case_id)
+            for e in events
+            if e.event_type == "EVIDENCE_UPLOAD"
         ],
         "report_packages": [
             {
@@ -794,15 +905,135 @@ async def upload_evidence(
     c = await db.get(Case, case_id)
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
+
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(400, "Arquivo de evidência está vazio")
+    if len(payload) > MAX_EVIDENCE_UPLOAD_BYTES:
+        raise HTTPException(
+            413,
+            f"Arquivo excede o limite de {MAX_EVIDENCE_UPLOAD_BYTES // (1024 * 1024)} MiB para evidências.",
+        )
+
+    safe_name = _safe_filename(file.filename)
+    content_type = file.content_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+    sha256 = _sha256_bytes(payload)
+    object_name = (
+        f"cases/{current_user.tenant_id}/{case_id}/"
+        f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex}_{safe_name}"
+    )
+
+    try:
+        _store_binary_object(EVIDENCE_BUCKET, object_name, payload, content_type)
+    except Exception as exc:
+        logger.error(
+            "case_evidence_store_failed",
+            case_id=case_id,
+            tenant_id=current_user.tenant_id,
+            file_name=safe_name,
+            error=str(exc),
+        )
+        raise HTTPException(503, "Armazenamento de evidência indisponível") from exc
+
     evt = CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,
         event_type="EVIDENCE_UPLOAD",
-        content={"file_name": file.filename, "description": description, "size": 0},
+        content={
+            "file_name": safe_name,
+            "description": description,
+            "content_type": content_type,
+            "size_bytes": len(payload),
+            "sha256": sha256,
+            "storage_backend": "minio",
+            "bucket": EVIDENCE_BUCKET,
+            "object_name": object_name,
+            "uploaded_at": datetime.now(UTC).isoformat(),
+        },
         created_by=current_user.id,
     )
     db.add(evt)
+    await db.flush()
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "UPLOAD_EVIDENCE",
+        "Case",
+        case_id,
+        after={
+            "event_id": str(evt.id),
+            "file_name": safe_name,
+            "sha256": sha256,
+            "size_bytes": len(payload),
+        },
+    )
     await db.commit()
-    return {"case_id": case_id, "file_name": file.filename, "status": "uploaded"}
+    return _serialize_evidence_event(evt, case_id)
+
+
+@router.get("/cases/{case_id}/evidence/{event_id}/download", response_class=StreamingResponse)
+async def download_case_evidence(
+    case_id: str,
+    event_id: str,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, "AUDITOR"])),
+    db: AsyncSession = Depends(get_db),
+):
+    evt = await db.get(CaseEvent, event_id)
+    if not evt or str(evt.tenant_id) != str(current_user.tenant_id) or str(evt.case_id) != case_id:
+        raise HTTPException(404, "Evidência não encontrada")
+    if evt.event_type != "EVIDENCE_UPLOAD" or not isinstance(evt.content, dict):
+        raise HTTPException(404, "Evento não representa uma evidência armazenada")
+
+    bucket = str(evt.content.get("bucket") or "")
+    object_name = str(evt.content.get("object_name") or "")
+    file_name = _safe_filename(str(evt.content.get("file_name") or "evidence.bin"))
+    content_type = str(evt.content.get("content_type") or "application/octet-stream")
+    expected_sha256 = str(evt.content.get("sha256") or "")
+
+    if not bucket or not object_name:
+        raise HTTPException(404, "Evidência sem referência de armazenamento")
+
+    try:
+        payload = _load_binary_object(bucket, object_name)
+    except Exception as exc:
+        logger.error(
+            "case_evidence_download_failed",
+            case_id=case_id,
+            event_id=event_id,
+            tenant_id=current_user.tenant_id,
+            error=str(exc),
+        )
+        raise HTTPException(503, "Evidência temporariamente indisponível") from exc
+
+    actual_sha256 = _sha256_bytes(payload)
+    if expected_sha256 and expected_sha256 != actual_sha256:
+        logger.error(
+            "case_evidence_integrity_mismatch",
+            case_id=case_id,
+            event_id=event_id,
+            expected_sha256=expected_sha256,
+            actual_sha256=actual_sha256,
+        )
+        raise HTTPException(409, "Falha de integridade da evidência armazenada")
+
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "DOWNLOAD_EVIDENCE",
+        "CaseEvent",
+        event_id,
+        after={"case_id": case_id, "file_name": file_name, "sha256": actual_sha256},
+    )
+    await db.commit()
+    return StreamingResponse(
+        iter([payload]),
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{file_name}"',
+            "X-Checksum-SHA256": actual_sha256,
+        },
+    )
 
 
 @router.post("/cases/{case_id}/report-package", status_code=201)
@@ -878,29 +1109,24 @@ async def generate_report_package(
     db.add(rp)
 
     pdf_path: str | None = None
+    pdf_sha256: str | None = None
     try:
         pdf_bytes = await asyncio.get_event_loop().run_in_executor(None, _build_report_pdf, payload)
         if pdf_bytes:
-            import os as _os
-            import tempfile as _tmp
             pdf_filename = f"reports/{current_user.tenant_id}/{payload['reportId']}.pdf"
+            pdf_sha256 = _sha256_bytes(pdf_bytes)
             try:
-                from minio import Minio as _Minio
-                minio_url = _os.getenv("MINIO_URL", "minio:9000")
-                mc = _Minio(minio_url, access_key=_os.getenv("MINIO_ACCESS_KEY", "minio"),
-                            secret_key=_os.getenv("MINIO_SECRET_KEY", "minio123"), secure=False)
-                bucket = "betaml-reports"
-                if not mc.bucket_exists(bucket):
-                    mc.make_bucket(bucket)
-                import io as _io
-                mc.put_object(bucket, pdf_filename, _io.BytesIO(pdf_bytes),
-                              len(pdf_bytes), content_type="application/pdf")
-                pdf_path = f"minio://{bucket}/{pdf_filename}"
+                pdf_path = _store_binary_object(REPORTS_BUCKET, pdf_filename, pdf_bytes, "application/pdf")
+                payload["chain_of_custody"]["pdf_storage_backend"] = "minio"
             except Exception:
-                tmp_path = _os.path.join(_tmp.gettempdir(), f"{payload['reportId']}.pdf")
+                import tempfile as _tmp
+                tmp_path = os.path.join(_tmp.gettempdir(), f"{payload['reportId']}.pdf")
                 with open(tmp_path, "wb") as _f:
                     _f.write(pdf_bytes)
                 pdf_path = tmp_path
+                payload["chain_of_custody"]["pdf_storage_backend"] = "filesystem"
+            payload["chain_of_custody"]["pdf_sha256"] = pdf_sha256
+            payload["chain_of_custody"]["pdf_path"] = pdf_path
             rp.pdf_path = pdf_path  # type: ignore[assignment]
     except RuntimeError as pdf_dep_exc:
         logger.error("pdf_dependency_missing", error=str(pdf_dep_exc))
@@ -908,14 +1134,27 @@ async def generate_report_package(
     except Exception as pdf_exc:
         logger.warning("pdf_generation_failed", error=str(pdf_exc))
 
+    rp.payload = payload
+
     db.add(CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,
         event_type="REPORT_GENERATED",
-        content={"report_id": payload["reportId"], "decision": decision},
+        content={
+            "report_id": payload["reportId"],
+            "decision": decision,
+            "payload_sha256": payload.get("chain_of_custody", {}).get("report_payload_sha256"),
+            "pdf_sha256": pdf_sha256,
+            "attachments_count": payload.get("chain_of_custody", {}).get("attachments_count", 0),
+        },
         created_by=current_user.id,
     ))
     await write_audit(db, current_user.tenant_id, current_user.id, "GENERATE_REPORT", "Case", case_id,
-                      after={"report_id": payload["reportId"], "decision": decision})
+                      after={
+                          "report_id": payload["reportId"],
+                          "decision": decision,
+                          "payload_sha256": payload.get("chain_of_custody", {}).get("report_payload_sha256"),
+                          "pdf_sha256": pdf_sha256,
+                      })
     await db.commit()
     return {
         "report_package_id": rp.id, "status": rp.status,
@@ -1054,10 +1293,11 @@ async def submit_report_package(
             "case_status": c.status,
             "submitted_by": current_user.id,
             "submitted_at": datetime.now(UTC).isoformat(),
-            "channel": "STUB_MANUAL",
+            "channel": "MANUAL_PORTAL",
+            "payload_sha256": (rp.payload or {}).get("chain_of_custody", {}).get("report_payload_sha256") if isinstance(rp.payload, dict) else None,
             "note": (
-                "Submissão registrada. Quando o portal COAF disponibilizar API, "
-                "este endpoint será atualizado para envio automático."
+                "Submissão manual registrada com maker-checker e trilha de custódia preservada. "
+                "Enquanto não houver integração oficial, o envio ao portal regulatório permanece controlado fora da plataforma."
             ),
         },
         created_by=current_user.id,
@@ -1084,11 +1324,10 @@ async def submit_report_package(
         "tracking_id": tracking_id,
         "submitted_at": datetime.now(UTC).isoformat(),
         "submitted_by": current_user.id,
-        "channel": "STUB_MANUAL",
+        "channel": "MANUAL_PORTAL",
         "message": (
-            "Submissão registrada com sucesso. "
-            "Guarde o tracking_id para rastreamento. "
-            "Quando a API COAF estiver disponível, o envio será automático."
+            "Submissão manual registrada com sucesso. "
+            "Guarde o tracking_id para rastreamento e use o dossiê gerado para o protocolo regulatório controlado."
         ),
     }
 
@@ -1203,6 +1442,9 @@ async def download_report_pdf(
     Returns:
         application/pdf — bytes do relatório COAF.
     """
+    if getattr(current_user, "role", None) == "AUDITOR":
+        raise HTTPException(403, "Auditor não pode exportar PDF de relatório")
+
     rp = await db.get(ReportPackage, rp_id)
     if not rp or str(rp.tenant_id) != str(current_user.tenant_id) or str(rp.case_id) != case_id:
         raise HTTPException(404, "ReportPackage não encontrado")
@@ -1212,14 +1454,9 @@ async def download_report_pdf(
     pdf_path_str = str(rp.pdf_path)
     if pdf_path_str.startswith("minio://"):
         try:
-            from minio import Minio as _Minio
-            minio_url = _os.getenv("MINIO_URL", "minio:9000")
-            mc = _Minio(minio_url, access_key=_os.getenv("MINIO_ACCESS_KEY", "minio"),
-                        secret_key=_os.getenv("MINIO_SECRET_KEY", "minio123"), secure=False)
             parts = pdf_path_str[len("minio://"):].split("/", 1)
             bucket, key = parts[0], parts[1]
-            resp = mc.get_object(bucket, key)
-            pdf_bytes = resp.read()
+            pdf_bytes = _load_binary_object(bucket, key)
         except Exception as exc:
             logger.error("pdf_download_minio_failed", case_id=case_id, rp_id=rp_id, error=str(exc))
             raise HTTPException(503, "PDF temporariamente indisponível — tente novamente em instantes") from exc

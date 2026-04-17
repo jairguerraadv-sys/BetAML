@@ -126,7 +126,7 @@ export const ROUTE_ROLES: Array<{ pattern: RegExp; roles: AppRole[] }> = [
   { pattern: /^\/audit-logs/,    roles: ['Operador_AdminTecnico', 'Operador_Gestor', 'Operador_Analista'] },
   // Plataforma — apenas SuperAdmin
   { pattern: /^\/platform/,      roles: ['BetAML_SuperAdmin'] },
-  { pattern: /^\/model-registry/,roles: ['BetAML_SuperAdmin'] },
+  { pattern: /^\/model-registry/,roles: ['Operador_Gestor', 'Operador_AdminTecnico', 'BetAML_SuperAdmin'] },
   { pattern: /^\/feature-store/, roles: ['Operador_Gestor', 'BetAML_SuperAdmin'] },
 ];
 

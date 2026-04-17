@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import String, cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import compute_cpf_hmac, decrypt_pii, get_current_user, mask_cpf
+from auth import AppRole, compute_cpf_hmac, decrypt_pii, mask_cpf, require_role_any
 from database import get_db
 from models import Alert, Case, Player, User
 from utils import write_audit
@@ -45,7 +45,7 @@ def _query_digits(q: str) -> str:
 async def global_search(
     q: str = Query(..., min_length=2, max_length=100),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN])),
 ):
     """
     Search players, cases and alerts across the current tenant.

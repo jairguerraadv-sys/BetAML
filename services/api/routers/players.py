@@ -12,7 +12,7 @@ from sqlalchemy import case as sqla_case, func as sqlfunc, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import AppRole, compute_cpf_hmac, decrypt_pii, encrypt_pii, get_current_user, get_effective_roles, mask_cpf, require_roles, require_role, require_role_any, require_permission
+from auth import AppRole, compute_cpf_hmac, decrypt_pii, encrypt_pii, get_effective_roles, mask_cpf, require_roles, require_role, require_role_any, require_permission
 from database import get_db
 from models import Alert, Bet, Case, DeviceEvent, FinancialTransaction, Player, ScoringConfig, User
 from repositories import PlayerRepository
@@ -47,7 +47,7 @@ def _normalize_feature_history_row(columns: list[str], row: tuple) -> dict:
 async def list_players(
     limit: int = Query(50, le=200),
     offset: int = 0,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN])),
     repo: PlayerRepository = Depends(get_player_repo),
     db: AsyncSession = Depends(get_db),
 ):
@@ -77,7 +77,7 @@ async def list_players(
 @router.get("/players/{player_id}")
 async def get_player(
     player_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN])),
     repo: PlayerRepository = Depends(get_player_repo),
     db: AsyncSession = Depends(get_db),
 ):

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from sqlalchemy import text
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from config import settings
@@ -34,6 +34,18 @@ from models import (
 _url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
 engine = create_async_engine(_url, echo=False)
 Session = async_sessionmaker(engine, expire_on_commit=False)
+
+DEFAULT_SUPER_ADMIN_USERNAME = os.getenv("SUPER_ADMIN_USER", "superadmin")
+DEFAULT_SUPER_ADMIN_EMAIL = os.getenv("SUPER_ADMIN_EMAIL", f"{DEFAULT_SUPER_ADMIN_USERNAME}@betaml.dev")
+DEFAULT_SUPER_ADMIN_PASSWORD = os.getenv("SUPER_ADMIN_PASS", "superadmin123")
+
+
+def _seed_allowed() -> bool:
+    env = str(settings.environment or "development").strip().lower()
+    if env in {"development", "test"}:
+        return True
+    explicit = os.getenv("ALLOW_SYNTHETIC_SEED", os.getenv("API_AUTO_SEED", "")).strip().lower()
+    return explicit in {"1", "true", "yes", "on"}
 
 # ──────────────────────────────────────────────────
 # 12 DSL Rules (default)
@@ -190,6 +202,65 @@ USERS_TEMPLATE = [
 ]
 
 
+async def ensure_default_super_admin(db: AsyncSession) -> str | None:
+    tenant = (
+        await db.execute(
+            select(Tenant)
+            .order_by(Tenant.created_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if tenant is None:
+        return None
+
+    await db.execute(text("SELECT set_config('app.current_tenant', :tid, false)"), {"tid": str(tenant.id)})
+
+    super_admin = (
+        await db.execute(
+            select(User)
+            .where(
+                or_(
+                    User.username == DEFAULT_SUPER_ADMIN_USERNAME,
+                    User.email == DEFAULT_SUPER_ADMIN_EMAIL,
+                )
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    password_hash = hash_password(DEFAULT_SUPER_ADMIN_PASSWORD)
+
+    if super_admin is None:
+        db.add(
+            User(
+                tenant_id=tenant.id,
+                username=DEFAULT_SUPER_ADMIN_USERNAME,
+                email=DEFAULT_SUPER_ADMIN_EMAIL,
+                password_hash=password_hash,
+                role="ADMIN",
+                roles=["BetAML_SuperAdmin"],
+                active=True,
+            )
+        )
+        await db.flush()
+        print(
+            f"  SuperAdmin seed criado: {DEFAULT_SUPER_ADMIN_USERNAME} / {DEFAULT_SUPER_ADMIN_PASSWORD}"
+        )
+        return "created"
+
+    super_admin.tenant_id = tenant.id
+    super_admin.email = DEFAULT_SUPER_ADMIN_EMAIL
+    super_admin.password_hash = password_hash
+    super_admin.role = "ADMIN"
+    super_admin.roles = ["BetAML_SuperAdmin"]
+    super_admin.active = True
+    await db.flush()
+    print(
+        f"  SuperAdmin seed atualizado: {DEFAULT_SUPER_ADMIN_USERNAME} / {DEFAULT_SUPER_ADMIN_PASSWORD}"
+    )
+    return "updated"
+
+
 def random_cpf() -> str:
     return "".join([str(random.randint(0, 9)) for _ in range(11)])
 
@@ -199,7 +270,12 @@ async def seed(db: AsyncSession):
     result = await db.execute(text("SELECT COUNT(*) FROM tenants"))
     count = result.scalar()
     if count and count > 0:
-        print("Seeds já aplicados. Pulando.")
+        action = await ensure_default_super_admin(db)
+        await db.commit()
+        if action:
+            print("Seeds já aplicados. SuperAdmin garantido.")
+        else:
+            print("Seeds já aplicados. Pulando.")
         return
 
     print("Aplicando seeds...")
@@ -517,9 +593,15 @@ async def seed(db: AsyncSession):
         print("    4 alertas suspeitos + 1 case auto-criado")
         print("    ScoringConfig, 2 PlayerLists, CompoundRules criadas")
 
+    await ensure_default_super_admin(db)
+
     await db.commit()
     print("\nSeeds aplicados com sucesso!")
     print("\nCredenciais de acesso:")
+    print(
+        f"\n  Plataforma:\n"
+        f"    {DEFAULT_SUPER_ADMIN_USERNAME} / {DEFAULT_SUPER_ADMIN_PASSWORD} (SUPER_ADMIN)"
+    )
     for t in TENANTS:
         suffix = t["slug"].split("_")[1]
         print(f"\n  Tenant: {t['name']}")
@@ -529,6 +611,12 @@ async def seed(db: AsyncSession):
 
 
 async def main():
+    if not _seed_allowed():
+        raise RuntimeError(
+            "Seed sintético bloqueado fora de development/test. "
+            "Defina ALLOW_SYNTHETIC_SEED=true explicitamente para bootstrap controlado."
+        )
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -537,8 +625,12 @@ async def main():
         result = await db.execute(text("SELECT COUNT(*) FROM tenants"))
         count = result.scalar_one()
         if count > 0:
-            print(f"⚠️  Database already contains {count} tenant(s). Skipping seed to prevent duplicates.")
-            print("   To force re-seed, run: docker compose exec postgres psql -U betaml -c 'TRUNCATE TABLE tenants CASCADE'")
+            print(f"⚠️  Database already contains {count} tenant(s). Ensuring SuperAdmin seed.")
+            await ensure_default_super_admin(db)
+            await db.commit()
+            print(
+                f"   Credencial garantida: {DEFAULT_SUPER_ADMIN_USERNAME} / {DEFAULT_SUPER_ADMIN_PASSWORD} (SUPER_ADMIN)"
+            )
             return
 
         print("✓ Database empty. Running seed...")

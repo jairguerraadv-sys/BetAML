@@ -22,6 +22,14 @@ export const ADMIN_USERNAME = valueOrFallback(process.env.E2E_ADMIN_USERNAME, US
 export const ADMIN_PASSWORD = valueOrFallback(process.env.E2E_ADMIN_PASSWORD, PASSWORD);
 export const AUDITOR_USERNAME = valueOrFallback(process.env.E2E_AUDITOR_USERNAME);
 export const AUDITOR_PASSWORD = valueOrFallback(process.env.E2E_AUDITOR_PASSWORD);
+export const SUPER_ADMIN_USERNAME = valueOrFallback(
+  process.env.E2E_SUPER_ADMIN_USERNAME ?? process.env.SUPER_ADMIN_USER,
+  'superadmin',
+);
+export const SUPER_ADMIN_PASSWORD = valueOrFallback(
+  process.env.E2E_SUPER_ADMIN_PASSWORD ?? process.env.SUPER_ADMIN_PASS,
+  'superadmin123',
+);
 export const SECONDARY_ADMIN_USERNAME = valueOrFallback(SECONDARY_ADMIN_USERNAME_ENV, 'admin_b');
 export const SECONDARY_ADMIN_PASSWORD = valueOrFallback(SECONDARY_ADMIN_PASSWORD_ENV, 'admin123');
 
@@ -68,6 +76,10 @@ export async function loginAsAdmin(page: Page) {
   await loginWithCredentials(page, ADMIN_USERNAME, ADMIN_PASSWORD);
 }
 
+export async function loginAsSuperAdmin(page: Page) {
+  await loginWithCredentials(page, SUPER_ADMIN_USERNAME, SUPER_ADMIN_PASSWORD);
+}
+
 export async function loginAsAuditor(page: Page, request?: APIRequestContext) {
   const credentials = request ? await ensureAuditorCredentials(request) : { username: AUDITOR_USERNAME, password: AUDITOR_PASSWORD };
   await loginWithCredentials(page, credentials.username, credentials.password);
@@ -103,6 +115,10 @@ export async function apiLogin(request: APIRequestContext) {
 
 export async function apiLoginAsAdmin(request: APIRequestContext) {
   return apiLoginWithCredentials(request, ADMIN_USERNAME, ADMIN_PASSWORD);
+}
+
+export async function apiLoginAsSuperAdmin(request: APIRequestContext) {
+  return apiLoginWithCredentials(request, SUPER_ADMIN_USERNAME, SUPER_ADMIN_PASSWORD);
 }
 
 export async function apiLoginWithCredentials(
@@ -264,6 +280,25 @@ export async function createMappingVersionViaApi(
   return await response.json() as { id: string; name: string; version_number: number; is_current: boolean };
 }
 
+export async function rollbackMappingVersionViaApi(
+  request: APIRequestContext,
+  token: string,
+  mappingId: string,
+  versionNumber: number,
+) {
+  const response = await request.post(`${API_URL}/mappings/${mappingId}/rollback`, {
+    headers: authHeaders(token),
+    params: { version_number: String(versionNumber) },
+  });
+  expect(response.ok()).toBeTruthy();
+  return await response.json() as {
+    id: string;
+    version_number: number;
+    rollback_source_version_number: number;
+    rollback_source_mapping_id: string;
+  };
+}
+
 export async function createCaseViaApi(
   request: APIRequestContext,
   token: string,
@@ -326,6 +361,11 @@ export async function createReportPackageViaApi(
   overrides?: Partial<{
     decision: string;
     analyst_narrative: string;
+    occurrence_codes: number[];
+    involvement_types: number[];
+    valor_premio: number;
+    valor_apostas: number;
+    informacoes_adicionais: string;
   }>,
 ) {
   const response = await request.post(`${API_URL}/cases/${caseId}/report-package`, {
@@ -333,6 +373,11 @@ export async function createReportPackageViaApi(
     data: {
       decision: overrides?.decision ?? 'NO_ACTION',
       analyst_narrative: overrides?.analyst_narrative ?? 'Relatório gerado automaticamente pela suíte E2E.',
+      occurrence_codes: overrides?.occurrence_codes,
+      involvement_types: overrides?.involvement_types,
+      valor_premio: overrides?.valor_premio,
+      valor_apostas: overrides?.valor_apostas,
+      informacoes_adicionais: overrides?.informacoes_adicionais,
     },
   });
   expect(response.ok()).toBeTruthy();

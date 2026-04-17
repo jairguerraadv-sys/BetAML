@@ -90,6 +90,13 @@ def _tenant_filter(model, tenant_id: str):
     return model.tenant_id == tenant_id
 
 
+async def _set_current_tenant_context(db: AsyncSession, tenant_id: str | None) -> None:
+    await db.execute(
+        text("SELECT set_config('app.current_tenant', :tid, false)"),
+        {"tid": tenant_id or ""},
+    )
+
+
 def _normalize_source_system_alias(
     source_system: str,
     allowed_source_systems: set[str] | frozenset[str],
@@ -130,6 +137,7 @@ async def _require_target_tenant(
     *,
     tenant_id: str,
 ) -> Tenant:
+    await _set_current_tenant_context(db, None)
     tenant = await db.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(404, "Tenant não encontrado")
@@ -929,6 +937,8 @@ async def create_tenant(
     Requer role ADMIN (multi-tenant hierarchy — ADMIN de qualquer tenant pode criar tenants em dev).
     Em produção, considere restringir para SUPER_ADMIN dedicado.
     """
+    await _set_current_tenant_context(db, None)
+
     # Verificar unicidade do slug
     existing = (await db.execute(
         select(Tenant).where(Tenant.slug == body.slug)
@@ -947,10 +957,7 @@ async def create_tenant(
     )
     db.add(tenant)
     await db.flush()
-    await db.execute(
-        text("SELECT set_config('app.current_tenant', :tid, false)"),
-        {"tid": tenant.id},
-    )
+    await _set_current_tenant_context(db, tenant.id)
 
     # Criar usuário ADMIN inicial
     admin_user = User(
@@ -986,10 +993,7 @@ async def create_tenant(
     db.add(scoring_cfg)
     await db.flush()
 
-    await db.execute(
-        text("SELECT set_config('app.current_tenant', :tid, false)"),
-        {"tid": current_user.tenant_id},
-    )
+    await _set_current_tenant_context(db, current_user.tenant_id)
     await _write_audit(db, current_user.tenant_id, current_user.id,
                        "CREATE_TENANT", "Tenant", tenant.id,
                        {"slug": body.slug, "admin_username": body.admin_username})
@@ -1282,6 +1286,7 @@ async def list_tenants(
     current_user = Depends(require_role(AppRole.SUPER_ADMIN)),
 ):
     """Lista todos os tenants da plataforma (SUPER_ADMIN only)."""
+    await _set_current_tenant_context(db, None)
     result = await db.execute(select(Tenant).order_by(Tenant.created_at.desc()))
     tenants = result.scalars().all()
     out = []
@@ -1308,17 +1313,22 @@ async def update_tenant(
     current_user = Depends(require_role(AppRole.SUPER_ADMIN)),
 ):
     """Atualiza nome ou status ativo do tenant (SUPER_ADMIN only)."""
+    await _set_current_tenant_context(db, None)
     t = await db.get(Tenant, tenant_id)
     if not t:
         raise HTTPException(404, "Tenant não encontrado")
+    await _set_current_tenant_context(db, tenant_id)
     if body.name is not None:
         t.name = body.name
     if body.active is not None:
         t.active = body.active
+    await db.flush()
+    await _set_current_tenant_context(db, current_user.tenant_id)
     await _write_audit(db, current_user.tenant_id, current_user.id,
                        "UPDATE_TENANT", "Tenant", tenant_id,
                        {"name": body.name, "active": body.active})
     await db.commit()
+    await _set_current_tenant_context(db, None)
     await db.refresh(t)
     count_result = await db.execute(
         select(sqlfunc.count(User.id)).where(User.tenant_id == t.id)

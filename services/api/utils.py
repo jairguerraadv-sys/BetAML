@@ -20,6 +20,44 @@ from config import settings
 
 logger = structlog.get_logger(__name__)
 
+_AUDIT_REDACTED_KEYS = {
+    "access_token",
+    "authorization",
+    "cpf",
+    "cpf_encrypted",
+    "email",
+    "full_name",
+    "name",
+    "password",
+    "payload",
+    "raw_payload",
+    "refresh_token",
+    "response_payload",
+    "token",
+}
+
+
+def _sanitize_audit_payload(value: Any, *, depth: int = 0) -> Any:
+    if value is None:
+        return None
+    if depth >= 4:
+        return "[TRUNCATED]"
+    if isinstance(value, dict):
+        sanitized: dict[Any, Any] = {}
+        for key, item in value.items():
+            if str(key).lower() in _AUDIT_REDACTED_KEYS:
+                sanitized[key] = "[REDACTED]"
+            else:
+                sanitized[key] = _sanitize_audit_payload(item, depth=depth + 1)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_audit_payload(item, depth=depth + 1) for item in value[:20]]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_audit_payload(item, depth=depth + 1) for item in value[:20])
+    if isinstance(value, str) and len(value) > 1000:
+        return value[:1000] + "...[TRUNCATED]"
+    return value
+
 # ─── Kafka producer (lazy singleton) ──────────────────────────────────────────
 _producer = None
 
@@ -102,8 +140,8 @@ async def write_audit(
         action=action,
         entity_type=entity_type,
         entity_id=entity_id,
-        before=before,
-        after=after,
+        before=_sanitize_audit_payload(before),
+        after=_sanitize_audit_payload(after),
         ip_address=ip,
     )
     db.add(al)

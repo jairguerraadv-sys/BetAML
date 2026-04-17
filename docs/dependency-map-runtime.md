@@ -1,6 +1,6 @@
 # BetAML Dependency Map (Runtime)
 
-Last updated: 2026-03-21
+Last updated: 2026-04-04
 
 Este mapa conecta os eixos mais sensíveis do runtime:
 - arquivo de entrada (service/router)
@@ -11,19 +11,18 @@ Este mapa conecta os eixos mais sensíveis do runtime:
 ## 1) End-to-end Critical Path
 
 1. Ingestão entra por [services/api/routers/ingest.py](/workspaces/BetAML/services/api/routers/ingest.py) (`/ingest/*`, webhook Epsilon, WebSocket).
-2. API publica `raw.*` e `ingest.jobs`.
-3. [services/stream_processor/main.py](/workspaces/BetAML/services/stream_processor/main.py) normaliza `raw.*` -> `canonical.*`, persiste OLTP e calcula features.
-4. Stream processor publica `features.player_daily`.
-5. [services/rules_engine/main.py](/workspaces/BetAML/services/rules_engine/main.py) consome `canonical.*` + `features.player_daily`, avalia DSL e publica `scoring.alerts`.
-6. [services/api/alert_processor.py](/workspaces/BetAML/services/api/alert_processor.py) consome `scoring.alerts` e materializa Alert/Case.
-7. Frontend consome rotas de `alerts`, `cases`, `reports`, `feature-store`, `admin`.
+2. No runtime atual, a API publica majoritariamente direto em `canonical.*` e também em `ingest.jobs`.
+3. [services/stream_processor/main.py](/workspaces/BetAML/services/stream_processor/main.py) consome `canonical.*`, persiste OLTP, calcula features e publica `features.player_daily`.
+4. [services/rules_engine/main.py](/workspaces/BetAML/services/rules_engine/main.py) consome `canonical.*` + `features.player_daily`, avalia DSL e publica `scoring.alerts`.
+5. [services/rules_engine/main.py](/workspaces/BetAML/services/rules_engine/main.py) e [services/api/alert_processor.py](/workspaces/BetAML/services/api/alert_processor.py) ainda coexistem como materializadores de alertas/casos, o que representa duplicidade a ser removida.
+6. Frontend consome rotas de `alerts`, `cases`, `reports`, `feature-store`, `admin`.
 
 ## 2) File -> Route -> Topic -> Table Map
 
 | File | Rotas/Trigger | Kafka In | Kafka Out | Tabelas / Storage |
 |---|---|---|---|---|
-| [services/api/routers/ingest.py](/workspaces/BetAML/services/api/routers/ingest.py) | `POST /ingest/event`, `POST /ingest/batch`, `POST /ingest/file`, `POST /ingest/webhook/epsilon`, `POST /ingest/jobs/{id}/reprocess`, `GET /ingest/jobs`, `GET /ingest/errors`, `POST /ingest/errors/{id}/replay`, `WS /ingest/ws` | - | `raw.transactions`, `raw.bets`, `raw.device_events`, `ingest.jobs`, `*.dlq` | `ingest_jobs`, `ingest_errors`, `mapping_configs`; Bronze MinIO: `bronze/{tenant}/ingest_jobs/{job}/...` |
-| [services/stream_processor/main.py](/workspaces/BetAML/services/stream_processor/main.py) | Consumer loop (`TOPICS`) + job processor (`ingest.jobs`, `ingest.jobs.reprocess`) | `raw.transactions`, `raw.bets`, `raw.device_events`, `canonical.transactions`, `canonical.bets`, `canonical.device_events`, `ingest.jobs`, `ingest.jobs.reprocess` | `canonical.transactions`, `canonical.bets`, `canonical.device_events`, `features.player_daily`, `raw.*.dlq` | Postgres: `financial_transactions`, `bets`, `device_events`, `feature_snapshots`, `ingest_jobs`, `ingest_errors`; ClickHouse: `betaml.player_features_daily`; Gold MinIO: `gold/tenant_id=.../feature_date=...` |
+| [services/api/routers/ingest.py](/workspaces/BetAML/services/api/routers/ingest.py) | `POST /ingest/event`, `POST /ingest/batch`, `POST /ingest/file`, `POST /ingest/webhook/epsilon`, `POST /ingest/jobs/{id}/reprocess`, `GET /ingest/jobs`, `GET /ingest/errors`, `POST /ingest/errors/{id}/replay`, `WS /ingest/ws` | - | `canonical.transactions`, `canonical.bets`, `canonical.device_events`, `ingest.jobs`, `ingest.jobs.reprocess`, `*.dlq` | `ingest_jobs`, `ingest_errors`, `mapping_configs`; Bronze MinIO: `bronze/{tenant}/ingest_jobs/{job}/...` |
+| [services/stream_processor/main.py](/workspaces/BetAML/services/stream_processor/main.py) | Consumer loop (`TOPICS`) + job processor (`ingest.jobs`, `ingest.jobs.reprocess`) | `canonical.transactions`, `canonical.bets`, `canonical.device_events`, `canonical.kyc_events`, `canonical.responsible_gambling_events`, `canonical.account_status_changes`, `ingest.jobs`, `ingest.jobs.reprocess` | `features.player_daily`, `canonical.*.dlq`, `ingest.jobs.dlq`, `ingest.jobs.reprocess.dlq` | Postgres: `financial_transactions`, `bets`, `device_events`, `feature_snapshots`, `ingest_jobs`, `ingest_errors`, `player_kyc_events`; ClickHouse: `betaml.player_features_daily`; Gold MinIO: `gold/tenant_id=.../feature_date=...` |
 | [services/rules_engine/main.py](/workspaces/BetAML/services/rules_engine/main.py) | Consumer loop + evaluator | `canonical.transactions`, `canonical.bets`, `features.player_daily` | `scoring.alerts` | Reads: `rule_definitions`, `rule_macros`, `player_lists`, `player_list_entries`, `scoring_configs`; Writes: `alerts`, `cases`, `case_events`, `rule_execution_logs`, `players` |
 | [services/api/alert_processor.py](/workspaces/BetAML/services/api/alert_processor.py) | Startup background consumer (`start_alert_consumer`) | `scoring.alerts` | - | Reads `scoring_configs`; Writes `alerts`, `cases`, `case_events`, updates `players` |
 | [services/api/routers/rules.py](/workspaces/BetAML/services/api/routers/rules.py) | `GET/POST/PUT/DELETE /rules`, `POST /rules/{id}/simulate` | - | - | `rule_definitions`, `rule_execution_logs` (simulação/consulta) |
@@ -44,7 +43,7 @@ Este mapa conecta os eixos mais sensíveis do runtime:
 | Layer | Producer | Path/Table | Consumer |
 |---|---|---|---|
 | Bronze (raw) | API ingest | MinIO `bronze/{tenant}/ingest_jobs/{job}/...` | Reprocess em ingest + stream processor |
-| Silver (canonical events) | stream_processor | Kafka `canonical.*` | rules_engine, stream_processor (incremental features) |
+| Silver (canonical events) | API ingest e jobs do stream processor | Kafka `canonical.*` | rules_engine, stream_processor (incremental features) |
 | Gold (features snapshot) | stream_processor + jobs API | ClickHouse `betaml.player_features_daily` e MinIO `gold/tenant_id=...` | API (`players`/`feature-store`), ML service (`/score`) |
 
 ## 4) Frontend Route -> Backend Route (Critical Screens)
@@ -64,7 +63,7 @@ Este mapa conecta os eixos mais sensíveis do runtime:
 
 ## 5) Change Safety Checklist (Before touching critical flow)
 
-- Se alterar ingest mapping/connectors, validar: `raw.*`, `ingest.jobs`, `ingest_errors`, reprocess.
+- Se alterar ingest mapping/connectors, validar: `canonical.*`, `ingest.jobs`, `ingest_errors`, reprocess.
 - Se alterar feature computation, validar: Redis online + `feature_snapshots` + ClickHouse `player_features_daily`.
 - Se alterar DSL/rules scoring, validar: `scoring.alerts` + persistência em `alerts/rule_execution_logs`.
 - Se alterar auto-case, validar consistência entre `rules_engine` e `alert_processor` (evitar dupla criação).

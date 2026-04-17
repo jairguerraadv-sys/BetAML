@@ -86,10 +86,11 @@ rm -rf e2e/playwright-report e2e/test-results e2e/playwright-report-* e2e/test-r
 
 ## Validacao minima antes de PR
 
-- Backend gate batelado passando.
-- TypeScript do frontend passando.
-- E2E smoke passando (quando mudanca impacta UI/fluxo).
-- Nenhum segredo sensivel em arquivos versionados.
+- Backend gate batelado deve passar.
+- TypeScript do frontend deve passar.
+- E2E smoke deve passar quando a mudanca impactar UI ou fluxo.
+- Nenhum segredo sensivel pode permanecer em arquivos versionados.
+- Resultados historicos anexados em docs nao substituem a reexecucao dos gates no branch atual.
 
 ## Workflows relacionados
 

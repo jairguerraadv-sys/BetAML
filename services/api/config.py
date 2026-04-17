@@ -38,6 +38,9 @@ DEFAULT_JWT_SECRET = "dev-secret-change-me"
 DEFAULT_EPSILON_WEBHOOK_SECRET = "dev-secret-change-me"
 DEFAULT_PII_ENCRYPTION_KEY = "ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5"
 DEFAULT_INTERNAL_WEBHOOK_SECRET = "dev-webhook-secret-change-me"
+DEFAULT_DATABASE_URL = "postgresql://betaml:devpass@localhost:5432/betaml_dev"
+DEFAULT_REDIS_URL = "redis://:devpass@localhost:6379/0"
+DEFAULT_MINIO_SECRET_KEY = "minio123"
 
 
 # ── Secret provider abstraction ──────────────────────────────────────────────
@@ -163,10 +166,10 @@ class Settings(BaseSettings):
     onprem_tenant_id: str | None = None
 
     # Database
-    database_url: str = "postgresql://betaml:devpass@localhost:5432/betaml_dev"
+    database_url: str = DEFAULT_DATABASE_URL
 
     # Redis
-    redis_url: str = "redis://:devpass@localhost:6379/0"
+    redis_url: str = DEFAULT_REDIS_URL
 
     # Kafka
     kafka_bootstrap_servers: str = "localhost:9092"
@@ -188,7 +191,7 @@ class Settings(BaseSettings):
     # MinIO / S3
     minio_endpoint: str = "http://localhost:9000"
     minio_access_key: str = "minio"
-    minio_secret_key: str = "minio123"
+    minio_secret_key: str = DEFAULT_MINIO_SECRET_KEY
     minio_bucket: str = "betaml-lakehouse"
 
     # ClickHouse
@@ -269,6 +272,18 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "INTERNAL_WEBHOOK_SECRET must be changed from default in staging/production. "
                     "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
+                )
+            if self.database_url == DEFAULT_DATABASE_URL:
+                raise ValueError(
+                    "DATABASE_URL must be changed from the local dev default in staging/production."
+                )
+            if self.redis_url == DEFAULT_REDIS_URL:
+                raise ValueError(
+                    "REDIS_URL must be changed from the local dev default in staging/production."
+                )
+            if self.minio_secret_key == DEFAULT_MINIO_SECRET_KEY:
+                raise ValueError(
+                    "MINIO_SECRET_KEY must be changed from default in staging/production."
                 )
             # On-prem: exige tenant pré-seed configurado
             if self.deployment_mode == "onprem" and not self.onprem_tenant_id:

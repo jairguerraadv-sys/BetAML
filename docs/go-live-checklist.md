@@ -1,7 +1,21 @@
 # BetAML - Go-Live Checklist
 
-Fonte canonica de auditoria e readiness:
-- docs/auditoria-consolidada-pld-2026-03-20.md
+Fontes canonicas de readiness do branch atual:
+- este checklist, para criterios de go/no-go;
+- docs/ops-guide.md e docs/runbook-deploy.md, para execucao operacional;
+- artifacts/readiness/, para evidencias objetivas do branch vigente;
+- docs/auditoria-consolidada-pld-2026-03-20.md, apenas como contexto historico.
+
+Importante:
+- este checklist continua válido como gate operacional, mas não use validações históricas anexadas em março como prova do estado atual do branch;
+- toda evidência listada abaixo deve ser regenerada no branch vigente antes de qualquer go/no-go.
+
+Ultima reexecucao local validada no branch atual (2026-04-07):
+- [artifacts/readiness/preflight.txt](../artifacts/readiness/preflight.txt): `readiness_preflight=PASS`
+- [artifacts/readiness/github-actions-readiness.txt](../artifacts/readiness/github-actions-readiness.txt): `github_actions_readiness=PASS`
+- [artifacts/readiness/restore-drill.txt](../artifacts/readiness/restore-drill.txt): `restore_drill=PASS`
+- [artifacts/readiness/capacity/betaml_load_slo.txt](../artifacts/readiness/capacity/betaml_load_slo.txt): `load_slo=PASS`, `p95_ms=420.00`, `rps=72.32`, `event_rps=723.19`
+- [artifacts/readiness/release-go-no-go.txt](../artifacts/readiness/release-go-no-go.txt): `release_go_no_go=GO`
 
 ## 1. Mudancas e release
 
@@ -30,7 +44,7 @@ Fonte canonica de auditoria e readiness:
 - API health: `GET /health`.
 - Frontend login + rotas protegidas.
 - Fluxo de alertas: listar, abrir detalhe, triagem e vinculação a caso.
-- Fluxo de casos: criar caso, abrir detalhe, comentar, mudar status e gerar dossiê.
+- Fluxo de casos: criar caso, abrir detalhe, comentar, anexar evidência, mudar status, gerar dossie e exportar report package em JSON/PDF.
 - Ingestao smoke: `raw.* -> canonical.* -> features.*` observada em logs.
 - Gate Python alinhado ao CI: `DEBUG=false bash scripts/run_critical_unit_batches.sh --include-remainder -q --tb=short --cov=services/api --cov-fail-under=40`.
 - E2E (pipeline + ML): `TEST_STACK_UP=1 pytest tests/integration/ -v` executado em staging.
@@ -83,22 +97,18 @@ Anexar no go-live atual:
 - `artifact-readiness-restore-drill` com restore em banco isolado, validacao do dump e checagem dos artefatos MinIO.
 - `artifact-readiness-capacity-smoke` com CSV/HTML do Locust, sumario e validacao de thresholds do `validate_slo.py`.
 - `artifact-readiness-go-no-go` com metadados operacionais minimos, validacao dos XMLs JUnit e decisao final do gate.
+- Diretorio JUnit equivalente para smoke, extended e security (ex.: `artifacts/readiness/junit/`) quando a execucao for manual.
 - `artifact-readiness-playwright-report` e `artifact-readiness-playwright-results` do workflow manual.
 - Log do restore drill gerado por `scripts/restore_drill.sh` com contagens basicas (`players`, `alerts`, `cases`) e verificacao dos artefatos MinIO.
 - Revisao alvo para rollback e referencia do ultimo backup valido.
 
-Historico validado em 2026-03-23:
+## 8. Histórico e evidências antigas
 
-- Stack validado com `docker compose -f infra/docker-compose.yml ps` (todos os servicos `Up`, incluindo `api`, `stream-processor`, `rules-engine`, `ml-service`, `postgres`, `redis`, `redpanda`, `minio`, `clickhouse`, `prometheus`, `grafana`, `alertmanager`, `frontend`).
-- Health agregado validado com `curl http://localhost:8000/health` retornando `status=ok` e checks `postgres/redis/kafka/minio/clickhouse/ml_service/rules_engine/stream_processor`.
-- Unit tests validados em lotes:
-  - `pytest -q tests/unit/test_alerts.py ... tests/unit/test_features.py --tb=short` => `252 passed`.
-  - `pytest -q tests/unit/test_infra_resilience.py --tb=short` => `10 passed`.
-  - `pytest -q tests/unit/test_ingest_core.py ... tests/unit/test_tracing_clients.py --tb=short` => `368 passed`.
-- Integracao completa validada:
-  - `TEST_STACK_UP=1 API_URL=http://localhost:8000 ML_URL=http://localhost:8001 pytest -q tests/integration/ -v --tb=short` => `104 passed`.
-- E2E validado:
-  - `npm run test:smoke` => `33 passed` (4 blocos).
-  - `npm run test:extended` => `13 passed` (10 suites).
-  - `npm run test:security` => `3 passed` (RBAC/PII).
-  - `npm run test:nightly` => `smoke + extended + security` aprovado.
+Os resultados históricos usados em março servem apenas como referência de capacidade já atingida em algum momento do projeto.
+
+Eles não substituem:
+- preflight do branch atual;
+- restore drill atual;
+- capacity smoke atual;
+- smoke funcional atual;
+- suites de integração, E2E e segurança reexecutadas no estado vigente do código.

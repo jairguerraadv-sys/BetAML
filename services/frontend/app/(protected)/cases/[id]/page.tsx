@@ -22,6 +22,7 @@ import {
   linkTransactionToCase,
   lookupCaseEntities,
   submitReportPackage,
+  uploadCaseEvidence,
   updateCaseStatus,
   SISCOAF_OCCURRENCE_CODES,
   SISCOAF_INVOLVEMENT_TYPES,
@@ -99,6 +100,12 @@ const TRANSITIONS: Record<string, string[]> = {
   CLOSED:         ['OPEN'],
   REPORTED:       [],
 };
+
+function formatBytes(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 // StatusTransitionSelect — small inline select to advance the case workflow
 function StatusTransitionSelect({
@@ -192,6 +199,8 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
 // ── Tab: Visão Geral ──────────────────────────────────────────────────────────
 function TabOverview({ c }: { c: CaseDetail }) {
   const [query, setQuery] = useState('');
+  const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
+  const [evidenceDescription, setEvidenceDescription] = useState('');
   const qc = useQueryClient();
   const { data: lookup } = useQuery({
     queryKey: ['case-lookup', c.id, query],
@@ -205,6 +214,24 @@ function TabOverview({ c }: { c: CaseDetail }) {
   const linkTxnMut = useMutation({
     mutationFn: (transactionId: string) => linkTransactionToCase(c.id, transactionId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['case', c.id] }),
+  });
+  const uploadEvidenceMut = useMutation({
+    mutationFn: () => {
+      if (!evidenceFile) {
+        throw new Error('Selecione um arquivo de evidência antes de enviar.');
+      }
+      return uploadCaseEvidence(c.id, {
+        file: evidenceFile,
+        description: evidenceDescription,
+      });
+    },
+    onSuccess: async () => {
+      setEvidenceFile(null);
+      setEvidenceDescription('');
+      const input = document.getElementById(`case-evidence-input-${c.id}`) as HTMLInputElement | null;
+      if (input) input.value = '';
+      await qc.invalidateQueries({ queryKey: ['case', c.id] });
+    },
   });
 
   return (
@@ -288,6 +315,86 @@ function TabOverview({ c }: { c: CaseDetail }) {
           </ol>
         </div>
       )}
+
+      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700">Evidências e Cadeia de Custódia</h3>
+            <p className="mt-1 text-xs text-gray-500">
+              Cada upload recebe hash SHA-256 e fica disponível para download autenticado pelo dossiê do caso.
+            </p>
+          </div>
+          <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-600">
+            {c.evidence_files.length} arquivo{c.evidence_files.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+          <div className="space-y-3">
+            <input
+              id={`case-evidence-input-${c.id}`}
+              type="file"
+              onChange={(e) => setEvidenceFile(e.target.files?.[0] ?? null)}
+              className="block w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-gray-700"
+            />
+            <input
+              value={evidenceDescription}
+              onChange={(e) => setEvidenceDescription(e.target.value)}
+              placeholder="Descrição opcional da evidência"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            />
+          </div>
+          <button
+            onClick={() => uploadEvidenceMut.mutate()}
+            disabled={uploadEvidenceMut.isPending || !evidenceFile}
+            className="rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {uploadEvidenceMut.isPending ? 'Enviando...' : 'Enviar evidência'}
+          </button>
+        </div>
+
+        {uploadEvidenceMut.isError && (
+          <p className="mt-3 text-xs text-red-600">Não foi possível armazenar a evidência. Revise o arquivo e tente novamente.</p>
+        )}
+
+        {c.evidence_files.length > 0 ? (
+          <div className="mt-4 space-y-2">
+            {c.evidence_files.map((evidence) => (
+              <div key={evidence.event_id} className="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3 text-xs text-gray-600">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-semibold text-gray-800">{evidence.file_name ?? 'evidencia.bin'}</p>
+                    <p className="mt-1 text-gray-500">
+                      {formatBytes(evidence.size_bytes)}
+                      {evidence.content_type ? ` • ${evidence.content_type}` : ''}
+                      {evidence.storage_backend ? ` • ${evidence.storage_backend}` : ''}
+                    </p>
+                    {evidence.description && (
+                      <p className="mt-1 text-gray-600">{evidence.description}</p>
+                    )}
+                    {evidence.sha256 && (
+                      <p className="mt-1 font-mono text-[11px] text-gray-500">SHA-256: {evidence.sha256}</p>
+                    )}
+                    {evidence.uploaded_at && (
+                      <p className="mt-1 text-gray-400">Upload em {new Date(evidence.uploaded_at).toLocaleString('pt-BR')}</p>
+                    )}
+                  </div>
+                  <a
+                    href={`/api-proxy${evidence.download_path}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded border border-gray-300 px-3 py-1.5 font-semibold text-gray-700 hover:bg-white"
+                  >
+                    Baixar
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-4 text-xs text-gray-400">Nenhuma evidência anexada ao caso até o momento.</p>
+        )}
+      </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">

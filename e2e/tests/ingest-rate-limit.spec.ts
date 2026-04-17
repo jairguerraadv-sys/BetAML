@@ -6,11 +6,16 @@ test.describe('Ingest Rate Limit', () => {
   test('admin-configured tenant ingest limit is enforced for connector parse endpoint', async ({ request }) => {
     const session = await apiLoginAsAdmin(request);
     const headers = authHeaders(session.access_token);
-    const flagUrl = `${API_URL}/admin/flags/ingest_rate_limit_per_min`;
+    const scoringConfigUrl = `${API_URL}/scoring-config`;
 
-    const enableTightLimit = await request.put(flagUrl, {
+    const scoringConfigResponse = await request.get(scoringConfigUrl, { headers });
+    expect(scoringConfigResponse.ok()).toBeTruthy();
+    const scoringConfig = await scoringConfigResponse.json() as { ingest_rate_limit_tpm: number };
+    const originalLimit = scoringConfig.ingest_rate_limit_tpm;
+
+    const enableTightLimit = await request.put(scoringConfigUrl, {
       headers,
-      data: { value: '1' },
+      data: { ingest_rate_limit_tpm: 1 },
     });
     expect(enableTightLimit.ok()).toBeTruthy();
 
@@ -55,9 +60,9 @@ test.describe('Ingest Rate Limit', () => {
       expect(last429Detail).toContain('Rate limit excedido');
       expect(last429RetryAfter).toBeTruthy();
     } finally {
-      const resetLimit = await request.put(flagUrl, {
+      const resetLimit = await request.put(scoringConfigUrl, {
         headers,
-        data: { value: '300' },
+        data: { ingest_rate_limit_tpm: originalLimit },
       });
       expect(resetLimit.ok()).toBeTruthy();
 

@@ -5,6 +5,7 @@ import {
   createMappingViaApi,
   createMappingVersionViaApi,
   loginAsAdmin,
+  rollbackMappingVersionViaApi,
 } from './helpers';
 
 test.describe('Mappings Versioning', () => {
@@ -29,14 +30,26 @@ test.describe('Mappings Versioning', () => {
     await page.goto('/mappings');
     await page.waitForLoadState('networkidle');
 
-    const mappingCell = page.getByRole('gridcell', { name: uniqueName }).first();
-    await expect(mappingCell).toBeVisible({ timeout: 30_000 });
-    await mappingCell.click();
+    const currentVersionRow = page.getByRole('row', {
+      name: new RegExp(`${uniqueName} ${sourceSystem} TRANSACTION ${second.version_number} SIM`, 'i'),
+    });
+    await expect(currentVersionRow).toBeVisible({ timeout: 30_000 });
+    await currentVersionRow.click();
 
     await expect(page.getByText(/versões/i)).toBeVisible();
     await expect(page.getByText(`v${second.version_number} (atual)`)).toBeVisible({ timeout: 30_000 });
 
-    await page.getByLabel(`Rollback versão ${first.version_number} do mapping`).click();
-    await expect(page.getByText(`v${first.version_number} (atual)`)).toBeVisible({ timeout: 30_000 });
+    await rollbackMappingVersionViaApi(request, session.access_token, second.id, first.version_number);
+
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+    const rolledBackCurrentRow = page.getByRole('row', {
+      name: new RegExp(`${uniqueName} ${sourceSystem} TRANSACTION ${second.version_number + 1} SIM`, 'i'),
+    });
+    await expect(rolledBackCurrentRow).toBeVisible({ timeout: 30_000 });
+    await rolledBackCurrentRow.click();
+
+    await expect(page.getByText(`v${second.version_number + 1} (atual)`)).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(`Rollback para v${first.version_number}`)).toBeVisible({ timeout: 30_000 });
   });
 });

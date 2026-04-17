@@ -137,6 +137,37 @@ validate_junit_file() {
   fi
 }
 
+validate_junit_suite() {
+  local junit_dir="$1"
+  local suite_prefix="$2"
+  local label="$3"
+  local before_failures="$FAILURES"
+  local files=()
+  local file_path
+
+  if [[ ! -d "$junit_dir" ]]; then
+    fail "$label ausente: diretorio nao encontrado em $junit_dir"
+    return
+  fi
+
+  while IFS= read -r file_path; do
+    files+=("$file_path")
+  done < <(find "$junit_dir" -maxdepth 1 -type f \( -name "${suite_prefix}.xml" -o -name "${suite_prefix}-*.xml" \) | sort)
+
+  if [[ "${#files[@]}" -eq 0 ]]; then
+    fail "$label ausente: nenhum XML encontrado com prefixo ${suite_prefix} em $junit_dir"
+    return
+  fi
+
+  for file_path in "${files[@]}"; do
+    validate_junit_file "$file_path" "$label ($(basename "$file_path"))"
+  done
+
+  if [[ "$FAILURES" -eq "$before_failures" ]]; then
+    pass "$label aprovado com ${#files[@]} arquivo(s) JUnit"
+  fi
+}
+
 section "Contexto"
 echo "timestamp_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "backup_reference=$BACKUP_REFERENCE"
@@ -148,11 +179,21 @@ section "Metadados obrigatorios"
 require_non_empty "$BACKUP_REFERENCE" "backup_reference"
 require_non_empty "$ROLLBACK_TARGET" "rollback_target"
 require_non_empty "$ONCALL_OWNER" "oncall_owner"
+require_non_empty "$PREFLIGHT_EVIDENCE" "preflight_evidence"
+require_non_empty "$RESTORE_EVIDENCE" "restore_evidence"
+require_non_empty "$CAPACITY_EVIDENCE" "capacity_evidence"
+require_non_empty "$JUNIT_DIR" "junit_dir"
 
 section "Evidencias locais"
-require_file "$PREFLIGHT_EVIDENCE" "artifact-readiness-preflight"
-require_file "$RESTORE_EVIDENCE" "artifact-readiness-restore-drill"
-require_file "$CAPACITY_EVIDENCE" "artifact-readiness-capacity-smoke"
+if [[ -n "${PREFLIGHT_EVIDENCE// }" ]]; then
+  require_file "$PREFLIGHT_EVIDENCE" "artifact-readiness-preflight"
+fi
+if [[ -n "${RESTORE_EVIDENCE// }" ]]; then
+  require_file "$RESTORE_EVIDENCE" "artifact-readiness-restore-drill"
+fi
+if [[ -n "${CAPACITY_EVIDENCE// }" ]]; then
+  require_file "$CAPACITY_EVIDENCE" "artifact-readiness-capacity-smoke"
+fi
 
 if [[ -f "$PREFLIGHT_EVIDENCE" ]]; then
   if grep -q 'readiness_preflight=PASS' "$PREFLIGHT_EVIDENCE"; then
@@ -179,9 +220,11 @@ if [[ -f "$CAPACITY_EVIDENCE" ]]; then
 fi
 
 section "E2E critico"
-validate_junit_file "$JUNIT_DIR/readiness-smoke.xml" "smoke suite"
-validate_junit_file "$JUNIT_DIR/readiness-extended.xml" "extended suite"
-validate_junit_file "$JUNIT_DIR/readiness-security.xml" "security suite"
+if [[ -n "${JUNIT_DIR// }" ]]; then
+  validate_junit_suite "$JUNIT_DIR" "readiness-smoke" "smoke suite"
+  validate_junit_suite "$JUNIT_DIR" "readiness-extended" "extended suite"
+  validate_junit_suite "$JUNIT_DIR" "readiness-security" "security suite"
+fi
 
 section "Resumo"
 if [[ "$FAILURES" -eq 0 ]]; then

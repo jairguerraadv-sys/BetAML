@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-import { loginAsAdmin } from './helpers';
+import { loginAsSuperAdmin } from './helpers';
 
 test.describe('Onboarding Wizard', () => {
   test('admin can complete the tenant onboarding wizard end-to-end', async ({ page }) => {
@@ -14,7 +14,7 @@ test.describe('Onboarding Wizard', () => {
       `PLY-${stamp},1250,BRL,DEPOSIT,2026-03-20T10:00:00Z`,
     ].join('\n');
 
-    await loginAsAdmin(page);
+    await loginAsSuperAdmin(page);
     await page.goto('/admin/onboarding');
 
     await expect(page.getByRole('heading', { name: /cadastrar novo operador/i })).toBeVisible();

@@ -1,10 +1,15 @@
-"""external_validation.py — Endpoints para validação externa de identidade (mock/provider)."""
+"""external_validation.py — Endpoints para validação externa de identidade."""
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import urllib.error
+import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
+
+import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
@@ -17,6 +22,7 @@ from models import ExternalValidationRequest, Player, User
 from utils import write_audit
 
 router = APIRouter(tags=["external_validation"])
+logger = structlog.get_logger(__name__)
 
 class ExternalValidationRequestIn(BaseModel):
     provider: str = "mock_identity"
@@ -28,10 +34,53 @@ IDEMPOTENCY_WINDOW_MINUTES = 10
 MAX_PROVIDER_RETRIES = 3
 _PROVIDER_CB_UNTIL: dict[str, datetime] = {}
 
-# Provider configurado via env. Use "mock" apenas em development/test.
-# Em produção configure EXTERNAL_VALIDATION_PROVIDER=<nome_real_do_provider>.
-_VALIDATION_PROVIDER = os.getenv("EXTERNAL_VALIDATION_PROVIDER", "mock").lower()
-_BETAML_ENV = os.getenv("BETAML_ENVIRONMENT", os.getenv("ENVIRONMENT", "development")).lower()
+_VALIDATION_PROVIDER = os.getenv("EXTERNAL_VALIDATION_PROVIDER", "mock_identity").strip().lower()
+_VALIDATION_PROVIDER_URL = os.getenv("EXTERNAL_VALIDATION_PROVIDER_URL", "").strip()
+_VALIDATION_PROVIDER_TOKEN = os.getenv("EXTERNAL_VALIDATION_PROVIDER_TOKEN", "").strip()
+_BETAML_ENV = os.getenv("BETAML_ENVIRONMENT", os.getenv("ENVIRONMENT", "development")).strip().lower()
+
+
+def _provider_timeout_seconds() -> float:
+    raw = os.getenv("EXTERNAL_VALIDATION_PROVIDER_TIMEOUT_SECONDS", "5").strip()
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return 5.0
+
+
+def _is_mock_provider(provider: str) -> bool:
+    return provider in {"mock", "mock_identity"}
+
+
+def _resolve_effective_provider(requested_provider: str | None) -> str:
+    configured_provider = _VALIDATION_PROVIDER or "mock_identity"
+    requested = (requested_provider or "").strip().lower()
+
+    if not requested or requested in {"default", "configured"}:
+        return configured_provider
+
+    if _is_mock_provider(configured_provider):
+        if not _is_mock_provider(requested):
+            raise HTTPException(
+                400,
+                "Provider solicitado não está habilitado neste ambiente. "
+                "Configure EXTERNAL_VALIDATION_PROVIDER para usar um provider real.",
+            )
+        return "mock_identity"
+
+    if _is_mock_provider(requested):
+        raise HTTPException(
+            400,
+            "Provider mock_identity não é permitido quando um provider real está configurado.",
+        )
+
+    if requested != configured_provider:
+        raise HTTPException(
+            400,
+            f"Provider solicitado '{requested}' diverge do provider ativo '{configured_provider}'.",
+        )
+
+    return configured_provider
 
 
 def _cb_window_seconds() -> int:
@@ -89,18 +138,65 @@ async def _mock_provider_call(provider: str, validation_type: str, request_id: s
     }
 
 
-async def _dispatch_provider_call(provider: str, validation_type: str, request_id: str) -> dict:
+async def _http_provider_call(provider: str, validation_type: str, request_id: str, payload: dict) -> dict:
+    if not _VALIDATION_PROVIDER_URL:
+        raise RuntimeError("external_validation_provider_url_missing")
+
+    timeout_seconds = _provider_timeout_seconds()
+
+    def _call_provider() -> dict:
+        request_body = {
+            "request_id": request_id,
+            "provider": provider,
+            "validation_type": validation_type,
+            "payload": payload,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-BetAML-Request-ID": request_id,
+        }
+        if _VALIDATION_PROVIDER_TOKEN:
+            headers["Authorization"] = f"Bearer {_VALIDATION_PROVIDER_TOKEN}"
+
+        req = urllib.request.Request(
+            url=_VALIDATION_PROVIDER_URL,
+            data=json.dumps(request_body).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            parsed = json.loads(resp.read().decode("utf-8"))
+            if not isinstance(parsed, dict):
+                raise RuntimeError("provider_response_not_json_object")
+            return parsed
+
+    try:
+        response = await asyncio.to_thread(_call_provider)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"provider_request_failed:{exc}") from exc
+
+    return {
+        "provider": provider,
+        "validation_type": validation_type,
+        "match": bool(response.get("match") or False),
+        "match_score": float(response.get("match_score") or 0.0),
+        "risk_hint": str(response.get("risk_hint") or "UNKNOWN"),
+        "validated_at": str(response.get("validated_at") or datetime.now(timezone.utc).isoformat()),
+        "external_request_id": str(response.get("external_request_id") or response.get("request_id") or request_id),
+        "provider_payload": response,
+    }
+
+
+async def _dispatch_provider_call(provider: str, validation_type: str, request_id: str, payload: dict) -> dict:
     """Despacha para o provider configurado via EXTERNAL_VALIDATION_PROVIDER.
 
     Em qualquer ambiente fora de development/test, o mock é bloqueado para
     evitar validações externas silenciosamente falsas em staging/produção.
     """
-    import structlog as _slog  # noqa: PLC0415
-    _logger = _slog.get_logger()
-
-    if _VALIDATION_PROVIDER == "mock":
+    if _is_mock_provider(provider):
         if _BETAML_ENV not in ("development", "test"):
-            _logger.error(
+            logger.error(
                 "external_validation_mock_blocked_outside_dev_test",
                 provider=provider,
                 validation_type=validation_type,
@@ -109,10 +205,9 @@ async def _dispatch_provider_call(provider: str, validation_type: str, request_i
                 hint="Configure EXTERNAL_VALIDATION_PROVIDER com um provider real.",
             )
             raise RuntimeError("mock_provider_not_allowed_outside_dev_test")
+        return await _mock_provider_call(provider, validation_type, request_id)
 
-    # Aqui novos providers reais serão despachados por _VALIDATION_PROVIDER.
-    # Por hora só o mock está implementado; providers reais entram nesta função.
-    return await _mock_provider_call(provider, validation_type, request_id)
+    return await _http_provider_call(provider, validation_type, request_id, payload)
 
 
 async def _process_validation_request(request_id: str, tenant_id: str | None = None) -> None:
@@ -133,7 +228,12 @@ async def _process_validation_request(request_id: str, tenant_id: str | None = N
             response: dict | None = None
             for attempt in range(1, MAX_PROVIDER_RETRIES + 1):
                 try:
-                    response = await _dispatch_provider_call(req.provider, req.validation_type, request_id)
+                    response = await _dispatch_provider_call(
+                        req.provider,
+                        req.validation_type,
+                        request_id,
+                        req.request_payload or {},
+                    )
                     response["attempts"] = attempt
                     response["retries_count"] = max(0, attempt - 1)
                     break
@@ -213,13 +313,15 @@ async def request_external_validation(
     if not p or p.tenant_id != current_user.tenant_id:
         raise HTTPException(404, "Player não encontrado")
 
+    effective_provider = _resolve_effective_provider(body.provider)
+
     window_start = datetime.now(timezone.utc) - timedelta(minutes=IDEMPOTENCY_WINDOW_MINUTES)
     existing_q = (
         select(ExternalValidationRequest)
         .where(
             ExternalValidationRequest.tenant_id == current_user.tenant_id,
             ExternalValidationRequest.player_id == player_id,
-            ExternalValidationRequest.provider == body.provider,
+            ExternalValidationRequest.provider == effective_provider,
             ExternalValidationRequest.validation_type == body.validation_type,
             ExternalValidationRequest.requested_at >= window_start,
             ExternalValidationRequest.status.in_(["PENDING", "IN_PROGRESS", "COMPLETED"]),
@@ -244,7 +346,7 @@ async def request_external_validation(
         id=str(uuid.uuid4()),
         tenant_id=current_user.tenant_id,
         player_id=player_id,
-        provider=body.provider,
+        provider=effective_provider,
         validation_type=body.validation_type,
         status="PENDING",
         request_payload=body.payload,
@@ -253,8 +355,20 @@ async def request_external_validation(
         requested_at=datetime.now(timezone.utc),
     )
     db.add(ext_req)
-    observe_external_validation_request(body.provider, body.validation_type)
-    await write_audit(db, current_user.tenant_id, current_user.id, "EXTERNAL_VALIDATION_REQUEST", "Player", player_id, after=body.payload)
+    observe_external_validation_request(effective_provider, body.validation_type)
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "EXTERNAL_VALIDATION_REQUEST",
+        "Player",
+        player_id,
+        after={
+            **(body.payload or {}),
+            "provider": effective_provider,
+            "validation_type": body.validation_type,
+        },
+    )
     await db.commit()
     background_tasks.add_task(
         _process_validation_request,

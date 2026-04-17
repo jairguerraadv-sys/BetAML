@@ -97,6 +97,8 @@ curl -s -X POST http://localhost:8000/auth/login \
   -d '{"username":"admin_a","password":"admin123","tenant_slug":"operador_a"}'
 ```
 
+Operacoes de plataforma, como onboarding de tenant, usam o principal bootstrapado `superadmin` / `superadmin123` por padrao local (ou os overrides `SUPER_ADMIN_USER` / `SUPER_ADMIN_PASS`).
+
 ## Fluxos principais
 
 Ingestao:

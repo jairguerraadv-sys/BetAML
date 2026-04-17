@@ -230,13 +230,10 @@ services:
       bash -c "set -euo pipefail; \
       APP_DATABASE_URL=\"$$DATABASE_URL\"; \
       SEED_DATABASE_URL=\"postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@postgres:5432/$$POSTGRES_DB\"; \
-      AUTO_SEED=\"$${API_AUTO_SEED:-}\"; \
-      if [ -z \"$$AUTO_SEED\" ]; then \
-        if [ \"$$ENVIRONMENT\" = \"development\" ] || [ \"$$ENVIRONMENT\" = \"test\" ]; then AUTO_SEED=true; else AUTO_SEED=false; fi; \
-      fi; \
+      AUTO_SEED=\"$${API_AUTO_SEED:-false}\"; \
       if [ \"$$AUTO_SEED\" = \"true\" ]; then \
         echo 'Running API seed bootstrap'; \
-        DATABASE_URL=\"$$SEED_DATABASE_URL\" python seeds.py; \
+        DATABASE_URL=\"$$SEED_DATABASE_URL\" ALLOW_SYNTHETIC_SEED=true python seeds.py; \
       else \
         echo 'Skipping API seed bootstrap'; \
       fi; \

@@ -1,16 +1,16 @@
 import { test, expect } from '@playwright/test';
 
-import { apiLogin, fetchFirstPlayerId, login } from './helpers';
+import { apiLoginAsAdmin, fetchFirstPlayerId, loginAsAdmin } from './helpers';
 
 test.describe('Feature Store', () => {
   test('can open a player feature store page and switch tabs', async ({ page, request }) => {
-    const session = await apiLogin(request);
+    const session = await apiLoginAsAdmin(request);
     const playerId = await fetchFirstPlayerId(request, session.access_token);
 
-    await login(page);
+    await loginAsAdmin(page);
     await page.goto(`/feature-store/${playerId}`);
 
-    await expect(page.getByRole('heading', { name: /feature store/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /diagnóstico do apostador|feature store/i })).toBeVisible();
     await expect(page.getByText(playerId)).toBeVisible();
     await expect(page.getByRole('button', { name: /atuais/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /histórico/i })).toBeVisible();

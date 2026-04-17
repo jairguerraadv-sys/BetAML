@@ -64,6 +64,13 @@ Preflight do repositorio:
 bash scripts/check_github_actions_readiness.sh
 ```
 
+Ultima reexecucao local validada no branch atual (2026-04-07):
+- `artifacts/readiness/preflight.txt` -> `readiness_preflight=PASS`
+- `artifacts/readiness/github-actions-readiness.txt` -> `github_actions_readiness=PASS`
+- `artifacts/readiness/restore-drill.txt` -> `restore_drill=PASS`
+- `artifacts/readiness/capacity/betaml_load_slo.txt` -> `load_slo=PASS`
+- `artifacts/readiness/release-go-no-go.txt` -> `release_go_no_go=GO`
+
 ## 3. Inicialização do Ambiente
 
 ### 3.1 Clone e Subida Completa
@@ -95,32 +102,19 @@ curl http://localhost:9090/-/healthy
 open http://localhost:3001   # admin / admin123
 ```
 
-### 3.3 Criação do Primeiro Usuário Admin
+### 3.3 Bootstrap de acesso inicial
 
 ```bash
-docker compose exec api python -c "
-from asyncio import run
-from database import AsyncSessionLocal
-from models import User
-from auth import hash_password
-import uuid
-
-async def create():
-    async with AsyncSessionLocal() as db:
-        u = User(
-            id=str(uuid.uuid4()),
-            email='admin@betaml.io',
-            username='admin',
-            password_hash=hash_password('Admin@123'),
-            role='ADMIN',
-            tenant_id='default',
-        )
-        db.add(u)
-        await db.commit()
-        print('Usuário criado:', u.email)
-run(create())
-"
+cd /workspaces/BetAML/services/api
+python seeds.py
 ```
+
+O bootstrap recomendado cria credenciais deterministicas para ambiente local:
+- `superadmin` / `superadmin123` com papel `BetAML_SuperAdmin` para operacoes de plataforma;
+- `admin_a` / `admin123` no tenant `operador_a` para fluxos tenant-scoped;
+- usuarios `analyst_*` e `auditor_*` para validacao de RBAC.
+
+As variaveis `SUPER_ADMIN_USER`, `SUPER_ADMIN_EMAIL` e `SUPER_ADMIN_PASS` podem sobrescrever o principal de plataforma quando necessario.
 
 ## 4. Migrações de Banco de Dados
 

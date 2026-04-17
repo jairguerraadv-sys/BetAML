@@ -216,6 +216,7 @@ def _apply_patches(
     mock_minio_mod: types.ModuleType,
     gb_instance: MagicMock | None = None,
     if_instance: MagicMock | None = None,
+    registry_tenant_id: str | None = "tenant-1",
     f1: float = 0.80,
     precision: float = 0.82,
     recall: float = 0.78,
@@ -290,6 +291,12 @@ def _apply_patches(
     stack.enter_context(patch("main.recall_score", return_value=recall))
     stack.enter_context(patch("main.roc_auc_score", return_value=0.85))
     stack.enter_context(patch("main.pickle.dumps", return_value=b"fake_model_bytes"))
+    stack.enter_context(
+        patch(
+            "main._resolve_registry_tenant_id",
+            new=AsyncMock(return_value=registry_tenant_id),
+        )
+    )
 
     return {"gb_cls": gb_mock, "if_cls": if_mock}
 

@@ -190,8 +190,31 @@ export default function MappingsPage() {
 
   const createMutation = useMutation({
     mutationFn: createMapping,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['mappings'] });
+    onSuccess: (created, variables) => {
+      qc.setQueryData<MappingListItem[]>(['mappings'], (current = []) => {
+        const updated = current.map((item) =>
+          item.source_system === variables.source_system && item.entity_type === variables.entity_type
+            ? { ...item, is_current: false }
+            : item,
+        );
+
+        return [
+          {
+            id: created.id,
+            name: created.name,
+            source_system: variables.source_system,
+            entity_type: variables.entity_type,
+            version: '1.0',
+            version_number: created.version_number,
+            is_current: created.is_current,
+            active: true,
+            change_notes: variables.change_notes ?? null,
+            updated_at: new Date().toISOString(),
+          },
+          ...updated,
+        ];
+      });
+      void qc.invalidateQueries({ queryKey: ['mappings'] });
       setChangeNotes('');
       setMode('create');
     },

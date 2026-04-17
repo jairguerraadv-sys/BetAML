@@ -120,6 +120,14 @@ export default function OnboardingTour({ forceOpen = false, onClose }: Onboardin
       setVisible(true);
       return;
     }
+
+    // Evita bloquear execucoes automatizadas (Playwright/webdriver) com um modal global.
+    if (typeof navigator !== 'undefined' && navigator.webdriver) {
+      localStorage.setItem(STORAGE_KEY, '1');
+      setVisible(false);
+      return;
+    }
+
     const done = localStorage.getItem(STORAGE_KEY);
     if (!done) setVisible(true);
   }, [forceOpen]);

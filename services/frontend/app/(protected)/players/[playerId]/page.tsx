@@ -183,7 +183,7 @@ export default function PlayerDetailPage() {
   const [historyStatus, setHistoryStatus] = useState<string>('');
   const [historyProvider, setHistoryProvider] = useState<string>('');
   const [erasureReason, setErasureReason] = useState<string>('Solicitação de titular (LGPD Art. 18)');
-  const { user: currentUser, hasAnyRole } = useCurrentUser();
+  const { hasAnyRole } = useCurrentUser();
   const queryClient = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
@@ -214,7 +214,6 @@ export default function PlayerDetailPage() {
   const validationMutation = useMutation({
     mutationFn: () =>
       requestPlayerExternalValidation(playerId, {
-        provider: 'mock_identity',
         validation_type: 'CPF_IDENTITY',
         payload: { trigger: 'manual_player_screen' },
       }),
@@ -223,6 +222,13 @@ export default function PlayerDetailPage() {
       await queryClient.invalidateQueries({ queryKey: ['player-external-validation-history', playerId] });
     },
   });
+
+  const availableProviders = Array.from(
+    new Set([
+      extLatest?.provider,
+      ...(extHistory?.items?.map((item) => item.provider) ?? []),
+    ].filter((provider): provider is string => Boolean(provider))),
+  ).sort();
 
   const retryMutation = useMutation({
     mutationFn: (requestId: string) => retryExternalValidation(requestId),
@@ -269,6 +275,8 @@ export default function PlayerDetailPage() {
   if (error)     return <p className="text-sm text-red-600">Player não encontrado.</p>;
   if (!p)        return null;
 
+  const cpfIsMasked = typeof p.cpf === 'string' && p.cpf.includes('*');
+
   return (
     <div className="max-w-2xl space-y-6">
       <button onClick={() => router.back()} className="text-sm text-brand hover:underline">
@@ -299,8 +307,7 @@ export default function PlayerDetailPage() {
             <dt className="text-gray-500">CPF</dt>
             <dd className="font-mono font-medium">
               {p.cpf}
-              {/* Analistas só veem o CPF mascarado */}
-              {currentUser?.roles?.includes('Operador_Analista') && !currentUser?.roles?.includes('Operador_Gestor') && (
+              {cpfIsMasked && (
                 <span className="ml-2 rounded bg-yellow-100 px-1.5 py-0.5 text-[10px] font-semibold text-yellow-700">
                   MASCARADO
                 </span>
@@ -372,11 +379,15 @@ export default function PlayerDetailPage() {
                     disabled={validationMutation.isPending}
                     className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                   >
-                    {validationMutation.isPending ? 'Solicitando...' : 'Validar CPF (externo)'}
+                    {validationMutation.isPending ? 'Solicitando...' : 'Validar CPF no provider configurado'}
                   </button>
                 </div>
 
                 <div className="mt-3 text-xs text-gray-700">
+                  <p>
+                    <span className="font-semibold">Provider efetivo:</span>{' '}
+                    {extLatest?.provider ?? 'definido pelo backend'}
+                  </p>
                   <p>
                     <span className="font-semibold">Último status:</span>{' '}
                     <span className={`inline-flex rounded px-2 py-0.5 font-semibold ${
@@ -446,7 +457,9 @@ export default function PlayerDetailPage() {
                         className="rounded border border-gray-200 bg-white px-2 py-1 text-xs"
                       >
                         <option value="">Provider: todos</option>
-                        <option value="mock_identity">mock_identity</option>
+                        {availableProviders.map((provider) => (
+                          <option key={provider} value={provider}>{provider}</option>
+                        ))}
                       </select>
                     </div>
                     {extHistory!.items.map((it) => (

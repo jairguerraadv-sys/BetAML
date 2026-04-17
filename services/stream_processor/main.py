@@ -1606,7 +1606,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
     from minio import Minio
 
     from libs.connectors import get_connector
-    from libs.mapping import MappingEngine, get_default_mapping
+    from libs.mapping import MappingEngine, get_default_mapping, validate_canonical_ingest_payload
 
     job_id = msg_value.get("job_id")
     tenant_id = msg_value.get("tenant_id")
@@ -1845,6 +1845,21 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
         for idx, rec in enumerate(parse_result.records, start=1):
             try:
                 mapped_rec = mapper.apply(rec) if mapper else rec
+                payload_validation = validate_canonical_ingest_payload("TRANSACTION", mapped_rec)
+                if not payload_validation.get("valid", False):
+                    failed += 1
+                    validation_errors = payload_validation.get("validation_errors") or ["payload incompatível com schema canônico"]
+                    reason = f"validation_failed: {'; '.join(str(error) for error in validation_errors)}"
+                    if len(error_sample) < 10:
+                        error_sample.append({"line": idx, "reason": reason, "raw": rec})
+                    await asyncio.to_thread(
+                        _insert_ingest_error,
+                        raw_payload=rec,
+                        line_number=idx,
+                        reason=reason,
+                    )
+                    continue
+
                 entity_type = str(mapped_rec.get("entity_type") or "transaction").lower()
                 source_event_id = str(
                     mapped_rec.get("event_id")

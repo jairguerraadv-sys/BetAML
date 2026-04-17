@@ -98,16 +98,16 @@ async def test_process_ingest_job_connector_gamma_uses_native_parser_with_partia
         await _sp_mod.process_ingest_job(_msg(source_system="ConnectorGamma", file_name="gamma.xml"), MagicMock(), MagicMock(), producer)
 
     topics = [call.args[0] for call in producer.send.await_args_list]
-    # G6: conector retorna campos brutos sem validação de valor; ambos os registros são publicados
-    assert topics == ["canonical.transactions", "canonical.transactions"]
+    # Registros inválidos no schema canônico agora ficam em quarentena e não são publicados.
+    assert topics == ["canonical.transactions"]
 
     final_args, final_kwargs = updates[-1]
-    assert final_args[0] == "DONE"
+    assert final_args[0] == "PARTIAL"
     assert final_args[1] == 2
-    assert final_args[2] == 2
-    assert final_args[3] == 0
+    assert final_args[2] == 1
+    assert final_args[3] == 1
     assert isinstance(final_kwargs.get("error_sample"), list)
-    assert len(ingest_errors) == 0
+    assert len(ingest_errors) == 1
 
 
 @pytest.mark.asyncio
@@ -142,16 +142,16 @@ async def test_process_ingest_job_connector_delta_uses_native_parser_with_line_e
         await _sp_mod.process_ingest_job(_msg(source_system="ConnectorDelta", file_name="delta.ndjson"), MagicMock(), MagicMock(), producer)
 
     topics = [call.args[0] for call in producer.send.await_args_list]
-    # G6: val=-5.0 passa pelo conector; apenas a linha malformada gera falha de parse
-    assert topics == ["canonical.transactions", "canonical.transactions"]
+    # A linha malformada continua falhando no parse e val<0 agora falha na validação canônica.
+    assert topics == ["canonical.transactions"]
 
     final_args, final_kwargs = updates[-1]
     assert final_args[0] == "PARTIAL"
     assert final_args[1] == 3
-    assert final_args[2] == 2
-    assert final_args[3] == 1
+    assert final_args[2] == 1
+    assert final_args[3] == 2
     assert isinstance(final_kwargs.get("error_sample"), list)
-    assert len(ingest_errors) == 1
+    assert len(ingest_errors) == 2
 
 
 @pytest.mark.asyncio

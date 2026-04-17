@@ -14,6 +14,31 @@ test.describe('Ingest Tenant Isolation', () => {
     const tenantA = await apiLoginAsAdmin(request);
     const tenantB = await apiLoginAsSecondaryAdmin(request);
 
+    const mappingResponse = await request.post(`${API_URL}/mappings`, {
+      headers: authHeaders(tenantA.access_token),
+      data: {
+        name: `Tenant A Gamma strict ${Date.now()}`,
+        source_system: 'ConnectorGamma',
+        entity_type: 'TRANSACTION',
+        format: 'json',
+        config_json: {
+          source_system: 'ConnectorGamma',
+          entity_type: 'TRANSACTION',
+          fields: [
+            { target: 'external_transaction_id', source: 'event_id', transform: 'copy', required: true },
+            { target: 'player_cpf', source: 'external_player_id', transform: 'copy', required: true },
+            { target: 'type', source: 'transaction_type', transform: 'copy', required: true },
+            { target: 'amount', source: 'amount', transform: 'coerceDecimal', required: true },
+            { target: 'currency', source: 'currency', transform: 'copy', required: true },
+            { target: 'occurred_at', source: 'occurred_at', transform: 'parseDate', required: true },
+          ],
+        },
+        change_notes: 'Strict gamma mapping for tenant isolation e2e',
+      },
+    });
+    expect(mappingResponse.ok()).toBeTruthy();
+    const mapping = await mappingResponse.json() as { id: string };
+
     const gammaPayload = [
       '<Events>',
       '  <Transaction>',
@@ -29,7 +54,7 @@ test.describe('Ingest Tenant Isolation', () => {
       '    <EventId>iso-gamma-bad-1</EventId>',
       '    <PlayerId>CPF-ISO-2</PlayerId>',
       '    <Type>DEPOSIT</Type>',
-      '    <Amount currency="BRL">-10.00</Amount>',
+      '    <Amount currency="BRL">not-a-number</Amount>',
       '    <Timestamp>2026-03-20T10:05:00Z</Timestamp>',
       '    <Instrument><Type>PIX</Type><Token>pix-iso-bad</Token></Instrument>',
       '    <DeviceId>dev-iso-2</DeviceId>',
@@ -41,6 +66,7 @@ test.describe('Ingest Tenant Isolation', () => {
       headers: authHeaders(tenantA.access_token),
       multipart: {
         entity_type: 'TRANSACTION',
+        mapping_config_id: mapping.id,
         file: {
           name: `ingest-tenant-isolation-${Date.now()}.xml`,
           mimeType: 'application/xml',

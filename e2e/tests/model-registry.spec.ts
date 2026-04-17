@@ -30,9 +30,9 @@ test.describe('Model Registry', () => {
     }
 
     await expect(page.getByText(/precisão estimada/i)).toBeVisible();
-    await expect(page.getByText(/falso positivo/i)).toBeVisible();
-    await expect(page.getByText(/alertas rotulados/i)).toBeVisible();
-    await expect(page.getByText(/tráfego challenger/i)).toBeVisible();
+    await expect(page.getByText(/falso alarme|falso positivo/i)).toBeVisible();
+    await expect(page.getByText(/alertas avaliados|alertas rotulados/i)).toBeVisible();
+    await expect(page.getByText(/tráfego no teste a\/b|tráfego challenger/i)).toBeVisible();
     await expect(page.getByText(new RegExp(`v${models[0]?.version}`))).toBeVisible();
   });
 
@@ -54,7 +54,7 @@ test.describe('Model Registry', () => {
       const action = page.getByLabel(`Designar challenger para modelo versão ${stagingCandidate.version}`).first();
       await expect(action).toBeVisible({ timeout: 10_000 });
       await action.click();
-      await expect(page.getByText(/a\/b challenger/i)).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByText(/teste a\/b|a\/b challenger/i)).toBeVisible({ timeout: 10_000 });
       return;
     }
 
@@ -71,7 +71,7 @@ test.describe('Model Registry', () => {
       return;
     }
 
-    await expect(page.getByText(/pronto para teste|em produção|a\/b challenger/i)).toBeVisible();
+    await expect(page.getByText(/pronto para teste|em produção|teste a\/b|a\/b challenger/i)).toBeVisible();
     await expect(page.getByRole('button', { name: /designar challenger|promover para produção/i })).toHaveCount(0);
   });
 });

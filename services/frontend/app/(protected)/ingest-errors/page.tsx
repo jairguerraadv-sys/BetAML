@@ -83,7 +83,7 @@ export default function IngestErrorsPage() {
         corrected_payload: payload,
         note,
         entity_type: replayEntityType,
-        mapping_config_id: selectedMappingVersionId || undefined,
+        mapping_version_id: selectedMappingVersionId || undefined,
         resolve_original: true,
       }),
     onSuccess: () => {

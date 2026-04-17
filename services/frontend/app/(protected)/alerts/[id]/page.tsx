@@ -15,6 +15,7 @@ import {
   labelAlert,
   linkAlertToCase,
   triageAlert,
+  type AlertTriageDisposition,
 } from '@/lib/api';
 
 const SEV_BADGE: Record<string, string> = {
@@ -55,7 +56,7 @@ export default function AlertDetailPage() {
 
   const [showTriage, setShowTriage]    = useState(false);
   const [showLink, setShowLink]        = useState(false);
-  const [disposition, setDisp]         = useState('');
+  const [disposition, setDisp]         = useState<AlertTriageDisposition | ''>('');
   const [note, setNote]                = useState('');
   const [selectedCase, setSelectedCase] = useState('');
   const [labelValue, setLabelValue] = useState<'TRUE_POSITIVE' | 'FALSE_POSITIVE' | 'NEED_REVIEW'>('NEED_REVIEW');
@@ -81,7 +82,12 @@ export default function AlertDetailPage() {
   const cases: Case[] = (casesData as Case[] | undefined) ?? [];
 
   const triage = useMutation({
-    mutationFn: () => triageAlert(id, disposition, note),
+    mutationFn: () => {
+      if (!disposition) {
+        throw new Error('Selecione uma disposição antes de concluir a triagem.');
+      }
+      return triageAlert(id, disposition, note);
+    },
     onSuccess:  () => {
       qc.invalidateQueries({ queryKey: ['alert', id] });
       qc.invalidateQueries({ queryKey: ['alerts'] });
@@ -375,9 +381,10 @@ export default function AlertDetailPage() {
         {alert.case_id && (
           <a
             href={`/cases/${alert.case_id}`}
+            aria-label={alert.case_reference_number ? `Ver Caso ${alert.case_reference_number}` : 'Ver Caso'}
             className="rounded-lg border px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
           >
-            {alert.case_reference_number ? `Ver ${alert.case_reference_number}` : 'Ver Caso'}
+            {alert.case_reference_number ? `Ver Caso ${alert.case_reference_number}` : 'Ver Caso'}
           </a>
         )}
       </div>
@@ -425,13 +432,13 @@ export default function AlertDetailPage() {
             <select
               aria-label="Disposição da triagem"
               value={disposition}
-              onChange={(e) => setDisp(e.target.value)}
+              onChange={(e) => setDisp(e.target.value as AlertTriageDisposition | '')}
               className="mb-3 w-full rounded-lg border px-3 py-2 text-sm"
             >
               <option value="">Selecione...</option>
               <option value="FALSE_POSITIVE">False Positive</option>
-              <option value="TRUE_POSITIVE">True Positive</option>
-              <option value="UNDER_REVIEW">Em Análise</option>
+              <option value="CONFIRMED">Confirmado</option>
+              <option value="IN_REVIEW">Em Análise</option>
             </select>
 
             <label className="mb-1 block text-sm font-medium">Observação</label>

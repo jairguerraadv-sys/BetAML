@@ -33,6 +33,14 @@ def _numeric_or_none(value):
         return None
 
 
+def _ensure_alert_write_access(current_user: User) -> None:
+    effective_roles = get_effective_roles(current_user)
+    if getattr(current_user, "role", None) == "AUDITOR":
+        raise HTTPException(403, "Auditor não pode alterar alertas")
+    if not effective_roles.intersection({AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN}):
+        raise HTTPException(403, "Forbidden")
+
+
 def _infer_feature_baseline(feature_name: str, snapshot: dict[str, object]) -> float | None:
     direct_candidates = [
         f"baseline_{feature_name}",
@@ -299,6 +307,7 @@ async def triage_alert(
     current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
+    _ensure_alert_write_access(current_user)
     a = await db.get(Alert, alert_id)
     if not a or a.tenant_id != current_user.tenant_id:
         raise HTTPException(404, "Alerta não encontrado")
@@ -316,6 +325,7 @@ async def close_alert(
     current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
+    _ensure_alert_write_access(current_user)
     a = await db.get(Alert, alert_id)
     if not a or a.tenant_id != current_user.tenant_id:
         raise HTTPException(404, "Alerta não encontrado")
@@ -336,6 +346,7 @@ async def link_alert_to_case(
     current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
+    _ensure_alert_write_access(current_user)
     a = await db.get(Alert, alert_id)
     c = await db.get(Case, body.case_id)
     if not a or a.tenant_id != current_user.tenant_id:
@@ -443,8 +454,7 @@ async def label_alert(
     current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN])),
 ):
     """Label an alert as TRUE_POSITIVE, FALSE_POSITIVE, or NEED_REVIEW."""
-    if not get_effective_roles(current_user).intersection({AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN}):
-        raise HTTPException(403, "Forbidden")
+    _ensure_alert_write_access(current_user)
     alert = (await db.execute(
         select(Alert).where(
             Alert.id == alert_id,

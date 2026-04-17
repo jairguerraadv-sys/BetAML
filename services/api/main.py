@@ -485,13 +485,20 @@ async def _startup():
     await get_producer()
     await _setup_minio_lifecycle()
     await _warm_feature_store_cache()
-    # Inicia background task para auto-criação de cases a partir de scoring.alerts
-    try:
-        from alert_processor import start_alert_consumer
-        asyncio.create_task(start_alert_consumer(), name="alert_processor")
-        logger.info("alert_processor_scheduled")
-    except Exception as exc:
-        logger.warning("alert_processor_start_failed", error=str(exc))
+    # O rules_engine é a autoridade padrão para materialização de alertas/cases.
+    # O alert_processor legado fica opt-in apenas para cenários de migração controlada.
+    alert_processor_enabled = os.getenv("ALERT_PROCESSOR_ENABLED", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if alert_processor_enabled:
+        try:
+            from alert_processor import start_alert_consumer
+            asyncio.create_task(start_alert_consumer(), name="alert_processor")
+            logger.info("alert_processor_scheduled")
+        except Exception as exc:
+            logger.warning("alert_processor_start_failed", error=str(exc))
+    else:
+        logger.info("alert_processor_disabled_by_default")
     global _feature_maintenance_task
     _feature_maintenance_task = asyncio.create_task(
         _feature_store_maintenance_loop(),

@@ -334,8 +334,16 @@ def register_model_db(
     metrics: dict,
     feature_columns: list[str],
     trained_by: str = "ml-service",
+    *,
+    model_name: str | None = None,
+    model_type: str | None = None,
+    model_version: str | None = None,
+    status: str = "champion",
 ) -> None:
     import sqlalchemy as sa
+    normalized_model_type = (model_type or "ANOMALY").strip().upper()[:20] or "ANOMALY"
+    resolved_model_name = (model_name or algorithm or "model").strip()
+    resolved_model_version = (model_version or model_id).strip()
     with engine.begin() as conn:
         # Desativa versões anteriores do mesmo tenant
         conn.execute(
@@ -347,15 +355,21 @@ def register_model_db(
         )
         conn.execute(sa.text("""
             INSERT INTO model_registry
-                (id, tenant_id, algorithm, artifact_uri, is_active, trained_at,
+                (id, tenant_id, model_name, model_type, model_version, algorithm,
+                 artifact_uri, is_active, status, trained_at,
                  training_rows, metrics, feature_columns, trained_by)
             VALUES
-                (:id, :tid, :algo, :uri, true, :ts, :rows, :metrics, :fc, :by)
+                (:id, :tid, :model_name, :model_type, :model_version, :algo,
+                 :uri, true, :status, :ts, :rows, :metrics, :fc, :by)
         """), {
             "id":    model_id,
             "tid":   tenant_id,
+            "model_name": resolved_model_name,
+            "model_type": normalized_model_type,
+            "model_version": resolved_model_version,
             "algo":  algorithm,
             "uri":   artifact_uri,
+            "status": status,
             "ts":    _utcnow(),
             "rows":  int(metrics.get("training_rows", 0)),
             "metrics": json.dumps(metrics),
@@ -732,7 +746,10 @@ def train(req: TrainRequest):
         engine = _db_engine()
         register_model_db(
             engine, tenant_id, model_id, artifact_uri,
-            "IsolationForest", metrics, FEATURE_COLS
+            "IsolationForest", metrics, FEATURE_COLS,
+            model_name="IsolationForest",
+            model_type="ANOMALY",
+            model_version=model_id,
         )
     except Exception as e:
         logger.error("model_register_failed", error=str(e))
@@ -1021,7 +1038,10 @@ def train_structuring(req: TrainRequest):
     try:
         engine = _db_engine()
         register_model_db(engine, tenant_id, model_id, artifact_uri,
-                          "StructuringDetector", metrics, STRUCTURING_COLS)
+                          "StructuringDetector", metrics, STRUCTURING_COLS,
+                          model_name="StructuringDetector",
+                          model_type="STRUCTURING",
+                          model_version=model_id)
     except Exception as e:
         logger.error("model_register_failed", error=str(e))
 
@@ -1083,7 +1103,10 @@ def train_graph(req: TrainRequest):
     try:
         engine = _db_engine()
         register_model_db(engine, tenant_id, model_id, artifact_uri,
-                          "GraphClustering", metrics, GRAPH_COLS)
+                          "GraphClustering", metrics, GRAPH_COLS,
+                          model_name="GraphClustering",
+                          model_type="NETWORK",
+                          model_version=model_id)
     except Exception as e:
         logger.error("graph_register_failed", error=str(e))
 
@@ -1152,7 +1175,10 @@ def train_recurrence(req: TrainRequest):
     try:
         engine = _db_engine()
         register_model_db(engine, tenant_id, model_id, artifact_uri,
-                          "RecurrenceEstimator", metrics, RECURRENCE_COLS)
+                          "RecurrenceEstimator", metrics, RECURRENCE_COLS,
+                          model_name="RecurrenceEstimator",
+                          model_type="RECURRENCE",
+                          model_version=model_id)
     except Exception as e:
         logger.error("recurrence_register_failed", error=str(e))
 

@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
-import { fetchAlerts, triageAlert, Alert } from '@/lib/api';
+import { fetchAlerts, triageAlert, Alert, type AlertTriageDisposition } from '@/lib/api';
 import {
   AlertTriangle, Eye, FolderPlus, X, ChevronRight,
   Clock, Filter, RefreshCw, HelpCircle, Glasses, Search,
@@ -55,8 +55,8 @@ const TYPE_EXPLAIN: Record<string, string> = {
 
 const DISP_PT: Record<string, string> = {
   FALSE_POSITIVE: 'Falso positivo (descartar)',
-  TRUE_POSITIVE:  'Confirmado como risco real',
-  UNDER_REVIEW:   'Em análise (manter em aberto)',
+  CONFIRMED:      'Confirmado como risco real',
+  IN_REVIEW:      'Em análise (manter em aberto)',
 };
 
 function SeverityDot({ sev }: { sev: string }) {
@@ -219,7 +219,7 @@ export default function AlertsPage() {
   const [sevFilter, setSevFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('OPEN');
   const [note, setNote]         = useState('');
-  const [disposition, setDisp]  = useState('');
+  const [disposition, setDisp]  = useState<AlertTriageDisposition | ''>('');
   const [observingId, setObservingId] = useState<string | null>(null);
 
   const { data, isLoading, refetch } = useQuery({
@@ -250,7 +250,12 @@ export default function AlertsPage() {
   });
 
   const triage = useMutation({
-    mutationFn: () => triageAlert(selected!.id, disposition, note),
+    mutationFn: () => {
+      if (!disposition) {
+        throw new Error('Selecione uma disposição antes de concluir a triagem.');
+      }
+      return triageAlert(selected!.id, disposition, note);
+    },
     onSuccess:  () => {
       qc.invalidateQueries({ queryKey: ['alerts'] });
       setSelected(null);
@@ -384,7 +389,7 @@ export default function AlertsPage() {
 
             <label className="mt-3 mb-1 block text-sm font-medium text-gray-700">O que você concluiu?</label>
             <div className="space-y-2 mb-3">
-              {Object.entries(DISP_PT).map(([val, label]) => (
+              {(Object.entries(DISP_PT) as Array<[AlertTriageDisposition, string]>).map(([val, label]) => (
                 <label
                   key={val}
                   className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors text-sm ${

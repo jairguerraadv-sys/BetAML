@@ -191,10 +191,23 @@ export interface Case {
   sla_due_at?: string;
 }
 
+export interface CaseEvidenceFile {
+  event_id: string;
+  file_name?: string | null;
+  description?: string | null;
+  content_type?: string | null;
+  size_bytes: number;
+  sha256?: string | null;
+  storage_backend?: string | null;
+  uploaded_at?: string | null;
+  download_path: string;
+}
+
 export interface CaseDetail extends Case {
   description?: string;
   alerts: Array<{ id: string; severity: string; title: string }>;
   timeline: Array<{ id: string; event_type: string; content: Record<string, unknown>; created_at: string }>;
+  evidence_files: CaseEvidenceFile[];
   report_packages?: Array<{
     id: string;
     status: string;
@@ -427,6 +440,20 @@ export const fetchCases = (params?: Record<string, string | number>) =>
 export const fetchCase = (id: string) =>
   api.get<CaseDetail>(`/cases/${id}`).then((r) => r.data);
 
+export const uploadCaseEvidence = (
+  caseId: string,
+  body: { file: File; description?: string },
+) => {
+  const formData = new FormData();
+  formData.append('file', body.file);
+  if (body.description?.trim()) {
+    formData.append('description', body.description.trim());
+  }
+  return api.post<CaseEvidenceFile>(`/cases/${caseId}/evidence`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then((r) => r.data);
+};
+
 export const createCase = (body: {
   title: string;
   description?: string;
@@ -642,7 +669,9 @@ export const ingestFile = (formData: FormData) =>
     })
     .then((r) => r.data);
 
-export const triageAlert = (alertId: string, disposition: string, note: string) =>
+export type AlertTriageDisposition = 'IN_REVIEW' | 'CONFIRMED' | 'FALSE_POSITIVE' | 'DISMISSED';
+
+export const triageAlert = (alertId: string, disposition: AlertTriageDisposition, note: string) =>
   api.post(`/alerts/${alertId}/triage`, { disposition, note }).then((r) => r.data);
 
 export const closeAlert = (alertId: string) =>
@@ -741,6 +770,13 @@ export interface MappingCreatePayload {
   change_notes?: string;
 }
 
+export interface MappingCreateResult {
+  id: string;
+  name: string;
+  version_number: number;
+  is_current: boolean;
+}
+
 export interface MappingTestResponse {
   status: 'ok' | 'error';
   canonical?: Record<string, unknown>;
@@ -777,7 +813,7 @@ export const testMapping = (id: string, body: { sample: Record<string, unknown> 
   api.post<MappingTestResponse>(`/mappings/${id}/test`, body).then((r) => r.data);
 
 export const createMapping = (body: MappingCreatePayload) =>
-  api.post('/mappings', body).then((r) => r.data);
+  api.post<MappingCreateResult>('/mappings', body).then((r) => r.data);
 
 export const updateMappingAsNewVersion = (id: string, body: {
   name?: string;
@@ -1240,6 +1276,7 @@ export const replayIngestError = (
   body: {
     corrected_payload: Record<string, unknown>;
     entity_type?: string;
+    mapping_version_id?: string;
     mapping_config_id?: string;
     resolve_original?: boolean;
     note?: string;

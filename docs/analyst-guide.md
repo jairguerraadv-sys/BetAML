@@ -10,7 +10,9 @@ O BetAML é uma plataforma de detecção de lavagem de dinheiro e financiamento 
 
 1. Acesse `http://localhost:3000` (ou a URL do seu ambiente)
 2. Use as credenciais fornecidas pelo administrador
-3. Papéis disponíveis: `AML_ANALYST`, `AUDITOR`, `ADMIN` (e `SUPER_ADMIN` para operadores de plataforma)
+3. Papéis disponíveis na UI atual: `Operador_Analista`, `Operador_Gestor`, `Operador_AdminTecnico` e `BetAML_SuperAdmin`
+
+Observação: o backend ainda mantém aliases legados (`AML_ANALYST`, `AUDITOR`, `ADMIN`, `SUPER_ADMIN`) por compatibilidade com seeds e tokens antigos.
 
 ---
 
@@ -36,8 +38,11 @@ Em **Alertas**, use os filtros:
 ### 4.2 Triagem
 
 1. Clique em um alerta para abrir o painel de detalhes
-2. Escolha **Disposição**: `FALSE_POSITIVE` | `ESCALATE` | `CLOSE`
+2. Escolha **Disposição**: `IN_REVIEW` | `CONFIRMED` | `FALSE_POSITIVE`
 3. Preencha a justificativa e confirme
+
+Perfis com capacidade de triagem e mutacao de alerta: `Operador_Analista`, `Operador_Gestor` e `BetAML_SuperAdmin`.
+O papel legado `AUDITOR` permanece restrito a leitura e auditoria.
 
 ### 4.3 Feedback para o Modelo (Labeling)
 
@@ -46,7 +51,7 @@ Use o botão **Etiquetar** (ícone de tag) para classificar:
 - **FALSE_POSITIVE** — não é suspeito
 - **NEED_REVIEW** — requer supervisão
 
-O feedback alimenta o loop de retreinamento automático via tópico `feedback.labels`.
+O feedback é persistido e integra o loop de melhoria do modelo, mas o acoplamento fim a fim entre labeling, inferência online e retreino ainda está em hardening.
 
 ---
 
@@ -61,15 +66,23 @@ O feedback alimenta o loop de retreinamento automático via tópico `feedback.la
 
 ### 5.2 Evidências
 
-Faça upload de documentos em **Casos → [Caso] → Evidências**. Os arquivos são armazenados no MinIO com versionamento.
+No detalhe do caso, a aba **Visao Geral** possui o bloco **Evidencias e Cadeia de Custodia**.
+
+Fluxo atual:
+- selecione o arquivo e, opcionalmente, descreva a evidencia;
+- clique em **Enviar evidencia**;
+- cada anexo recebe metadados exibidos na UI: nome, tamanho, content type, backend de armazenamento, horario de upload e hash `SHA-256`;
+- o botao **Baixar** usa download autenticado;
+- a timeline do caso registra o evento de evidencia associado ao dossie.
 
 ### 5.3 Relatório de Caso (PDF)
 
-Clique em **Exportar PDF** na página do caso para baixar o pacote completo com:
-- Resumo do caso
-- Histórico de eventos
-- Features do jogador no momento do alerta
-- Trilha de auditoria
+O `ReportPackage` do caso pode ser exportado em JSON e PDF.
+
+Estado atual validado:
+- analistas conseguem exportar JSON e PDF do pacote;
+- a exportacao gera trilha de auditoria;
+- o papel legado `AUDITOR` permanece em leitura para auditoria e nao deve receber permissao de exportacao PDF.
 
 ---
 
@@ -221,18 +234,18 @@ O relatório inclui:
 
 ### 8.2 Relatório de Caso Individual
 
-Em **Casos → [Caso] → Exportar PDF**
+Em **Casos → [Caso] → Exportar JSON** ou **Exportar PDF**
 
 ### 8.3 Pacote de Relatório COAF (SAR)
 
 Para comunicar uma operação suspeita ao COAF (Resolução COAF 36/2021 Art. 9):
 
-1. Acesse o caso encerrado em **Casos → [Caso]**
-2. Clique em **Gerar Pacote COAF**
+1. Acesse o caso em **Casos → [Caso]**
+2. Clique em **Gerar ReportPackage**
 3. Preencha:
    - **Decisão**: `FILE_SAR` (comunicar) ou `NO_ACTION` (arquivar)
    - **Narrativa do analista** *(obrigatória quando decisão = FILE_SAR)*
-4. Confirme — o sistema gera um PDF e registra o `report_id`
+4. Confirme — o sistema gera os artefatos de exportação atualmente disponíveis
 
 Via API:
 ```bash
@@ -246,9 +259,9 @@ curl -X POST http://localhost:8000/cases/{case_id}/report-package \
   }'
 ```
 
-Resposta inclui:
-- `report_id` — UUID único para protocolo COAF
-- `pdf_url` — link para download do PDF no MinIO
+Importante:
+- a submissão regulatória automática ainda não está integrada a um canal externo definitivo;
+- o fluxo de submit atual é controlado internamente e ainda possui estágio manual ou stub.
 
 ### 8.4 Como investigar um caso
 
@@ -268,10 +281,11 @@ Resposta inclui:
 
 1. No detalhe do caso, clique em **Gerar ReportPackage**.
 2. Preencha a narrativa do analista.
-3. Escolha a decisao: `REPORT`, `CLOSE` ou `MONITOR`.
+3. Escolha a decisao conforme o fluxo atual da tela e do backend.
 4. Revise o resumo financeiro, os alertas vinculados e anexos.
 5. Gere o pacote e exporte em JSON ou PDF.
-6. Se a decisao equivaler a comunicacao regulatoria, solicite a submissao maker-checker.
+6. Se necessario, valide a trilha em **Audit Logs** apos a exportacao.
+7. Se a decisao equivaler a comunicacao regulatoria, trate a submissao como fluxo controlado interno ate a integracao final ser concluida.
 
 ---
 
@@ -289,7 +303,7 @@ curl -X POST http://localhost:8000/players/{player_id}/right-to-erasure \
 
 2. Ou via página **Admin → Ações Legais → Anonimizar Jogador**
 
-A ação registra trilha de auditoria e substitui PII por hashes SHA-256.
+A ação registra trilha de auditoria e anonimização operacional, mas o comportamento detalhado de retenção e substituição de PII deve ser validado no ambiente alvo antes de uso regulatório.
 
 ---
 
@@ -377,9 +391,11 @@ Cada entrada exibe:
 - `metrics` — AUC-ROC, F1, precisão registrados no treino
 - `trained_at`, `promoted_at`, `promoted_by`
 
+Observação: o Model Registry existe e é útil operacionalmente, mas a consistência de metadados e o fluxo de promoção ainda estão em hardening no branch atual.
+
 ### Promover um Challenger para Champion
 
-Requer role `ADMIN`:
+Na UI e na API atual, a promoção fica disponível para perfis com responsabilidade operacional de modelo: `Operador_Gestor`, `Operador_AdminTecnico` e `BetAML_SuperAdmin`.
 
 ```bash
 POST /model-registry/{model_id}/promote
@@ -396,7 +412,7 @@ O sistema arquiva automaticamente o champion anterior do mesmo `model_type` e pr
 3. Escolha:
    - `TRUE_POSITIVE`
    - `FALSE_POSITIVE`
-   - `UNKNOWN`
+  - `NEED_REVIEW`
 4. Registre uma nota curta explicando o racional.
 5. Salve.
 

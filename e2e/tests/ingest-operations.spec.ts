@@ -24,7 +24,7 @@ test.describe('Ingest Operations', () => {
     await expect(page.getByText(created.marker)).toBeVisible({ timeout: 10_000 });
     await page.getByRole('button', { name: /^replay$/i }).first().click();
 
-    await expect(page.getByRole('heading', { name: /replay de payload corrigido/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /reenviar registro corrigido/i })).toBeVisible();
     await page.getByLabel(/payload corrigido do replay de ingestão/i).fill(JSON.stringify({
       event_id: created.marker,
       external_player_id: `CPF-${Date.now()}`,

@@ -1,70 +1,57 @@
 # BetAML - Backlog de Product Readiness
 
-Estado atual consolidado: MVP avancado, apto para piloto controlado, ainda abaixo do padrao de produto comercial completo para PLD bancario.
+Estado atual consolidado em 2026-04-07:
+- cadeia local de readiness fechada no branch atual com evidencias em `artifacts/readiness/`;
+- `readiness_preflight=PASS`, `github_actions_readiness=PASS`, `restore_drill=PASS`, `load_slo=PASS` e `release_go_no_go=GO`;
+- smoke, extended e security reexecutados com XMLs JUnit validos.
 
-## P0 - Bloqueadores de confianca operacional
+Este backlog nao descreve mais bloqueios internos da Fase 1/Fase 2 ja fechados localmente. A partir daqui ele registra o delta restante para producao formal e para repeticao da mesma cadeia fora do ambiente local de referencia.
 
-1. Corrigir navegacao quebrada e contratos falsos entre frontend e backend.
-   - Remover ou implementar rotas expostas em menu sem pagina funcional.
-   - Alinhar RBAC real de middleware, nav-config e paginas protegidas.
-   - Critério de aceite: nenhum link do menu principal leva a 404, tela vazia ou fluxo sem backend correspondente.
+## Fechado no branch atual
 
-2. Eliminar mocks em caminhos operacionais de validacao externa.
-   - Isolar provider mock apenas para dev e testes.
-   - Falhar de forma explicita quando o ambiente exigir integracao real e ela nao estiver configurada.
-   - Critério de aceite: ambiente operacional nao executa validacao mock silenciosa.
+1. Bootstrap, healthchecks e onboarding de tenant revalidados.
+   - API voltou a responder `/health/live` e `/health/ready`.
+   - Onboarding e criacao de tenant agora operam com contexto de plataforma e seed deterministica de superadmin.
 
-3. Alinhar topologia Kafka entre bootstrap, produtores e consumidores.
-   - Revisar topicos inicializados no compose e topicos realmente consumidos pelos servicos.
-   - Corrigir contratos raw, canonical, features, alerts e replay.
-   - Critério de aceite: smoke end to end gera evento, feature e alerta sem dependencia de topico ausente.
+2. Fluxos criticos de frontend e contratos UI/API estabilizados.
+   - Smoke e extended fecharam com navegacao, mappings, ingest operations, onboarding, report exports e maintenance mode verdes.
 
-4. Endurecer segredos, PII e logging.
-   - Remover defaults inseguros fora de dev.
-   - Revisar decriptacao, mascaramento e logs com payload bruto.
-   - Critério de aceite: nenhum caminho produtivo depende de segredo padrao ou vaza PII em logs operacionais.
+3. RBAC e PII endurecidos nos pontos validados.
+   - Auditor legado ficou explicitamente bloqueado em mutacoes de alertas.
+   - A UI do jogador passou a sinalizar mascaramento apenas quando o valor retornado vier de fato mascarado.
 
-## P1 - Fechamento funcional para operacao real
+4. Prontidao operacional local comprovada.
+   - Preflight, restore drill, capacity smoke e gate final de go/no-go foram executados com evidencia arquivada.
 
-5. Completar coerencia do fluxo alerta -> caso -> dossie -> report package.
-   - Garantir referencias, status, atribuicao, narrativa e exportacao consistentes.
-   - Critério de aceite: fluxo do analista funciona ponta a ponta sem dados sintéticos obrigatorios.
+## P0 - Obrigatorio antes de producao formal
 
-6. Endurecer camada de ML para uso controlado.
-   - Separar bootstrap sintético de runtime produtivo.
-   - Tornar challenger, promocao e explainability auditaveis e previsiveis.
-   - Critério de aceite: inferencia online nao usa fallback sintético silencioso em ambiente operacional.
+1. Repetir a mesma cadeia no workflow remoto ou no ambiente alvo de staging.
+   - Critério de aceite: artefatos equivalentes aos de `artifacts/readiness/` publicados pelo ambiente oficial.
 
-7. Limpar residuos de teste e seeds em ambientes de demonstracao e staging.
-   - Evitar casos, alertas e entidades de teste convivendo com dados operacionais.
-   - Critério de aceite: ambiente alvo possui dataset coerente e rastreavel por tenant.
+2. Substituir metadados locais por metadados operacionais reais.
+   - Critério de aceite: `rollback_target`, `oncall_owner`, backup de producao e janela de deploy definidos pelo operador responsavel.
 
-## P2 - Go live defensavel
+3. Validar provedores externos, secrets e credenciais reais fora do modo local.
+   - Critério de aceite: nenhum fluxo critico de producao depende de provider mock, segredo default ou identidade local de desenvolvimento.
 
-8. Fechar readiness operacional.
-   - Backup restore validado.
-   - Rollback ensaiado.
-   - Alertas, dashboards e runbooks revisados com evidencias.
-   - Critério de aceite: checklist de go live pode ser executado sem lacunas materiais.
+## P1 - Hardening de producao
 
-9. Executar carga sustentada com metas SLO.
-   - Medir p95, taxa de erro, backlog e throughput de ingestao.
-   - Critério de aceite: SLO acordado aprovado em teste reproduzivel.
+4. Formalizar secret manager, TLS/ingress e runbook de rotacao.
+   - Critério de aceite: segredos fora do repositório e politicas de rotacao aprovadas por Operacoes e Compliance.
 
-10. Formalizar trilha de producao.
-   - Secret manager externo.
-   - TLS e ingress produtivos.
-   - Janela de deploy, rollback e aceite de Operacoes e Compliance.
-   - Critério de aceite: parecer final muda de aprovado condicional para pronto para producao.
+5. Validar observabilidade e alarmistica no ambiente-alvo.
+   - Critério de aceite: dashboards, alertas e canais de on-call respondem com dados reais apos o deploy.
 
-## Ordem sugerida de execucao por agente
+6. Revisar dataset e seeds fora do ambiente local.
+   - Critério de aceite: staging/producao nao dependem de seeds sinteticos para operar e auditar fluxos criticos.
 
-1. BetAML UI API Contract Agent
-2. BetAML Real Pipeline Agent
-3. BetAML Security and PII Agent
-4. BetAML Case and Report Agent
-5. BetAML ML Hardening Agent
-6. BetAML Ops Go Live Agent
+## P2 - Pos go-live
+
+7. Endurecer o ciclo de vida de modelos para operacao assistida.
+   - Critério de aceite: promocao, fallback e explainability seguem governanca revisada no ambiente real.
+
+8. Transformar a cadeia local em gate repetivel de release.
+   - Critério de aceite: o status do branch possa ser reprovado/aprovado automaticamente a partir dos mesmos artefatos e thresholds.
 
 ## Regra de execucao
 

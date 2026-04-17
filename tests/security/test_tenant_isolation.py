@@ -407,8 +407,8 @@ def test_duplicate_tenant_slug_returns_409():
     if not RUN_INTEGRATION:
         pytest.skip("Stack não disponível")
     admin_creds = {
-        "username": os.getenv("SUPER_ADMIN_USER", "admin_a"),
-        "password": os.getenv("SUPER_ADMIN_PASS", "admin123"),
+        "username": os.getenv("SUPER_ADMIN_USER", "superadmin"),
+        "password": os.getenv("SUPER_ADMIN_PASS", "superadmin123"),
     }
     with httpx.Client(base_url=BASE_URL, timeout=10) as c:
         r = c.post("/auth/login", json=admin_creds)

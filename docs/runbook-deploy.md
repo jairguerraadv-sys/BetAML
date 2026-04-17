@@ -1,6 +1,6 @@
 # Runbook de Deploy e Onboarding de Tenants — BetAML
 
-> **Versão**: 2.3 • **Atualizado**: 2026-04-02  
+> **Versão**: 2.4 • **Atualizado**: 2026-04-04  
 > Destinatários: Engenharia de Plataforma, DevOps, Compliance Ops
 
 ---
@@ -50,7 +50,7 @@ git clone git@github.com:jairguerraadv-sys/BetAML.git
 cd BetAML
 
 # Copiar template de variáveis
-cp infra/.env.example infra/.env   # crie este arquivo se não existir
+cp .env.example .env
 
 # Editar OBRIGATORIAMENTE:
 #   JWT_SECRET=<min 32 chars aleatórios>
@@ -62,6 +62,8 @@ python3 -c "import secrets, base64; print(base64.b64encode(secrets.token_bytes(3
 > ⚠️ **Segurança**: `JWT_SECRET` e `PII_ENCRYPTION_KEY` com valores padrão causam
 > `RuntimeError` no startup quando `ENVIRONMENT != development`. **Nunca** use os
 > valores padrão em staging/produção.
+
+> ℹ️ **Observação operacional**: o compose principal consome `.env` na raiz do repositório. Não use `infra/.env` como fonte única de verdade.
 
 ### 2.2 Subir a stack
 
@@ -156,14 +158,15 @@ docker compose -f infra/docker-compose.yml exec -T postgres \
 ### 4.1 Bootstrap controlado de ambiente
 
 O `seeds.py` nao deve mais ser assumido como passo implicito de startup fora de `development` e `test`.
-No compose local, o auto-seed so roda em `development`/`test` por padrao ou quando `API_AUTO_SEED=true` for definido explicitamente.
+No compose local, o auto-seed fica desabilitado por padrão e só roda quando `API_AUTO_SEED=true` for definido explicitamente.
 
 Quando executado de forma controlada, o bootstrap cria:
 
+- 1 principal de plataforma deterministico (`superadmin` / `superadmin123`, salvo override por `SUPER_ADMIN_USER` e `SUPER_ADMIN_PASS`)
 - 2 tenants de demonstracao (`OperadorA`, `OperadorB`)
 - 3 usuários por tenant (admin, analyst, auditor)
 - 50 players sintéticos com cenários PLD
-- 13 regras DSL default (incluindo `Incompatibilidade renda/volume 30d`)
+- 17 regras DSL default (incluindo `Incompatibilidade renda/volume 30d` e regras multi-modalidade)
 - 1 `ScoringConfig` por tenant
 
 Execucao manual:
@@ -181,11 +184,13 @@ API_AUTO_SEED=true docker compose -f infra/docker-compose.yml up api
 
 ### 4.2 Criar tenant de produção via API
 
+Importante: `POST /admin/tenants` exige papel `BetAML_SuperAdmin`. Credenciais tenant-scoped como `admin_a` nao conseguem mais executar onboarding de plataforma.
+
 ```bash
-# 1. Fazer login com principal bootstrap criado de forma controlada (seed manual ou provisionamento administrativo equivalente)
+# 1. Fazer login com principal de plataforma bootstrapado de forma controlada
 TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin_a","password":"admin123"}' | jq -r .access_token)
+  -d '{"username":"superadmin","password":"superadmin123"}' | jq -r .access_token)
 
 # 2. Criar tenant
 curl -s -X POST http://localhost:8000/admin/tenants \
@@ -528,12 +533,14 @@ Rollback so e considerado concluido depois de:
 ### Onboarding de tenant
 
 - [ ] Criar tenant via `POST /admin/tenants`
+- [ ] Login com principal `BetAML_SuperAdmin`
 - [ ] Criar usuário ADMIN do tenant
 - [ ] Configurar `ScoringConfig` (`PUT /admin/tenants/{id}/scoring-config`)
 - [ ] Gerar API Key para conector de ingestão
 - [ ] Importar players históricos (CSV)
 - [ ] Validar: `GET /stats/dashboard` retorna dados do novo tenant
-- [ ] Executar seed de regras DSL: verificar 13 regras ativas
+- [ ] Validar onboarding wizard e permissões do tenant recém-criado
+- [ ] Executar seed de regras DSL: verificar 17 regras ativas
 - [ ] Confirmar que modelo ML está ativo: `GET /ml/models?status=champion` ≥ 1
 - [ ] Testar ingestão de evento de teste via `POST /ingest/event`
 - [ ] Entregar credenciais ao operador com protocolo de rotação de senha
