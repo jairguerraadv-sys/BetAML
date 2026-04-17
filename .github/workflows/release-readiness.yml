@@ -132,6 +132,8 @@ jobs:
           python -m alembic -c alembic.ini history
 
       - name: Start services for readiness smoke
+        env:
+          API_AUTO_SEED: "true"
         run: |
           cp .env.example .env
           docker compose -f infra/docker-compose.yml up -d \
