@@ -480,8 +480,16 @@ async def _startup():
             "⚠️  CRÍTICO: EPSILON_WEBHOOK_SECRET não pode ser o valor padrão em staging/produção. "
             "Defina a variável de ambiente EPSILON_WEBHOOK_SECRET com um segredo aleatório de ≥ 32 bytes."
         )
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+
+    auto_create_schema = os.getenv("API_AUTO_CREATE_SCHEMA", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if auto_create_schema:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.warning("schema_auto_create_enabled")
+    else:
+        logger.info("schema_auto_create_disabled")
     await get_producer()
     await _setup_minio_lifecycle()
     await _warm_feature_store_cache()
