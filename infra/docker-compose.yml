@@ -217,6 +217,7 @@ services:
       # o startup da API lançará RuntimeError e recusará subir.
       PII_ENCRYPTION_KEY:      ${PII_ENCRYPTION_KEY:-ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5}
       ENVIRONMENT:             ${ENVIRONMENT:-development}
+      API_AUTO_SEED:           ${API_AUTO_SEED:-false}
       DEPLOYMENT_MODE:         ${DEPLOYMENT_MODE:-saas}
       ONPREM_TENANT_ID:        ${ONPREM_TENANT_ID:-}
       SANCTIONS_CSV_PATH:      /data/sanctions.csv
