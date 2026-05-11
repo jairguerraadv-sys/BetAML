@@ -1,0 +1,10 @@
+<testsuites id="" name="" tests="3" failures="0" skipped="0" errors="0" time="2.521973">
+<testsuite name="ingest-connectors.spec.ts" timestamp="2026-04-07T05:55:14.825Z" hostname="chromium" tests="3" failures="0" skipped="0" time="1.22" errors="0">
+<testcase name="Ingest Connectors › admin can parse ConnectorGamma XML with mixed valid/invalid records and inspect job errors" classname="ingest-connectors.spec.ts" time="0.467">
+</testcase>
+<testcase name="Ingest Connectors › admin can parse ConnectorDelta NDJSON and quarantine malformed lines" classname="ingest-connectors.spec.ts" time="0.388">
+</testcase>
+<testcase name="Ingest Connectors › admin can parse ConnectorGamma with explicit MappingConfig version tracking" classname="ingest-connectors.spec.ts" time="0.365">
+</testcase>
+</testsuite>
+</testsuites>

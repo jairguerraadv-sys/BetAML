@@ -1,0 +1,6 @@
+<testsuites id="" name="" tests="1" failures="0" skipped="0" errors="0" time="1.8839680000000003">
+<testsuite name="ingest-rate-limit.spec.ts" timestamp="2026-04-07T05:55:11.574Z" hostname="chromium" tests="1" failures="0" skipped="0" time="0.546" errors="0">
+<testcase name="Ingest Rate Limit › admin-configured tenant ingest limit is enforced for connector parse endpoint" classname="ingest-rate-limit.spec.ts" time="0.546">
+</testcase>
+</testsuite>
+</testsuites>

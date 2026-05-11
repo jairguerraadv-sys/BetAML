@@ -1,0 +1,39 @@
+
+== Contexto ==
+timestamp_utc=2026-04-07T05:26:23Z
+root_dir=/workspaces/BetAML
+compose_file=/workspaces/BetAML/infra/docker-compose.yml
+api_url=http://localhost:8000
+frontend_url=http://localhost:3000
+
+== Dependencias ==
+
+== Compose ==
+[PASS] servico em execucao: postgres
+[PASS] servico em execucao: redis
+[PASS] servico em execucao: redpanda
+[PASS] servico em execucao: minio
+[PASS] servico em execucao: clickhouse
+[PASS] servico em execucao: api
+[PASS] servico em execucao: frontend
+[PASS] servico em execucao: stream-processor
+[PASS] servico em execucao: rules-engine
+[PASS] servico em execucao: ml-service
+
+== HTTP ==
+[PASS] api-live respondendo em http://localhost:8000/health/live
+[PASS] api-ready respondendo em http://localhost:8000/health/ready
+[PASS] frontend respondendo em http://localhost:3000/
+
+== Alembic ==
+[PASS] cadeia Alembic validada
+
+== Migracoes SQL ==
+NOTICE:  relation "schema_migrations" already exists, skipping
+[PASS] dry-run das migracoes legadas validado
+
+== Backup ==
+[PASS] configuracao de backup Helm presente e habilitada
+
+== Resumo ==
+readiness_preflight=PASS

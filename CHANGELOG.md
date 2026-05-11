@@ -7,6 +7,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Fixed — Release Readiness Closure
+
+- **`infra/docker-compose.yml`**: o startup da API no compose agora recebe `API_AUTO_SEED` no ambiente do container, permitindo bootstrap controlado dos principals sintéticos exigidos pelo smoke remoto de external validation.
+- **`.gitignore`** e **`e2e/package-lock.json`**: o lockfile do projeto E2E passa a ser versionado para que `npm ci` rode de forma determinística no step `Install Playwright deps` do workflow `release-readiness`.
+
 ## [1.0.0-rc3] — 2026-04-03
 
 ### Added — Multi-Modalidade (Lei 14.790/2023 art. 3º)

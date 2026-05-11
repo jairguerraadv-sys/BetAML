@@ -1,0 +1,6 @@
+<testsuites id="" name="" tests="1" failures="0" skipped="0" errors="0" time="3.921194">
+<testsuite name="fictibet-dataset-pack.spec.ts" timestamp="2026-04-07T05:55:22.214Z" hostname="chromium" tests="1" failures="0" skipped="0" time="2.633" errors="0">
+<testcase name="FictiBet Dataset Pack › admin can ingest the full realistic pack across all ingestion channels" classname="fictibet-dataset-pack.spec.ts" time="2.633">
+</testcase>
+</testsuite>
+</testsuites>

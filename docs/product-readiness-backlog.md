@@ -1,11 +1,13 @@
 # BetAML - Backlog de Product Readiness
 
-Estado atual consolidado em 2026-04-07:
+Estado atual consolidado em 2026-05-11:
 - cadeia local de readiness fechada no branch atual com evidencias em `artifacts/readiness/`;
-- `readiness_preflight=PASS`, `github_actions_readiness=PASS`, `restore_drill=PASS`, `load_slo=PASS` e `release_go_no_go=GO`;
+- workflow remoto `Release Readiness` fechado com `success` na run `25696032708` para o head `74c9e14`;
+- `readiness_preflight=PASS`, `github_actions_readiness=PASS`, `restore_drill=PASS`, `load_slo=PASS`, `release_go_no_go=GO` e `release_readiness_remote=PASS`;
+- bloqueios remotos de fechamento eliminados com bootstrap controlado da API e lockfile versionado do E2E;
 - smoke, extended e security reexecutados com XMLs JUnit validos.
 
-Este backlog nao descreve mais bloqueios internos da Fase 1/Fase 2 ja fechados localmente. A partir daqui ele registra o delta restante para producao formal e para repeticao da mesma cadeia fora do ambiente local de referencia.
+Este backlog nao descreve mais bloqueios internos da Fase 1/Fase 2 ja fechados localmente. A partir daqui ele registra o delta restante para producao formal, com a cadeia local e a cadeia remota ja encerradas.
 
 ## Fechado no branch atual
 
@@ -23,16 +25,19 @@ Este backlog nao descreve mais bloqueios internos da Fase 1/Fase 2 ja fechados l
 4. Prontidao operacional local comprovada.
    - Preflight, restore drill, capacity smoke e gate final de go/no-go foram executados com evidencia arquivada.
 
+5. Cadeia remota de readiness fechada.
+   - O workflow `Release Readiness` do GitHub Actions concluiu em `success` para o commit `74c9e14`, incluindo external validation smoke, install de Playwright deps, smoke, extended, security e go/no-go final.
+
 ## P0 - Obrigatorio antes de producao formal
 
-1. Repetir a mesma cadeia no workflow remoto ou no ambiente alvo de staging.
-   - Critério de aceite: artefatos equivalentes aos de `artifacts/readiness/` publicados pelo ambiente oficial.
-
-2. Substituir metadados locais por metadados operacionais reais.
+1. Substituir metadados locais por metadados operacionais reais.
    - Critério de aceite: `rollback_target`, `oncall_owner`, backup de producao e janela de deploy definidos pelo operador responsavel.
 
-3. Validar provedores externos, secrets e credenciais reais fora do modo local.
+2. Validar provedores externos, secrets e credenciais reais fora do modo local.
    - Critério de aceite: nenhum fluxo critico de producao depende de provider mock, segredo default ou identidade local de desenvolvimento.
+
+3. Executar o deploy formal com smoke pos-release no ambiente alvo.
+   - Critério de aceite: deploy concluido com backup < 24h, revisao real de rollback registrada e smoke funcional pos-deploy sem 5xx persistente, backlog anormal ou quebra de tenant isolation.
 
 ## P1 - Hardening de producao
 

@@ -1,0 +1,17 @@
+
+== Contexto ==
+timestamp_utc=2026-04-07T05:26:37Z
+repo=jairguerraadv-sys/BetAML
+
+== Workflows obrigatorios ==
+[PASS] workflow presente: capacity-smoke.yml
+[PASS] workflow presente: release-readiness.yml
+
+== Repo variables obrigatorias ==
+[PASS] variable presente: E2E_USERNAME
+
+== Repo secrets obrigatorios ==
+[PASS] secret presente: E2E_PASSWORD
+
+== Resumo ==
+github_actions_readiness=PASS

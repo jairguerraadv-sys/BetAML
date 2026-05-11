@@ -1,0 +1,8 @@
+<testsuites id="" name="" tests="2" failures="0" skipped="0" errors="0" time="10.01081">
+<testsuite name="ingest-operations.spec.ts" timestamp="2026-04-07T05:55:00.148Z" hostname="chromium" tests="2" failures="0" skipped="0" time="8.34" errors="0">
+<testcase name="Ingest Operations › admin can replay a quarantined ingest error from the UI" classname="ingest-operations.spec.ts" time="3.559">
+</testcase>
+<testcase name="Ingest Operations › admin can reprocess an eligible ingest job from the UI" classname="ingest-operations.spec.ts" time="4.781">
+</testcase>
+</testsuite>
+</testsuites>

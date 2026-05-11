@@ -1,0 +1,6 @@
+<testsuites id="" name="" tests="1" failures="0" skipped="0" errors="0" time="8.446878">
+<testsuite name="security-rbac.spec.ts" timestamp="2026-04-07T05:57:58.442Z" hostname="chromium" tests="1" failures="0" skipped="0" time="6.975" errors="0">
+<testcase name="Security RBAC › analyst sees full CPF while auditor sees masked CPF" classname="security-rbac.spec.ts" time="6.975">
+</testcase>
+</testsuite>
+</testsuites>

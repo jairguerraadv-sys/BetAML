@@ -1,0 +1,6 @@
+<testsuites id="" name="" tests="1" failures="0" skipped="0" errors="0" time="7.239187">
+<testsuite name="mappings-versioning.spec.ts" timestamp="2026-04-07T05:54:51.516Z" hostname="chromium" tests="1" failures="0" skipped="0" time="5.852" errors="0">
+<testcase name="Mappings Versioning › admin can inspect versions and rollback a mapping version" classname="mappings-versioning.spec.ts" time="5.852">
+</testcase>
+</testsuite>
+</testsuites>

@@ -1,0 +1,48 @@
+<testsuites id="" name="" tests="19" failures="0" skipped="0" errors="0" time="52.981441999999994">
+<testsuite name="alerts.spec.ts" timestamp="2026-04-07T05:52:18.845Z" hostname="chromium" tests="5" failures="0" skipped="0" time="18.793" errors="0">
+<testcase name="Alerts › alerts page loads" classname="alerts.spec.ts" time="2.934">
+</testcase>
+<testcase name="Alerts › severity and status filters are visible" classname="alerts.spec.ts" time="2.558">
+</testcase>
+<testcase name="Alerts › alert detail supports triage to false positive" classname="alerts.spec.ts" time="4.797">
+</testcase>
+<testcase name="Alerts › alert detail can be linked to a newly created case" classname="alerts.spec.ts" time="4.531">
+</testcase>
+<testcase name="Alerts › alert detail supports label feedback and close action" classname="alerts.spec.ts" time="3.973">
+</testcase>
+</testsuite>
+<testsuite name="auth.spec.ts" timestamp="2026-04-07T05:52:18.845Z" hostname="chromium" tests="4" failures="0" skipped="0" time="4.313" errors="0">
+<testcase name="Authentication › login page renders" classname="auth.spec.ts" time="0.709">
+</testcase>
+<testcase name="Authentication › login with valid credentials redirects to dashboard" classname="auth.spec.ts" time="1.74">
+</testcase>
+<testcase name="Authentication › login with invalid credentials shows error" classname="auth.spec.ts" time="1.225">
+</testcase>
+<testcase name="Authentication › unauthenticated access to protected route redirects to login" classname="auth.spec.ts" time="0.639">
+</testcase>
+</testsuite>
+<testsuite name="cases.spec.ts" timestamp="2026-04-07T05:52:18.845Z" hostname="chromium" tests="6" failures="0" skipped="0" time="19.815" errors="0">
+<testcase name="Cases › cases page loads" classname="cases.spec.ts" time="2.55">
+</testcase>
+<testcase name="Cases › filter tabs are visible" classname="cases.spec.ts" time="2.468">
+</testcase>
+<testcase name="Cases › new case button is present" classname="cases.spec.ts" time="2.501">
+</testcase>
+<testcase name="Cases › creating a case via UI opens its detail page" classname="cases.spec.ts" time="3.769">
+</testcase>
+<testcase name="Cases › case detail supports workflow notes and report package generation" classname="cases.spec.ts" time="4.234">
+</testcase>
+<testcase name="Cases › case detail can request a narrative suggestion" classname="cases.spec.ts" time="4.293">
+</testcase>
+</testsuite>
+<testsuite name="dashboard.spec.ts" timestamp="2026-04-07T05:52:18.845Z" hostname="chromium" tests="4" failures="0" skipped="0" time="8.327" errors="0">
+<testcase name="Dashboard › KPI cards are visible" classname="dashboard.spec.ts" time="1.972">
+</testcase>
+<testcase name="Dashboard › KPI values are numeric" classname="dashboard.spec.ts" time="1.926">
+</testcase>
+<testcase name="Dashboard › charts and heatmap render" classname="dashboard.spec.ts" time="2.108">
+</testcase>
+<testcase name="Dashboard › navigation links work" classname="dashboard.spec.ts" time="2.321">
+</testcase>
+</testsuite>
+</testsuites>

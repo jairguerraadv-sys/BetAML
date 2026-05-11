@@ -71,6 +71,10 @@ Ultima reexecucao local validada no branch atual (2026-04-07):
 - `artifacts/readiness/capacity/betaml_load_slo.txt` -> `load_slo=PASS`
 - `artifacts/readiness/release-go-no-go.txt` -> `release_go_no_go=GO`
 
+Fechamento remoto final do mesmo gate (2026-05-11):
+- `artifacts/readiness/release-readiness-remote.txt` -> `release_readiness_remote=PASS`
+- workflow `Release Readiness` no GitHub Actions concluido com `success` na run `25696032708` para o head `74c9e14`
+
 ## 3. Inicialização do Ambiente
 
 ### 3.1 Clone e Subida Completa

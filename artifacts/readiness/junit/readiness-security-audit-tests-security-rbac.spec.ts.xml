@@ -1,0 +1,6 @@
+<testsuites id="" name="" tests="1" failures="0" skipped="0" errors="0" time="4.07188">
+<testsuite name="security-rbac.spec.ts" timestamp="2026-04-07T05:58:11.584Z" hostname="chromium" tests="1" failures="0" skipped="0" time="2.673" errors="0">
+<testcase name="Security RBAC › auditor can access audit logs in read-only mode" classname="security-rbac.spec.ts" time="2.673">
+</testcase>
+</testsuite>
+</testsuites>

@@ -1,0 +1,13 @@
+request_name=POST /ingest/batch
+request_count=8626
+failure_count=0
+failure_rate_pct=0.0000
+p95_ms=420.00
+rps=72.32
+batch_size=10
+event_rps=723.19
+threshold_min_rps=15.00
+threshold_min_event_rps=150.00
+threshold_max_p95_ms=2000.00
+threshold_max_failure_rate_pct=1.0000
+load_slo=PASS

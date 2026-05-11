@@ -1,0 +1,3 @@
+request_name,method,request_count,failure_count,median_ms,avg_ms,p95_ms,rps,failures_per_sec
+/auth/login,POST,20,0,2900.0,2922.2266438496263,4200,0.16767733544861177,0.0
+POST /ingest/batch,POST,8626,0,240.0,264.6629389137363,420,72.31923477898626,0.0

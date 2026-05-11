@@ -1,0 +1,16 @@
+<testsuites id="" name="" tests="4" failures="0" skipped="0" errors="0" time="15.159927">
+<testsuite name="admin-ops.spec.ts" timestamp="2026-04-07T05:54:17.328Z" hostname="chromium" tests="1" failures="0" skipped="0" time="3.818" errors="0">
+<testcase name="Admin Ops › admin can view operational health and alerts panels" classname="admin-ops.spec.ts" time="3.818">
+</testcase>
+</testsuite>
+<testsuite name="admin-settings.spec.ts" timestamp="2026-04-07T05:54:17.328Z" hostname="chromium" tests="2" failures="0" skipped="0" time="6.531" errors="0">
+<testcase name="Admin And Settings › admin dashboard tabs are accessible" classname="admin-settings.spec.ts" time="3.721">
+</testcase>
+<testcase name="Admin And Settings › admin can save tenant settings" classname="admin-settings.spec.ts" time="2.81">
+</testcase>
+</testsuite>
+<testsuite name="api-keys.spec.ts" timestamp="2026-04-07T05:54:17.328Z" hostname="chromium" tests="1" failures="0" skipped="0" time="3.253" errors="0">
+<testcase name="API Keys › admin can create, inspect and revoke an ingest api key" classname="api-keys.spec.ts" time="3.253">
+</testcase>
+</testsuite>
+</testsuites>

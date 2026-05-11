@@ -1,0 +1,6 @@
+<testsuites id="" name="" tests="1" failures="0" skipped="0" errors="0" time="1.9473839999999998">
+<testsuite name="ingest-tenant-isolation.spec.ts" timestamp="2026-04-07T05:55:18.794Z" hostname="chromium" tests="1" failures="0" skipped="0" time="0.773" errors="0">
+<testcase name="Ingest Tenant Isolation › tenant B cannot read or mutate tenant A ingest jobs/errors" classname="ingest-tenant-isolation.spec.ts" time="0.773">
+</testcase>
+</testsuite>
+</testsuites>

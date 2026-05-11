@@ -1,0 +1,20 @@
+<testsuites id="" name="" tests="5" failures="0" skipped="0" errors="0" time="22.493007000000002">
+<testsuite name="audit-logs.spec.ts" timestamp="2026-04-07T05:53:53.415Z" hostname="chromium" tests="1" failures="0" skipped="0" time="3.852" errors="0">
+<testcase name="Audit Logs › admin can load and filter audit logs" classname="audit-logs.spec.ts" time="3.852">
+</testcase>
+</testsuite>
+<testsuite name="model-registry.spec.ts" timestamp="2026-04-07T05:53:53.415Z" hostname="chromium" tests="2" failures="0" skipped="0" time="8.076" errors="0">
+<testcase name="Model Registry › loads model registry summary and cards" classname="model-registry.spec.ts" time="4.733">
+</testcase>
+<testcase name="Model Registry › admin can use an available model action" classname="model-registry.spec.ts" time="3.343">
+</testcase>
+</testsuite>
+<testsuite name="notifications.spec.ts" timestamp="2026-04-07T05:53:53.415Z" hostname="chromium" tests="1" failures="0" skipped="0" time="3.732" errors="0">
+<testcase name="Notifications › user can load notifications and switch filters" classname="notifications.spec.ts" time="3.732">
+</testcase>
+</testsuite>
+<testsuite name="reports.spec.ts" timestamp="2026-04-07T05:53:53.415Z" hostname="chromium" tests="1" failures="0" skipped="0" time="5.171" errors="0">
+<testcase name="Reports › admin can consult and enqueue monthly reports" classname="reports.spec.ts" time="5.171">
+</testcase>
+</testsuite>
+</testsuites>

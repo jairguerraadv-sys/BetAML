@@ -1,0 +1,6 @@
+<testsuites id="" name="" tests="1" failures="0" skipped="0" errors="0" time="1.9829700000000001">
+<testsuite name="report-audit.spec.ts" timestamp="2026-04-07T05:55:34.583Z" hostname="chromium" tests="1" failures="0" skipped="0" time="0.833" errors="0">
+<testcase name="Report Audit Trail › analyst can export COAF XML and auditor can verify audit entries for report exports" classname="report-audit.spec.ts" time="0.833">
+</testcase>
+</testsuite>
+</testsuites>

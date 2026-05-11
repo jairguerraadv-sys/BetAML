@@ -3,7 +3,7 @@
 Data-base original: 2026-03-20
 Revalidado historicamente em: 2026-04-04
 Escopo: consolidacao de auditorias historicas + confronto com o estado real do branch atual
-Status executivo atual: parecer historico de NO-GO de marco, superado localmente em 2026-04-07 pelas evidencias de readiness em `artifacts/readiness/`
+Status executivo atual: parecer historico de NO-GO de marco, superado localmente em 2026-04-07 e remotamente em 2026-05-11 pelo fechamento do workflow `Release Readiness` e pelas evidencias em `artifacts/readiness/`
 
 ## 1. Objetivo deste documento
 
@@ -12,7 +12,7 @@ Este arquivo continua sendo a consolidacao historica principal do projeto, mas n
 O parecer tecnico mais recente do branch atual deve considerar em conjunto:
 - este documento, apenas como diagnostico historico;
 - `docs/go-live-checklist.md`, `docs/ops-guide.md` e `docs/runbook-deploy.md`, como procedimento;
-- `artifacts/readiness/`, como evidencia objetiva mais recente do estado validado localmente.
+- `artifacts/readiness/`, como evidencia objetiva mais recente do estado validado localmente e com fechamento remoto de readiness.
 
 Use este documento para:
 - entender quais auditorias e relatórios antigos ainda servem como contexto;

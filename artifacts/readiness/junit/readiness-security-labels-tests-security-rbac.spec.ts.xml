@@ -1,0 +1,6 @@
+<testsuites id="" name="" tests="1" failures="0" skipped="0" errors="0" time="1.8986270000000003">
+<testsuite name="security-rbac.spec.ts" timestamp="2026-04-07T05:58:08.307Z" hostname="chromium" tests="1" failures="0" skipped="0" time="0.681" errors="0">
+<testcase name="Security RBAC › auditor cannot mutate alert labels through protected endpoint" classname="security-rbac.spec.ts" time="0.681">
+</testcase>
+</testsuite>
+</testsuites>

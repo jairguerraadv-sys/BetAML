@@ -17,6 +17,10 @@ Ultima reexecucao local validada no branch atual (2026-04-07):
 - [artifacts/readiness/capacity/betaml_load_slo.txt](../artifacts/readiness/capacity/betaml_load_slo.txt): `load_slo=PASS`, `p95_ms=420.00`, `rps=72.32`, `event_rps=723.19`
 - [artifacts/readiness/release-go-no-go.txt](../artifacts/readiness/release-go-no-go.txt): `release_go_no_go=GO`
 
+Fechamento remoto final validado no branch atual (2026-05-11):
+- [artifacts/readiness/release-readiness-remote.txt](../artifacts/readiness/release-readiness-remote.txt): `release_readiness_remote=PASS`, run `25696032708`, head `74c9e14`
+- Workflow `Release Readiness` concluido em `success` para `main`, com `Run external validation integration smoke` e `Install Playwright deps` aprovados no GitHub Actions.
+
 ## 1. Mudancas e release
 
 - Versao atualizada no `CHANGELOG.md` com escopo e rollback plan.
@@ -97,6 +101,7 @@ Anexar no go-live atual:
 - `artifact-readiness-restore-drill` com restore em banco isolado, validacao do dump e checagem dos artefatos MinIO.
 - `artifact-readiness-capacity-smoke` com CSV/HTML do Locust, sumario e validacao de thresholds do `validate_slo.py`.
 - `artifact-readiness-go-no-go` com metadados operacionais minimos, validacao dos XMLs JUnit e decisao final do gate.
+- Evidencia do fechamento remoto do workflow `Release Readiness` (run `25696032708`) ou export equivalente com `status=completed` e `conclusion=success`.
 - Diretorio JUnit equivalente para smoke, extended e security (ex.: `artifacts/readiness/junit/`) quando a execucao for manual.
 - `artifact-readiness-playwright-report` e `artifact-readiness-playwright-results` do workflow manual.
 - Log do restore drill gerado por `scripts/restore_drill.sh` com contagens basicas (`players`, `alerts`, `cases`) e verificacao dos artefatos MinIO.

@@ -1,0 +1,6 @@
+<testsuites id="" name="" tests="1" failures="0" skipped="0" errors="0" time="1.6104639999999997">
+<testsuite name="maintenance-mode.spec.ts" timestamp="2026-04-07T05:55:31.557Z" hostname="chromium" tests="1" failures="0" skipped="0" time="0.402" errors="0">
+<testcase name="Maintenance Mode › admin can enable maintenance, observe 503 on protected routes, and disable it safely" classname="maintenance-mode.spec.ts" time="0.402">
+</testcase>
+</testsuite>
+</testsuites>

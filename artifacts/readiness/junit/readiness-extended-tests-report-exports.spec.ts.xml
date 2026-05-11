@@ -1,0 +1,8 @@
+<testsuites id="" name="" tests="2" failures="0" skipped="0" errors="0" time="2.460571">
+<testsuite name="report-exports.spec.ts" timestamp="2026-04-07T05:55:27.582Z" hostname="chromium" tests="2" failures="0" skipped="0" time="1.216" errors="0">
+<testcase name="Report Exports › analyst can export report package as JSON and PDF" classname="report-exports.spec.ts" time="0.546">
+</testcase>
+<testcase name="Report Exports › auditor can export report JSON but is forbidden from PDF export" classname="report-exports.spec.ts" time="0.67">
+</testcase>
+</testsuite>
+</testsuites>
