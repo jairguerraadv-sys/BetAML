@@ -1271,12 +1271,66 @@ async def submit_report_package(
     if str(rp.status) == "FILED":
         raise HTTPException(409, "Este ReportPackage já foi submetido anteriormente.")
 
+    filed_at = datetime.now(UTC)
+
+    # ── Gerar e armazenar XML COAF no MinIO para cadeia de custódia ──────────
+    xml_path: str | None = None
+    xml_sha256: str | None = None
+    try:
+        from coaf_xml import generate_coaf_xml  # noqa: PLC0415
+
+        payload_dict = rp.payload if isinstance(rp.payload, dict) else {}
+        player_data  = payload_dict.get("player", {}) or {}
+        tenant_data  = payload_dict.get("tenant", {}) or {}
+
+        # Dados PII necessários para o XML — buscados em plaintext aqui (acesso
+        # controlado por RBAC GESTOR e maker-checker já validado acima).
+        cpf_plain_val  = player_data.get("cpf_plain") or player_data.get("cpf") or "OMITIDO"
+        name_plain_val = player_data.get("name") or player_data.get("full_name") or player_data.get("name_plain") or "OMITIDO"
+        tenant_cnpj    = tenant_data.get("cnpj") or "OMITIDO"
+        tenant_name    = tenant_data.get("name") or "OMITIDO"
+
+        xml_str   = generate_coaf_xml(
+            payload_dict,
+            cpf_plain=cpf_plain_val,
+            name_plain=name_plain_val,
+            tenant_cnpj=tenant_cnpj,
+            tenant_name=tenant_name,
+        )
+        xml_bytes = xml_str.encode("utf-8")
+        xml_sha256 = _sha256_bytes(xml_bytes)
+        xml_filename = f"reports/{current_user.tenant_id}/{case_id}/coaf-{rp.id}.xml"
+        try:
+            xml_path = _store_binary_object(REPORTS_BUCKET, xml_filename, xml_bytes, "application/xml")
+        except Exception as _xml_store_exc:
+            import tempfile as _tmp
+            _tmp_path = os.path.join(_tmp.gettempdir(), f"coaf-{rp.id}.xml")
+            with open(_tmp_path, "wb") as _fxml:
+                _fxml.write(xml_bytes)
+            xml_path = _tmp_path
+            logger.warning("xml_minio_fallback", path=xml_path, error=str(_xml_store_exc))
+
+        # Atualizar chain_of_custody no payload
+        if isinstance(rp.payload, dict):
+            coc = rp.payload.get("chain_of_custody") or {}
+            coc["xml_path"]           = xml_path
+            coc["xml_sha256"]         = xml_sha256
+            coc["xml_stored_at"]      = filed_at.isoformat()
+            coc["xml_storage_backend"] = "minio" if xml_path and not xml_path.startswith("/") else "filesystem"
+            rp.payload = {**rp.payload, "chain_of_custody": coc}
+    except Exception as _xml_exc:
+        logger.warning("coaf_xml_generation_failed_on_submit", error=str(_xml_exc))
+
+    rp.xml_path   = xml_path    # type: ignore[assignment]
+    rp.xml_sha256 = xml_sha256  # type: ignore[assignment]
+    rp.filed_at   = filed_at    # type: ignore[assignment]
+
     # Marcar como FILED
     rp.status = "FILED"  # type: ignore[assignment]
     if str(c.status) != "REPORTED":
         c.status = "REPORTED"  # type: ignore[assignment]
     if not c.closed_at:
-        c.closed_at = datetime.now(UTC)  # type: ignore[assignment]
+        c.closed_at = filed_at  # type: ignore[assignment]
     if not c.closed_by:
         c.closed_by = current_user.id  # type: ignore[assignment]
 
@@ -1292,13 +1346,11 @@ async def submit_report_package(
             "tracking_id": tracking_id,
             "case_status": c.status,
             "submitted_by": current_user.id,
-            "submitted_at": datetime.now(UTC).isoformat(),
+            "submitted_at": filed_at.isoformat(),
             "channel": "MANUAL_PORTAL",
             "payload_sha256": (rp.payload or {}).get("chain_of_custody", {}).get("report_payload_sha256") if isinstance(rp.payload, dict) else None,
-            "note": (
-                "Submissão manual registrada com maker-checker e trilha de custódia preservada. "
-                "Enquanto não houver integração oficial, o envio ao portal regulatório permanece controlado fora da plataforma."
-            ),
+            "xml_path":   xml_path,
+            "xml_sha256": xml_sha256,
         },
         created_by=current_user.id,
     ))
@@ -1306,7 +1358,14 @@ async def submit_report_package(
     await write_audit(
         db, current_user.tenant_id, current_user.id,
         "SUBMIT_COAF_REPORT", "Case", case_id,
-        after={"report_package_id": rp.id, "tracking_id": tracking_id, "case_status": c.status},
+        after={
+            "report_package_id": rp.id,
+            "tracking_id": tracking_id,
+            "case_status": c.status,
+            "xml_path":   xml_path,
+            "xml_sha256": xml_sha256,
+            "filed_at":   filed_at.isoformat(),
+        },
     )
     await db.commit()
 
@@ -1315,6 +1374,7 @@ async def submit_report_package(
         case_id=case_id,
         report_package_id=rp.id,
         tracking_id=tracking_id,
+        xml_stored=xml_path is not None,
         user_id=current_user.id,
     )
 
@@ -1322,12 +1382,14 @@ async def submit_report_package(
         "status": "FILED",
         "report_package_id": rp.id,
         "tracking_id": tracking_id,
-        "submitted_at": datetime.now(UTC).isoformat(),
+        "submitted_at": filed_at.isoformat(),
         "submitted_by": current_user.id,
         "channel": "MANUAL_PORTAL",
+        "xml_path":   xml_path,
+        "xml_sha256": xml_sha256,
         "message": (
-            "Submissão manual registrada com sucesso. "
-            "Guarde o tracking_id para rastreamento e use o dossiê gerado para o protocolo regulatório controlado."
+            "Submissão registrada com geração e armazenamento do XML COAF. "
+            "Guarde o tracking_id e o xml_sha256 para o protocolo regulatório no portal Siscoaf."
         ),
     }
 
@@ -1410,6 +1472,63 @@ async def list_tenant_report_packages(
         }
         for rp in rps
     ]
+
+
+class _ProtocolNumberIn(BaseModel):
+    coaf_protocol_number: str
+
+
+@router.patch("/cases/{case_id}/report-packages/{rp_id}/protocol-number", status_code=200)
+async def register_coaf_protocol_number(
+    case_id: str,
+    rp_id: str,
+    body: _ProtocolNumberIn,
+    current_user: User = Depends(require_role(AppRole.GESTOR)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Registra o número de protocolo retornado pelo portal Siscoaf após a submissão manual.
+
+    Deve ser chamado pelo analista logo após receber a confirmação do COAF.
+    Apenas ReportPackages com status=FILED podem receber o número de protocolo.
+    """
+    if not body.coaf_protocol_number.strip():
+        raise HTTPException(400, "coaf_protocol_number não pode ser vazio.")
+
+    rp = await db.get(ReportPackage, rp_id)
+    if not rp or str(rp.tenant_id) != str(current_user.tenant_id) or str(rp.case_id) != case_id:
+        raise HTTPException(404, "ReportPackage não encontrado")
+
+    if str(rp.status) != "FILED":
+        raise HTTPException(400, "O número de protocolo só pode ser registrado em ReportPackages com status=FILED.")
+
+    rp.coaf_protocol_number = body.coaf_protocol_number.strip()  # type: ignore[assignment]
+
+    # Persiste no chain_of_custody do payload também
+    if isinstance(rp.payload, dict):
+        coc = rp.payload.get("chain_of_custody") or {}
+        coc["coaf_protocol_number"] = rp.coaf_protocol_number
+        coc["coaf_protocol_registered_at"] = datetime.now(UTC).isoformat()
+        rp.payload = {**rp.payload, "chain_of_custody": coc}
+
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "REGISTER_COAF_PROTOCOL", "ReportPackage", rp_id,
+        after={"coaf_protocol_number": rp.coaf_protocol_number, "case_id": case_id},
+    )
+    await db.commit()
+
+    logger.info(
+        "coaf_protocol_registered",
+        rp_id=rp_id,
+        case_id=case_id,
+        protocol=rp.coaf_protocol_number,
+        user_id=current_user.id,
+    )
+    return {
+        "report_package_id": rp_id,
+        "coaf_protocol_number": rp.coaf_protocol_number,
+        "registered_at": datetime.now(UTC).isoformat(),
+    }
 
 
 @router.get("/cases/{case_id}/report-package/json")

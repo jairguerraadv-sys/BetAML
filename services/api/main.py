@@ -647,6 +647,18 @@ async def _startup():
             misfire_grace_time=3600,
         )
 
+        # COAF Reporting Deadline Monitor — todo dia às 08:00 UTC
+        from jobs import check_coaf_reporting_deadlines
+        scheduler.add_job(
+            check_coaf_reporting_deadlines,
+            trigger="cron",
+            hour=8,
+            minute=0,
+            id="coaf_deadline_check",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
         scheduler.start()
         logger.info(
             "scheduled_jobs_started",
@@ -659,6 +671,7 @@ async def _startup():
                 "data_quality_alerting@06:30",
                 "data_retention_batch@sun03:00",
                 "business_metrics_update@5min",
+                "coaf_deadline_check@08:00",
             ],
         )
     except ImportError:

@@ -18,7 +18,7 @@ from sqlalchemy import select, and_, text, func
 
 from config import settings
 from database import AsyncSessionLocal
-from models import Alert, AuditLog, Case, FeatureSnapshot, Notification, Player, ScoringConfig, Tenant, User, FinancialTransaction, Bet, IngestError
+from models import Alert, AuditLog, Case, FeatureSnapshot, Notification, Player, ReportPackage, ScoringConfig, Tenant, User, FinancialTransaction, Bet, IngestError
 
 logger = structlog.get_logger(__name__)
 
@@ -851,6 +851,147 @@ async def data_quality_alerting() -> None:
     except Exception as exc:
         logger.error("data_quality_alerting_failed", error=str(exc))
         await _notify_admins_job_failure(job_name, str(exc))
+
+
+async def check_coaf_reporting_deadlines() -> None:
+    """
+    COAF Reporting Deadline Monitor — roda uma vez por dia às 08:00 UTC.
+
+    Verifica o prazo legal de 30 dias corridos para comunicação de operações
+    suspeitas ao COAF (COAF Res. 36/2021 Art. 9º + Portaria SPA/MF 1.143/2024).
+
+    Regras:
+      - ReportPackages com decision em (FILE_SAR, REPORT) e status != FILED
+        há mais de 23 dias → COAF_DEADLINE_WARNING (aviso: faltam ≤7 dias)
+      - ReportPackages com decision em (FILE_SAR, REPORT) e status != FILED
+        há mais de 30 dias → COAF_DEADLINE_BREACH (violação: prazo expirado)
+
+    Para cada caso em violação/aviso:
+      1. Cria Notification para o responsável pelo caso e para todos GESTOR/ADMIN do tenant
+      2. Loga em audit_log com action COAF_DEADLINE_WARNING ou COAF_DEADLINE_BREACH
+    """
+    _DEADLINE_DAYS   = 30
+    _WARNING_DAYS    = 23      # avisa com 7 dias de antecedência
+    _DECISION_CODES  = {"FILE_SAR", "REPORT"}
+
+    try:
+        async with AsyncSessionLocal() as db:
+            now = datetime.now(UTC)
+            warning_cutoff = now - timedelta(days=_WARNING_DAYS)
+            breach_cutoff  = now - timedelta(days=_DEADLINE_DAYS)
+
+            tenants = (await db.execute(
+                select(Tenant).where(Tenant.active.is_(True))
+            )).scalars().all()
+
+            for tenant in tenants:
+                await _set_db_tenant_context(db, tenant.id)
+
+                # Busca todos os admins/gestores do tenant para notificação
+                admin_ids: list[str] = []
+                users_q = (await db.execute(
+                    select(User.id).where(
+                        User.tenant_id == tenant.id,
+                        User.is_active.is_(True),
+                    )
+                )).scalars().all()
+                # Filtra roles em memória (roles é JSONB com lista)
+                for uid in users_q:
+                    u = await db.get(User, uid)
+                    if u and isinstance(u.roles, list):
+                        if any(r in ("GESTOR", "ADMIN", "SUPER_ADMIN") for r in u.roles):
+                            admin_ids.append(str(uid))
+
+                # ReportPackages não FILED com decision FILE_SAR criados > 23 dias atrás
+                pending_rps = (await db.execute(
+                    select(ReportPackage).where(
+                        ReportPackage.tenant_id == tenant.id,
+                        ReportPackage.status != "FILED",
+                        ReportPackage.created_at <= warning_cutoff,
+                    )
+                )).scalars().all()
+
+                # Filtra decision em memória
+                pending_rps = [
+                    rp for rp in pending_rps
+                    if (
+                        str(rp.decision or "").upper() in _DECISION_CODES
+                        or str((rp.payload or {}).get("decision", "")).upper() in _DECISION_CODES  # type: ignore[union-attr]
+                    )
+                ]
+
+                for rp in pending_rps:
+                    age_days = int((now - rp.created_at.replace(tzinfo=UTC)).total_seconds() // 86400)
+                    is_breach = rp.created_at.replace(tzinfo=UTC) <= breach_cutoff
+
+                    notif_type   = "COAF_DEADLINE_BREACH"  if is_breach  else "COAF_DEADLINE_WARNING"
+                    audit_action = "COAF_DEADLINE_BREACH"  if is_breach  else "COAF_DEADLINE_WARNING"
+                    days_left    = max(0, _DEADLINE_DAYS - age_days)
+                    title_prefix = "🚨 COAF: Prazo Expirado" if is_breach else "⚠️ COAF: Prazo a Vencer"
+                    title = f"{title_prefix} — Caso {rp.case_id} ({age_days}d)"
+
+                    # Recuperar responsável pelo caso
+                    case_obj = await db.get(Case, rp.case_id)
+                    notify_ids = set(admin_ids)
+                    if case_obj and case_obj.assigned_to:
+                        notify_ids.add(str(case_obj.assigned_to))
+
+                    recent_cutoff = now - timedelta(hours=24)
+
+                    for uid in notify_ids:
+                        # Evitar duplicatas nas últimas 24h
+                        existing = (await db.execute(
+                            select(Notification).where(
+                                Notification.tenant_id == tenant.id,
+                                Notification.user_id == uid,
+                                Notification.reference_type == "ReportPackage",
+                                Notification.reference_id == str(rp.id),
+                                Notification.type == notif_type,
+                                Notification.created_at >= recent_cutoff,
+                            )
+                        )).scalar_one_or_none()
+                        if existing:
+                            continue
+
+                        db.add(Notification(
+                            tenant_id=tenant.id,
+                            user_id=uid,
+                            type=notif_type,
+                            title=title,
+                            message=(
+                                f"ReportPackage {rp.id} do caso {rp.case_id} tem decision=FILE_SAR "
+                                f"e está aguardando submissão ao COAF há {age_days} dias. "
+                                f"{'Prazo legal de 30 dias expirado!' if is_breach else f'Prazo expira em {days_left} dia(s).'}"
+                            ),
+                            reference_type="ReportPackage",
+                            reference_id=str(rp.id),
+                        ))
+
+                    try:
+                        from utils import write_audit  # noqa: PLC0415 — import tardio intencional
+                        await write_audit(
+                            db, tenant.id, None,
+                            audit_action, "ReportPackage", str(rp.id),
+                            after={
+                                "case_id": str(rp.case_id),
+                                "age_days": age_days,
+                                "days_left": days_left,
+                                "is_breach": is_breach,
+                            },
+                        )
+                    except Exception:
+                        pass
+
+                await db.commit()
+                logger.info(
+                    "coaf_deadline_check_done",
+                    tenant_id=tenant.id,
+                    pending_count=len(pending_rps),
+                )
+
+    except Exception as exc:
+        logger.error("check_coaf_reporting_deadlines_failed", error=str(exc))
+        await _notify_admins_job_failure("check_coaf_reporting_deadlines", str(exc))
 
 
 async def data_retention_batch() -> None:

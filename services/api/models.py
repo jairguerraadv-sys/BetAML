@@ -407,18 +407,22 @@ class CaseEvent(Base):
 class ReportPackage(Base):
     __tablename__ = "report_packages"
 
-    id                = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    tenant_id         = Column(UUID(as_uuid=False), ForeignKey("tenants.id"), nullable=False)
-    case_id           = Column(UUID(as_uuid=False), ForeignKey("cases.id"), nullable=False)
-    player_id         = Column(UUID(as_uuid=False), ForeignKey("players.id"))
-    payload           = Column(JSONB, nullable=False)
-    format            = Column(String(10), nullable=False, default="JSON")
-    pdf_path          = Column(Text)
-    status            = Column(String(20), nullable=False, default="DRAFT")
-    analyst_narrative = Column(Text)
-    decision          = Column(String(20))
-    created_by        = Column(UUID(as_uuid=False), ForeignKey("users.id"))
-    created_at        = Column(DateTime(timezone=True), server_default=func.now())
+    id                   = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id            = Column(UUID(as_uuid=False), ForeignKey("tenants.id"), nullable=False)
+    case_id              = Column(UUID(as_uuid=False), ForeignKey("cases.id"), nullable=False)
+    player_id            = Column(UUID(as_uuid=False), ForeignKey("players.id"))
+    payload              = Column(JSONB, nullable=False)
+    format               = Column(String(10), nullable=False, default="JSON")
+    pdf_path             = Column(Text)
+    xml_path             = Column(Text)           # MinIO path do XML COAF armazenado na submissão
+    xml_sha256           = Column(String(64))     # SHA-256 do XML para cadeia de custódia
+    coaf_protocol_number = Column(String(80))     # Número de protocolo retornado pelo portal COAF
+    filed_at             = Column(DateTime(timezone=True))  # Timestamp exato da submissão FILED
+    status               = Column(String(20), nullable=False, default="DRAFT")
+    analyst_narrative    = Column(Text)
+    decision             = Column(String(20))
+    created_by           = Column(UUID(as_uuid=False), ForeignKey("users.id"))
+    created_at           = Column(DateTime(timezone=True), server_default=func.now())
 
 
 # ── Logs & Audit ──────────────────────────────────────────────────────────────

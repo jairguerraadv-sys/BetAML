@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import AppRole, compute_cpf_hmac, decrypt_pii, encrypt_pii, get_effective_roles, mask_cpf, require_roles, require_role, require_role_any, require_permission
 from database import get_db
-from models import Alert, Bet, Case, DeviceEvent, FinancialTransaction, Player, ScoringConfig, User
+from models import Alert, Bet, Case, DeviceEvent, FinancialTransaction, Player, PlayerKycEvent, ScoringConfig, User
 from repositories import PlayerRepository
 from repositories.players import get_player_repo
 from utils import write_audit
@@ -1118,4 +1118,202 @@ async def get_player_timeline(
         "total_events": len(events),
         "timeline": timeline,
     }
+
+
+# ── Self-Exclusão (Lei 14.790/2023 Art. 33) ──────────────────────────────────
+
+class _SelfExclusionIn(BaseModel):
+    reason: str | None = None
+
+
+class _DepositLimitIn(BaseModel):
+    deposit_limit_daily: float
+
+
+@router.post("/players/{player_id}/self-exclusion", status_code=200)
+async def set_self_exclusion(
+    player_id: str,
+    body: _SelfExclusionIn = _SelfExclusionIn(),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ativa auto-exclusão do player (Lei 14.790/2023 Art. 33 e Portaria SPA/MF 1.143/2024).
+
+    Define self_exclusion_flag=True e muda status para SELF_EXCLUDED.
+    Requer roles ANALISTA ou GESTOR.
+    """
+    p = await db.get(Player, player_id)
+    if not p or str(p.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Player não encontrado")
+
+    p.self_exclusion_flag = True      # type: ignore[assignment]
+    p.status = "SELF_EXCLUDED"        # type: ignore[assignment]
+
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "PLAYER_SELF_EXCLUSION_SET", "Player", player_id,
+        after={"self_exclusion_flag": True, "status": "SELF_EXCLUDED", "reason": body.reason},
+    )
+    await db.commit()
+
+    logger.info("player_self_exclusion_set", player_id=player_id, user_id=current_user.id)
+    return {"player_id": player_id, "self_exclusion_flag": True, "status": "SELF_EXCLUDED"}
+
+
+@router.delete("/players/{player_id}/self-exclusion", status_code=200)
+async def clear_self_exclusion(
+    player_id: str,
+    current_user: User = Depends(require_role(AppRole.GESTOR)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a auto-exclusão do player. Requer role GESTOR.
+
+    Retorna status para ACTIVE após revisão manual.
+    """
+    p = await db.get(Player, player_id)
+    if not p or str(p.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Player não encontrado")
+
+    if not p.self_exclusion_flag:
+        raise HTTPException(400, "Player não está em auto-exclusão.")
+
+    p.self_exclusion_flag = False     # type: ignore[assignment]
+    p.status = "ACTIVE"               # type: ignore[assignment]
+
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "PLAYER_SELF_EXCLUSION_CLEARED", "Player", player_id,
+        after={"self_exclusion_flag": False, "status": "ACTIVE"},
+    )
+    await db.commit()
+
+    logger.info("player_self_exclusion_cleared", player_id=player_id, user_id=current_user.id)
+    return {"player_id": player_id, "self_exclusion_flag": False, "status": "ACTIVE"}
+
+
+@router.patch("/players/{player_id}/deposit-limit", status_code=200)
+async def update_deposit_limit(
+    player_id: str,
+    body: _DepositLimitIn,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Define ou atualiza o limite diário de depósito do player (Lei 14.790/2023 Art. 33)."""
+    if body.deposit_limit_daily < 0:
+        raise HTTPException(400, "deposit_limit_daily não pode ser negativo.")
+
+    p = await db.get(Player, player_id)
+    if not p or str(p.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Player não encontrado")
+
+    previous = float(p.deposit_limit_daily) if p.deposit_limit_daily is not None else None
+    p.deposit_limit_daily = body.deposit_limit_daily  # type: ignore[assignment]
+
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "PLAYER_DEPOSIT_LIMIT_UPDATED", "Player", player_id,
+        before={"deposit_limit_daily": previous},
+        after={"deposit_limit_daily": body.deposit_limit_daily},
+    )
+    await db.commit()
+
+    return {"player_id": player_id, "deposit_limit_daily": body.deposit_limit_daily}
+
+
+# ── KYC Events (PlayerKycEvent) ───────────────────────────────────────────────
+
+class _KycEventIn(BaseModel):
+    event_type: str
+    provider: str = "manual"
+    status: str = "PENDING"
+    payload: dict = {}
+
+
+@router.post("/players/{player_id}/kyc-events", status_code=201)
+async def create_kyc_event(
+    player_id: str,
+    body: _KycEventIn,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Registra um evento KYC para o player.
+
+    Tipos comuns: DOCUMENT_CHECK, FACIAL_BIOMETRY, PEP_CHECK, SANCTIONS_CHECK,
+    ADDRESS_VERIFICATION, PHONE_VERIFICATION, MANUAL_APPROVAL, MANUAL_REJECTION.
+
+    Quando status=APPROVED: atualiza player.status para ACTIVE (se estava PENDING_KYC).
+    Quando status=REJECTED: atualiza player.status para PENDING_KYC.
+    """
+    p = await db.get(Player, player_id)
+    if not p or str(p.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Player não encontrado")
+
+    event = PlayerKycEvent(
+        tenant_id=current_user.tenant_id,
+        player_id=player_id,
+        event_type=body.event_type.upper(),
+        provider=body.provider,
+        status=body.status.upper(),
+        payload=body.payload,
+        processed_at=_utcnow() if body.status.upper() in ("APPROVED", "REJECTED") else None,
+    )
+    db.add(event)
+
+    # Transição de status do player baseada no resultado KYC
+    if body.status.upper() == "APPROVED" and str(p.status) == "PENDING_KYC":
+        p.status = "ACTIVE"  # type: ignore[assignment]
+    elif body.status.upper() == "REJECTED":
+        p.status = "PENDING_KYC"  # type: ignore[assignment]
+
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "PLAYER_KYC_EVENT", "Player", player_id,
+        after={"event_type": event.event_type, "status": event.status, "provider": event.provider, "player_status": p.status},
+    )
+    await db.commit()
+    await db.refresh(event)
+
+    return {
+        "id": event.id,
+        "player_id": player_id,
+        "event_type": event.event_type,
+        "provider": event.provider,
+        "status": event.status,
+        "player_status": p.status,
+        "created_at": event.created_at,
+    }
+
+
+@router.get("/players/{player_id}/kyc-events")
+async def list_kyc_events(
+    player_id: str,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lista todos os eventos KYC do player em ordem cronológica decrescente."""
+    p = await db.get(Player, player_id)
+    if not p or str(p.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Player não encontrado")
+
+    events = (await db.execute(
+        select(PlayerKycEvent)
+        .where(
+            PlayerKycEvent.player_id == player_id,
+            PlayerKycEvent.tenant_id == current_user.tenant_id,
+        )
+        .order_by(PlayerKycEvent.created_at.desc())
+    )).scalars().all()
+
+    return [
+        {
+            "id": ev.id,
+            "event_type": ev.event_type,
+            "provider": ev.provider,
+            "status": ev.status,
+            "error_message": ev.error_message,
+            "processed_at": ev.processed_at,
+            "created_at": ev.created_at,
+        }
+        for ev in events
+    ]
 
