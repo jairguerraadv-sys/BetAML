@@ -208,49 +208,62 @@ test.describe('COAF Protocol Number — API', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('COAF Protocol Number — UI', () => {
-  test('aba Decisão exibe formulário de registro de protocolo após submissão', async ({ page, request }) => {
+  /**
+   * Ao navegar para um caso com RP já FILED (via API), a aba "Decisão e Relatório"
+   * exibe o histórico de ReportPackages com o botão "+ Registrar Protocolo".
+   * O formulário principal (painel azul) só aparece quando o usuário submete via UI.
+   */
+  test('aba Decisão e Relatório exibe botão de registro de protocolo para RP FILED', async ({ page, request }) => {
     const analystSession = await apiLogin(request);
     const adminSession = await apiLoginAsAdmin(request);
-    const { caseItem, report } = await prepareFiledReportPackage(request, analystSession.access_token);
+    const { caseItem } = await prepareFiledReportPackage(request, analystSession.access_token);
     await submitReportToFiledViaApi(request, adminSession.access_token, caseItem.id);
 
     await loginAsAdmin(page);
     await page.goto(`/cases/${caseItem.id}`);
 
-    // Navegar para a aba Decisão
-    await page.getByRole('button', { name: /decisão|relatório/i }).click();
+    // Navegar para a aba Decisão e Relatório
+    await page.getByRole('button', { name: /decisão e relatório/i }).click();
 
-    // Formulário de protocolo COAF deve aparecer (painel azul Fase 3)
-    await expect(page.getByText(/protocolo coaf|registrar protocolo/i).first()).toBeVisible({ timeout: 12_000 });
+    // Histórico mostra "FILED" e botão "+ Registrar Protocolo" (RP sem protocolo ainda)
+    await expect(page.getByText(/FILED/i).first()).toBeVisible({ timeout: 12_000 });
+    await expect(page.getByRole('button', { name: /registrar protocolo/i })).toBeVisible({ timeout: 8_000 });
   });
 
   test('gestor pode registrar protocolo COAF via UI e ver confirmação', async ({ page, request }) => {
     const analystSession = await apiLogin(request);
     const adminSession = await apiLoginAsAdmin(request);
-    const { caseItem, report } = await prepareFiledReportPackage(request, analystSession.access_token);
+    const { caseItem } = await prepareFiledReportPackage(request, analystSession.access_token);
     await submitReportToFiledViaApi(request, adminSession.access_token, caseItem.id);
 
     await loginAsAdmin(page);
     await page.goto(`/cases/${caseItem.id}`);
 
-    await page.getByRole('button', { name: /decisão|relatório/i }).click();
+    await page.getByRole('button', { name: /decisão e relatório/i }).click();
 
-    // Encontrar input do protocolo e preenchê-lo
-    const protocolInput = page.getByPlaceholder(/protocolo|siscoaf|coaf/i).first();
-    await expect(protocolInput).toBeVisible({ timeout: 12_000 });
+    // Clicar "+ Registrar Protocolo" na seção de histórico para abrir o form inline
+    const registerBtn = page.getByRole('button', { name: /registrar protocolo/i });
+    await expect(registerBtn).toBeVisible({ timeout: 12_000 });
+    await registerBtn.click();
+
+    // Input inline aparece com placeholder "Protocolo COAF"
+    const protocolInput = page.getByPlaceholder(/protocolo coaf/i);
+    await expect(protocolInput).toBeVisible({ timeout: 8_000 });
 
     const protocolNumber = `UI-COAF-${Date.now()}`;
     await protocolInput.fill(protocolNumber);
-    await page.getByRole('button', { name: /registrar protocolo/i }).click();
 
-    // O protocolo deve aparecer na listagem de pacotes
-    await expect(page.getByText(protocolNumber)).toBeVisible({ timeout: 10_000 });
+    // Confirmar com o botão "OK" do form inline
+    await page.getByRole('button', { name: /^ok$/i }).click();
+
+    // O número de protocolo deve aparecer na listagem: "Protocolo COAF: <número>"
+    await expect(page.getByText(new RegExp(protocolNumber))).toBeVisible({ timeout: 10_000 });
   });
 
   test('sha256 do XML é exibido após geração do relatório', async ({ page, request }) => {
     const analystSession = await apiLogin(request);
     const adminSession = await apiLoginAsAdmin(request);
-    const { caseItem, report } = await prepareFiledReportPackage(request, analystSession.access_token);
+    const { caseItem } = await prepareFiledReportPackage(request, analystSession.access_token);
     const submitResult = await submitReportToFiledViaApi(request, adminSession.access_token, caseItem.id);
 
     // Só validar exibição do sha256 se a API retornou um
@@ -262,9 +275,10 @@ test.describe('COAF Protocol Number — UI', () => {
     await loginAsAdmin(page);
     await page.goto(`/cases/${caseItem.id}`);
 
-    await page.getByRole('button', { name: /decisão|relatório/i }).click();
+    await page.getByRole('button', { name: /decisão e relatório/i }).click();
 
-    // Hash truncado deve aparecer na UI (os primeiros 8 chars do sha256)
+    // Na seção de histórico, sha256 é exibido truncado: "SHA-256: {hash.slice(0,16)}…"
+    // Verificamos os primeiros 8 chars que estarão presentes
     const shortHash = submitResult.xml_sha256.slice(0, 8);
     await expect(page.getByText(new RegExp(shortHash, 'i'))).toBeVisible({ timeout: 12_000 });
   });

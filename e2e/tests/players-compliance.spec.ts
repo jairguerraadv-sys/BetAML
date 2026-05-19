@@ -299,6 +299,9 @@ test.describe('Players Compliance — UI (aba Compliance PLD)', () => {
     await page.goto(`/players/${playerId}`);
     await page.getByRole('button', { name: /compliance pld/i }).click();
 
+    // Aceitar window.confirm que aparece ao clicar no botão
+    page.on('dialog', (dialog) => dialog.accept());
+
     // Clicar no botão de ativar auto-exclusão
     await page.getByRole('button', { name: /ativar auto.exclusão/i }).click();
 
@@ -327,6 +330,9 @@ test.describe('Players Compliance — UI (aba Compliance PLD)', () => {
     // Botão de remoção só aparece para GESTOR/ADMIN
     const removeButton = page.getByRole('button', { name: /remover auto.exclusão/i });
     await expect(removeButton).toBeVisible({ timeout: 5_000 });
+
+    // Aceitar window.confirm que aparece ao clicar
+    page.on('dialog', (dialog) => dialog.accept());
     await removeButton.click();
 
     // Player deve voltar para ATIVO
@@ -341,8 +347,8 @@ test.describe('Players Compliance — UI (aba Compliance PLD)', () => {
     await page.goto(`/players/${playerId}`);
     await page.getByRole('button', { name: /compliance pld/i }).click();
 
-    // Preencher campo de limite
-    const limitInput = page.getByLabel(/limite diário|deposit limit/i).first();
+    // Preencher campo de limite (aria-label="Novo limite de depósito diário")
+    const limitInput = page.getByLabel(/novo limite de depósito/i);
     await expect(limitInput).toBeVisible({ timeout: 8_000 });
     await limitInput.fill('750');
 
@@ -360,8 +366,8 @@ test.describe('Players Compliance — UI (aba Compliance PLD)', () => {
     await page.goto(`/players/${playerId}`);
     await page.getByRole('button', { name: /compliance pld/i }).click();
 
-    // Preencher formulário de evento KYC
-    await page.getByLabel(/tipo de evento/i).selectOption('DOCUMENT_CHECK');
+    // Preencher formulário de evento KYC (IDENTITY_CHECK está no dropdown do frontend)
+    await page.getByLabel(/tipo de evento/i).selectOption('IDENTITY_CHECK');
 
     const providerInput = page.getByLabel(/provedor/i).first();
     await expect(providerInput).toBeVisible({ timeout: 5_000 });
@@ -371,7 +377,7 @@ test.describe('Players Compliance — UI (aba Compliance PLD)', () => {
     await page.getByRole('button', { name: /registrar evento/i }).click();
 
     // O novo evento deve aparecer no histórico
-    await expect(page.getByText(/document.check/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/identity.check/i).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/serasa/i).first()).toBeVisible({ timeout: 5_000 });
   });
 
