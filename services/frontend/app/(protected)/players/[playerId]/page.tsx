@@ -14,9 +14,15 @@ import {
   PlayerDetail,
   PlayerDataExport,
   EconCompat,
+  KycEvent,
   requestPlayerRightToErasure,
   retryExternalValidation,
   requestPlayerExternalValidation,
+  setSelfExclusion,
+  clearSelfExclusion,
+  updateDepositLimit,
+  createKycEvent,
+  fetchKycEvents,
 } from '@/lib/api';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import PlayerNetworkGraph from '@/components/PlayerNetworkGraph';
@@ -34,7 +40,7 @@ const TIER_COLOR: Record<string, string> = {
   UNKNOWN: 'bg-gray-100 text-gray-500',
 };
 
-type Tab = 'profile' | 'econ' | 'network';
+type Tab = 'profile' | 'econ' | 'network' | 'compliance';
 
 function EconCompatPanel({ player_id }: { player_id: string }) {
   const { data, isLoading, error } = useQuery({
@@ -104,6 +110,214 @@ function EconCompatPanel({ player_id }: { player_id: string }) {
           <dd className="font-semibold">{pct != null ? `${pct}%` : '—'}</dd>
         </div>
       </dl>
+    </div>
+  );
+}
+
+function CompliancePanel({
+  player_id,
+  selfExclusionFlag,
+  depositLimitDaily,
+  playerStatus,
+  depositLimitValue,
+  setDepositLimitValue,
+  selfExclusionMutation,
+  depositLimitMutation,
+  kycEventType, setKycEventType,
+  kycProvider, setKycProvider,
+  kycStatus, setKycStatus,
+  kycCreateMutation,
+  hasGestorRole,
+}: {
+  player_id: string;
+  selfExclusionFlag: boolean;
+  depositLimitDaily: number | null;
+  playerStatus: string;
+  depositLimitValue: string;
+  setDepositLimitValue: (v: string) => void;
+  selfExclusionMutation: ReturnType<typeof useMutation<unknown, unknown, boolean>>;
+  depositLimitMutation: ReturnType<typeof useMutation<unknown, unknown, number>>;
+  kycEventType: string; setKycEventType: (v: string) => void;
+  kycProvider: string;  setKycProvider: (v: string) => void;
+  kycStatus: string;    setKycStatus: (v: string) => void;
+  kycCreateMutation: ReturnType<typeof useMutation<unknown, unknown, void>>;
+  hasGestorRole: boolean;
+}) {
+  const { data: kycEvents = [], isLoading: kycLoading } = useQuery<KycEvent[]>({
+    queryKey: ['kyc-events', player_id],
+    queryFn: () => fetchKycEvents(player_id),
+  });
+
+  return (
+    <div className="space-y-5">
+      {/* Auto-exclusão */}
+      <div className="rounded-xl border border-gray-200 p-4">
+        <h4 className="mb-1 text-sm font-semibold text-gray-900">Auto-Exclusão (Lei 14.790/2023 Art. 33)</h4>
+        <div className="flex items-center gap-3">
+          <span className={`rounded-full px-3 py-1 text-xs font-bold ${selfExclusionFlag ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+            {selfExclusionFlag ? 'AUTOEXCLUÍDO' : 'ATIVO'}
+          </span>
+          <span className="text-xs text-gray-500">Status: {playerStatus}</span>
+        </div>
+        {!selfExclusionFlag ? (
+          <button
+            onClick={() => {
+              if (!window.confirm('Confirma ativação de auto-exclusão para este player?')) return;
+              selfExclusionMutation.mutate(true);
+            }}
+            disabled={selfExclusionMutation.isPending}
+            className="mt-3 rounded-lg bg-red-600 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {selfExclusionMutation.isPending ? 'Processando…' : 'Ativar Auto-Exclusão'}
+          </button>
+        ) : hasGestorRole ? (
+          <button
+            onClick={() => {
+              if (!window.confirm('Confirma remoção da auto-exclusão? (apenas GESTOR/ADMIN)')) return;
+              selfExclusionMutation.mutate(false);
+            }}
+            disabled={selfExclusionMutation.isPending}
+            className="mt-3 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+          >
+            {selfExclusionMutation.isPending ? 'Processando…' : 'Remover Auto-Exclusão (GESTOR)'}
+          </button>
+        ) : (
+          <p className="mt-2 text-xs text-gray-500">Somente GESTOR/ADMIN pode remover a auto-exclusão.</p>
+        )}
+        {selfExclusionMutation.isError && (
+          <p className="mt-1 text-xs text-red-600">Falha ao atualizar auto-exclusão.</p>
+        )}
+      </div>
+
+      {/* Limite de Depósito */}
+      <div className="rounded-xl border border-gray-200 p-4">
+        <h4 className="mb-1 text-sm font-semibold text-gray-900">Limite de Depósito Diário</h4>
+        <p className="mb-3 text-xs text-gray-500">
+          Atual: {depositLimitDaily != null ? `R$ ${depositLimitDaily.toFixed(2)}` : 'Sem limite definido'}
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={depositLimitValue}
+            onChange={(e) => setDepositLimitValue(e.target.value)}
+            placeholder="Valor (R$)"
+            className="w-40 rounded-lg border border-gray-200 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand/30"
+            aria-label="Novo limite de depósito diário"
+          />
+          <button
+            onClick={() => {
+              const val = parseFloat(depositLimitValue);
+              if (isNaN(val) || val < 0) return;
+              depositLimitMutation.mutate(val);
+            }}
+            disabled={depositLimitMutation.isPending || !depositLimitValue}
+            className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+          >
+            {depositLimitMutation.isPending ? 'Salvando…' : 'Definir Limite'}
+          </button>
+        </div>
+        {depositLimitMutation.isSuccess && (
+          <p className="mt-1 text-xs text-green-700">Limite atualizado.</p>
+        )}
+        {depositLimitMutation.isError && (
+          <p className="mt-1 text-xs text-red-600">Falha ao atualizar limite.</p>
+        )}
+      </div>
+
+      {/* Eventos KYC */}
+      <div className="rounded-xl border border-gray-200 p-4">
+        <h4 className="mb-3 text-sm font-semibold text-gray-900">Eventos KYC</h4>
+
+        {/* Formulário de registro */}
+        <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 p-3">
+          <p className="mb-2 text-xs font-semibold text-blue-800">Registrar Novo Evento KYC</p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div>
+              <label className="mb-0.5 block text-xs text-gray-600">Tipo</label>
+              <select
+                value={kycEventType}
+                onChange={(e) => setKycEventType(e.target.value)}
+                className="w-full rounded border border-gray-200 px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300"
+                aria-label="Tipo de evento KYC"
+              >
+                <option value="IDENTITY_CHECK">IDENTITY_CHECK</option>
+                <option value="DOC_VERIFICATION">DOC_VERIFICATION</option>
+                <option value="FACE_MATCH">FACE_MATCH</option>
+                <option value="SANCTIONS_CHECK">SANCTIONS_CHECK</option>
+                <option value="MANUAL_REVIEW">MANUAL_REVIEW</option>
+              </select>
+            </div>
+            <div>
+              <label className="mb-0.5 block text-xs text-gray-600">Provedor</label>
+              <input
+                type="text"
+                value={kycProvider}
+                onChange={(e) => setKycProvider(e.target.value)}
+                placeholder="Ex: Serasa"
+                className="w-full rounded border border-gray-200 px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300"
+                aria-label="Provedor KYC"
+              />
+            </div>
+            <div>
+              <label className="mb-0.5 block text-xs text-gray-600">Status</label>
+              <select
+                value={kycStatus}
+                onChange={(e) => setKycStatus(e.target.value)}
+                className="w-full rounded border border-gray-200 px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300"
+                aria-label="Status do evento KYC"
+              >
+                <option value="COMPLETED">COMPLETED</option>
+                <option value="PENDING">PENDING</option>
+                <option value="FAILED">FAILED</option>
+              </select>
+            </div>
+          </div>
+          <button
+            onClick={() => kycCreateMutation.mutate()}
+            disabled={kycCreateMutation.isPending}
+            className="mt-2 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {kycCreateMutation.isPending ? 'Salvando…' : 'Registrar Evento'}
+          </button>
+          {kycCreateMutation.isError && (
+            <p className="mt-1 text-xs text-red-600">Falha ao registrar evento KYC.</p>
+          )}
+          {kycCreateMutation.isSuccess && (
+            <p className="mt-1 text-xs text-green-700">Evento registrado com sucesso.</p>
+          )}
+        </div>
+
+        {/* Histórico */}
+        {kycLoading ? (
+          <p className="text-xs text-gray-400">Carregando eventos KYC…</p>
+        ) : kycEvents.length === 0 ? (
+          <p className="text-xs text-gray-400">Nenhum evento KYC registrado.</p>
+        ) : (
+          <div className="space-y-2">
+            {kycEvents.map((ev) => (
+              <div key={ev.id} className="rounded-lg border border-gray-100 px-3 py-2 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-gray-800">{ev.event_type}</span>
+                  <span className={`rounded-full px-2 py-0.5 font-bold uppercase ${
+                    ev.status === 'COMPLETED'
+                      ? 'bg-green-100 text-green-700'
+                      : ev.status === 'FAILED'
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-yellow-100 text-yellow-700'
+                  }`}>
+                    {ev.status}
+                  </span>
+                </div>
+                {ev.provider && <p className="mt-0.5 text-gray-500">Provedor: {ev.provider}</p>}
+                {ev.error_message && <p className="mt-0.5 text-red-600">{ev.error_message}</p>}
+                <p className="mt-0.5 text-gray-400">{new Date(ev.created_at).toLocaleString('pt-BR')}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -242,6 +456,36 @@ export default function PlayerDetailPage() {
     mutationFn: () => fetchPlayerDataExport(playerId),
   });
 
+  const selfExclusionMutation = useMutation({
+    mutationFn: (exclude: boolean) =>
+      exclude ? setSelfExclusion(playerId) : clearSelfExclusion(playerId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['player', playerId] });
+    },
+  });
+
+  const [depositLimitValue, setDepositLimitValue] = useState<string>('');
+  const depositLimitMutation = useMutation({
+    mutationFn: (limit: number) => updateDepositLimit(playerId, limit),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['player', playerId] });
+      setDepositLimitValue('');
+    },
+  });
+
+  const [kycEventType, setKycEventType] = useState('IDENTITY_CHECK');
+  const [kycProvider, setKycProvider]   = useState('');
+  const [kycStatus, setKycStatus]       = useState('COMPLETED');
+  const kycCreateMutation = useMutation({
+    mutationFn: () => createKycEvent(playerId, { event_type: kycEventType, provider: kycProvider || undefined, status: kycStatus }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['kyc-events', playerId] });
+      setKycEventType('IDENTITY_CHECK');
+      setKycProvider('');
+      setKycStatus('COMPLETED');
+    },
+  });
+
   const eraseMutation = useMutation({
     mutationFn: () => erasePlayerData(playerId, erasureReason),
     onSuccess: async () => {
@@ -344,7 +588,7 @@ export default function PlayerDetailPage() {
       {/* Tabs */}
       <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="flex border-b border-gray-200">
-          {(['profile', 'econ', 'network'] as Tab[]).map((t) => (
+          {(['profile', 'econ', 'network', 'compliance'] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -358,7 +602,9 @@ export default function PlayerDetailPage() {
                 ? 'Perfil'
                 : t === 'econ'
                   ? 'Compatibilidade Econômica'
-                  : 'Rede & Contexto'}
+                  : t === 'network'
+                    ? 'Rede & Contexto'
+                    : 'Compliance PLD'}
             </button>
           ))}
         </div>
@@ -544,6 +790,26 @@ export default function PlayerDetailPage() {
           )}
           {tab === 'econ' && <EconCompatPanel player_id={playerId} />}
           {tab === 'network' && <NetworkPanel player_id={playerId} />}
+          {tab === 'compliance' && (
+            <CompliancePanel
+              player_id={playerId}
+              selfExclusionFlag={p.self_exclusion_flag ?? false}
+              depositLimitDaily={p.deposit_limit_daily ?? null}
+              playerStatus={p.status ?? ''}
+              depositLimitValue={depositLimitValue}
+              setDepositLimitValue={setDepositLimitValue}
+              selfExclusionMutation={selfExclusionMutation}
+              depositLimitMutation={depositLimitMutation}
+              kycEventType={kycEventType}
+              setKycEventType={setKycEventType}
+              kycProvider={kycProvider}
+              setKycProvider={setKycProvider}
+              kycStatus={kycStatus}
+              setKycStatus={setKycStatus}
+              kycCreateMutation={kycCreateMutation}
+              hasGestorRole={hasAnyRole(['Operador_Gestor', 'BetAML_SuperAdmin'])}
+            />
+          )}
         </div>
       </div>
     </div>

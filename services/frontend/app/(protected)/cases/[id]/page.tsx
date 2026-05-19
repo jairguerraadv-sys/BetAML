@@ -21,6 +21,7 @@ import {
   linkAlertToCase,
   linkTransactionToCase,
   lookupCaseEntities,
+  registerCoafProtocol,
   submitReportPackage,
   uploadCaseEvidence,
   updateCaseStatus,
@@ -974,6 +975,9 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
   const [narrative, setNarrative] = useState('');
   const [decision, setDecision]   = useState<'FILE_SAR' | 'NO_ACTION' | 'PENDING'>('PENDING');
   const [rpResult, setRpResult]   = useState<{ report_package_id: string; pdf_path: string | null } | null>(null);
+  const [submitResult, setSubmitResult] = useState<{ xml_sha256: string | null; xml_path: string | null } | null>(null);
+  const [protocolInput, setProtocolInput] = useState('');
+  const [protocolRpId, setProtocolRpId]   = useState<string | null>(null);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
   // Siscoaf 97 fields
   const [occurrenceCodes, setOccurrenceCodes]       = useState<number[]>([]);
@@ -1005,8 +1009,19 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
   });
   const submitMut = useMutation({
     mutationFn: () => submitReportPackage(caseId),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      setSubmitResult({ xml_sha256: res.xml_sha256 ?? null, xml_path: res.xml_path ?? null });
       qc.invalidateQueries({ queryKey: ['case', caseId] });
+      qc.invalidateQueries({ queryKey: ['case-report-packages', caseId] });
+    },
+  });
+
+  const protocolMut = useMutation({
+    mutationFn: ({ rpId, protocol }: { rpId: string; protocol: string }) =>
+      registerCoafProtocol(caseId, rpId, protocol),
+    onSuccess: () => {
+      setProtocolInput('');
+      setProtocolRpId(null);
       qc.invalidateQueries({ queryKey: ['case-report-packages', caseId] });
     },
   });
@@ -1048,7 +1063,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h3 className="mb-3 text-sm font-semibold text-gray-700">Gerar Dossiê para Reporte</h3>
         {rpResult ? (
-          <div className="rounded-lg border border-green-200 bg-green-50 p-4">
+          <div className="rounded-lg border border-green-200 bg-green-50 p-4 space-y-3">
             <p className="font-semibold text-green-800">Relatório gerado com sucesso</p>
             <p className="mt-0.5 text-xs text-green-600 font-mono">{rpResult.report_package_id}</p>
             {rpResult.pdf_path && (
@@ -1070,6 +1085,43 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
               >
                 ⬇ Baixar XML (COAF Res. 36)
               </a>
+            )}
+            {submitResult?.xml_sha256 && (
+              <p className="text-xs text-green-700">
+                SHA-256: <span className="font-mono">{submitResult.xml_sha256}</span>
+              </p>
+            )}
+            {submitResult && (
+              <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 p-3">
+                <p className="mb-1 text-xs font-semibold text-blue-800">Registrar Número de Protocolo COAF</p>
+                <p className="mb-2 text-xs text-blue-600">Informe o número obtido no portal Siscoaf após envio do XML.</p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={protocolInput}
+                    onChange={(e) => setProtocolInput(e.target.value)}
+                    placeholder="Ex: COAF-2026-000123"
+                    className="flex-1 rounded-lg border border-blue-200 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    aria-label="Número de protocolo COAF"
+                  />
+                  <button
+                    onClick={() => {
+                      if (!protocolInput.trim()) return;
+                      protocolMut.mutate({ rpId: rpResult.report_package_id, protocol: protocolInput.trim() });
+                    }}
+                    disabled={protocolMut.isPending || !protocolInput.trim()}
+                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {protocolMut.isPending ? 'Salvando…' : 'Registrar'}
+                  </button>
+                </div>
+                {protocolMut.isSuccess && (
+                  <p className="mt-1 text-xs text-green-700">Protocolo registrado com sucesso.</p>
+                )}
+                {protocolMut.isError && (
+                  <p className="mt-1 text-xs text-red-600">Falha ao registrar protocolo. Tente novamente.</p>
+                )}
+              </div>
             )}
           </div>
         ) : (
@@ -1302,12 +1354,85 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
         </div>
         <div className="space-y-2">
           {reportPackages.map((rp) => (
-            <div key={rp.id} className="flex flex-col gap-2 rounded-lg border border-gray-100 px-3 py-3 text-xs md:flex-row md:items-center md:justify-between">
-              <div>
+            <div key={rp.id} className="flex flex-col gap-2 rounded-lg border border-gray-100 px-3 py-3 text-xs md:flex-row md:items-start md:justify-between">
+              <div className="space-y-0.5">
                 <p className="font-mono text-gray-700">{rp.id.slice(0, 8)}…</p>
-                <p className="mt-0.5 text-gray-400">
+                <p className="text-gray-400">
                   {new Date(rp.created_at).toLocaleString('pt-BR')} · {rp.status} · decisão {rp.decision ?? '—'}
                 </p>
+                {rp.filed_at && (
+                  <p className="text-blue-600">Comunicado em: {new Date(rp.filed_at).toLocaleString('pt-BR')}</p>
+                )}
+                {rp.coaf_protocol_number ? (
+                  <p className="text-green-700 font-medium">Protocolo COAF: {rp.coaf_protocol_number}</p>
+                ) : rp.status === 'FILED' ? (
+                  <div className="mt-1 flex gap-1">
+                    {protocolRpId === rp.id ? (
+                      <>
+                        <input
+                          type="text"
+                          value={protocolInput}
+                          onChange={(e) => setProtocolInput(e.target.value)}
+                          placeholder="Protocolo COAF"
+                          className="rounded border border-blue-200 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300"
+                          aria-label="Número de protocolo COAF"
+                        />
+                        <button
+                          onClick={() => {
+                            if (!protocolInput.trim()) return;
+                            protocolMut.mutate({ rpId: rp.id, protocol: protocolInput.trim() });
+                          }}
+                          disabled={protocolMut.isPending || !protocolInput.trim()}
+                          className="rounded bg-blue-600 px-2 py-1 font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          {protocolMut.isPending ? '…' : 'OK'}
+                        </button>
+                        <button onClick={() => setProtocolRpId(null)} className="rounded px-2 py-1 text-gray-500 hover:bg-gray-100">✕</button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => { setProtocolRpId(rp.id); setProtocolInput(''); }}
+                        className="rounded border border-blue-200 px-2 py-1 text-blue-600 hover:bg-blue-50"
+                      >
+                        + Registrar Protocolo
+                      </button>
+                    )}
+                  </div>
+                ) : null}
+                {rp.xml_sha256 && (
+                  <p className="text-gray-400 font-mono">SHA-256: {rp.xml_sha256.slice(0, 16)}…</p>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <a
+                  href={`/api-proxy/cases/${caseId}/report-package/json?rp_id=${rp.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded border border-gray-300 px-2 py-1 font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  JSON
+                </a>
+                {rp.pdf_available && (
+                  <a
+                    href={`/api-proxy/cases/${caseId}/report-package/pdf?rp_id=${rp.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded border border-gray-300 px-2 py-1 font-semibold text-gray-700 hover:bg-gray-50"
+                  >
+                    PDF
+                  </a>
+                )}
+                <a
+                  href={`/api-proxy/cases/${caseId}/report-package/coaf-xml?rp_id=${rp.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded border border-gray-300 px-2 py-1 font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  XML
+                </a>
+              </div>
+            </div>
+          ))}
               </div>
               <div className="flex flex-wrap gap-2">
                 <a

@@ -226,6 +226,9 @@ export interface Player {
   pep_flag: boolean;
   risk_score: number;
   risk_band: 'LOW' | 'MEDIUM' | 'HIGH';
+  status: string;
+  self_exclusion_flag: boolean;
+  deposit_limit_daily: number | null;
   created_at: string;
 }
 
@@ -233,6 +236,19 @@ export interface PlayerDetail {
   id: string; external_player_id: string; cpf: string; pep_flag: boolean;
   risk_score: number; risk_band: 'LOW' | 'MEDIUM' | 'HIGH';
   declared_income_monthly: number | null; last_scored_at: string | null;
+  status: string;
+  self_exclusion_flag: boolean;
+  deposit_limit_daily: number | null;
+}
+
+export interface KycEvent {
+  id: string;
+  event_type: string;
+  provider: string;
+  status: string;
+  error_message: string | null;
+  processed_at: string | null;
+  created_at: string;
 }
 
 export interface PlayerErasureResponse {
@@ -516,19 +532,43 @@ export interface CaseNarrativeSuggestion {
 export const fetchCaseNarrativeSuggestion = (caseId: string) =>
   api.get<CaseNarrativeSuggestion>(`/cases/${caseId}/report-package/narrative-suggest`).then((r) => r.data);
 
+export interface ReportPackageMeta {
+  id: string;
+  status: string;
+  format: string;
+  decision: string | null;
+  created_at: string;
+  generated_by?: string | null;
+  pdf_available: boolean;
+  xml_path?: string | null;
+  xml_sha256?: string | null;
+  coaf_protocol_number?: string | null;
+  filed_at?: string | null;
+}
+
+export interface SubmitReportResult {
+  status: string;
+  report_package_id: string;
+  tracking_id: string;
+  submitted_at: string;
+  submitted_by: string;
+  channel: string;
+  xml_path: string | null;
+  xml_sha256: string | null;
+  message: string;
+}
+
 export const fetchCaseReportPackages = (caseId: string) =>
-  api.get<Array<{
-    id: string;
-    status: string;
-    format: string;
-    decision: string | null;
-    created_at: string;
-    generated_by?: string | null;
-    pdf_available: boolean;
-  }>>(`/cases/${caseId}/report-packages`).then((r) => r.data);
+  api.get<ReportPackageMeta[]>(`/cases/${caseId}/report-packages`).then((r) => r.data);
 
 export const submitReportPackage = (caseId: string) =>
-  api.post(`/cases/${caseId}/report-package/submit`).then((r) => r.data);
+  api.post<SubmitReportResult>(`/cases/${caseId}/report-package/submit`).then((r) => r.data);
+
+export const registerCoafProtocol = (caseId: string, rpId: string, coafProtocolNumber: string) =>
+  api.patch<{ report_package_id: string; coaf_protocol_number: string; registered_at: string }>(
+    `/cases/${caseId}/report-packages/${rpId}/protocol-number`,
+    { coaf_protocol_number: coafProtocolNumber },
+  ).then((r) => r.data);
 
 export const assignCase = (caseId: string, userId: string) =>
   api.post(`/cases/${caseId}/assign`, { user_id: userId }).then((r) => r.data);
@@ -835,6 +875,7 @@ export interface Notification {
   type: string;
   title: string;
   body: string | null;
+  message?: string | null;
   reference_type: string | null;
   reference_id: string | null;
   is_read: boolean;
@@ -851,6 +892,37 @@ export const markNotificationRead = (id: string) =>
 
 export const markAllNotificationsRead = () =>
   api.post<{ status: string }>('/notifications/read-all').then((r) => r.data);
+
+// ── Self-exclusão e KYC de players ─────────────────────────────────────────
+
+export const setSelfExclusion = (playerId: string, reason?: string) =>
+  api.post<{ player_id: string; self_exclusion_flag: boolean; status: string }>(
+    `/players/${playerId}/self-exclusion`,
+    reason ? { reason } : {},
+  ).then((r) => r.data);
+
+export const clearSelfExclusion = (playerId: string) =>
+  api.delete<{ player_id: string; self_exclusion_flag: boolean; status: string }>(
+    `/players/${playerId}/self-exclusion`,
+  ).then((r) => r.data);
+
+export const updateDepositLimit = (playerId: string, depositLimitDaily: number) =>
+  api.patch<{ player_id: string; deposit_limit_daily: number }>(
+    `/players/${playerId}/deposit-limit`,
+    { deposit_limit_daily: depositLimitDaily },
+  ).then((r) => r.data);
+
+export const createKycEvent = (
+  playerId: string,
+  body: { event_type: string; provider?: string; status?: string; payload?: Record<string, unknown> },
+) =>
+  api.post<KycEvent & { player_status: string }>(
+    `/players/${playerId}/kyc-events`,
+    body,
+  ).then((r) => r.data);
+
+export const fetchKycEvents = (playerId: string) =>
+  api.get<KycEvent[]>(`/players/${playerId}/kyc-events`).then((r) => r.data);
 
 // ── Model Registry ──────────────────────────────────────────────────────────
 

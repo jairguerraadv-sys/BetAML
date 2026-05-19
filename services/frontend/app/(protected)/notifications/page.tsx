@@ -88,24 +88,45 @@ export default function NotificationsPage() {
       )}
 
       <ul className="space-y-2">
-        {items.map((n: Notification) => (
+        {items.map((n: Notification) => {
+          const isCoafBreach  = n.type === 'COAF_DEADLINE_BREACH';
+          const isCoafWarning = n.type === 'COAF_DEADLINE_WARNING';
+          const urgencyBorder = isCoafBreach
+            ? 'border-red-300 bg-red-50'
+            : isCoafWarning
+              ? 'border-orange-300 bg-orange-50'
+              : n.is_read
+                ? 'border-gray-100 bg-white'
+                : 'border-brand/20 bg-brand/5';
+          return (
           <li
             key={n.id}
-            className={`rounded-xl border px-4 py-3 transition-colors ${
-              n.is_read ? 'border-gray-100 bg-white' : 'border-brand/20 bg-brand/5'
-            }`}
+            className={`rounded-xl border px-4 py-3 transition-colors ${urgencyBorder}`}
           >
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className={`text-sm font-semibold ${n.is_read ? 'text-gray-700' : 'text-brand'}`}>
+                {(isCoafBreach || isCoafWarning) && (
+                  <span className={`mb-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                    isCoafBreach ? 'bg-red-600 text-white' : 'bg-orange-500 text-white'
+                  }`}>
+                    {isCoafBreach ? '🚨 PRAZO VENCIDO' : '⚠️ PRAZO COAF'}
+                  </span>
+                )}
+                <p className={`text-sm font-semibold ${isCoafBreach ? 'text-red-700' : isCoafWarning ? 'text-orange-700' : n.is_read ? 'text-gray-700' : 'text-brand'}`}>
                   {n.title}
                 </p>
-                <p className="mt-0.5 text-sm text-gray-600">{n.body}</p>
+                <p className="mt-0.5 text-sm text-gray-600">{n.body ?? n.message}</p>
                 <p className="mt-1 text-xs text-gray-400">
                   {fmtDate(n.created_at, locale)}
                 </p>
                 <div className="mt-2 flex items-center gap-2">
-                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                    isCoafBreach
+                      ? 'bg-red-100 text-red-700'
+                      : isCoafWarning
+                        ? 'bg-orange-100 text-orange-700'
+                        : 'bg-gray-100 text-gray-600'
+                  }`}>
                     {n.type}
                   </span>
                   {n.reference_type && (
@@ -118,6 +139,8 @@ export default function NotificationsPage() {
                   <a
                     href={
                       n.reference_type === 'Case'
+                        ? `/cases/${n.reference_id}`
+                        : n.reference_type === 'ReportPackage'
                         ? `/cases/${n.reference_id}`
                         : n.reference_type === 'alert'
                         ? `/alerts/${n.reference_id}`
@@ -140,7 +163,8 @@ export default function NotificationsPage() {
               )}
             </div>
           </li>
-        ))}
+          );
+        })}
       </ul>
     </div>
   );
