@@ -653,6 +653,9 @@ class FinancialTransaction(Base):
     source_event_id    = Column(Text)
     ingest_job_id      = Column(UUID(as_uuid=False), ForeignKey("ingest_jobs.id", ondelete="SET NULL"))
     raw_payload        = Column(JSONB, default={})
+    # payment_method_flagged: sinaliza uso de instrumento vetado (ex: cartão crédito)
+    # conforme Portaria SPA/MF 1.143/2024
+    payment_method_flagged = Column(Boolean, nullable=False, server_default="false")
     occurred_at        = Column(DateTime(timezone=True), nullable=False)
     settled_at         = Column(DateTime(timezone=True))
     created_at         = Column(DateTime(timezone=True), server_default=func.now())
@@ -714,3 +717,28 @@ class DeviceEvent(Base):
     raw_payload     = Column(JSONB, default={})
     occurred_at     = Column(DateTime(timezone=True), nullable=False)
     created_at      = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ── KYC ───────────────────────────────────────────────────────────────────────
+
+class PlayerKycEvent(Base):
+    """Eventos de verificação KYC de players (IC-02).
+
+    Criada pela migration_v27.sql com player_id TEXT; a migration
+    20260519_000003 atualiza para UUID FK se todos os valores forem UUIDs válidos.
+    """
+    __tablename__ = "player_kyc_events"
+
+    id            = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id     = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    # player_id pode ser UUID ou TEXT dependendo do caminho de migração aplicado;
+    # o ORM usa UUID(as_uuid=False) que serializa como string em ambos os casos.
+    player_id     = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
+    event_type    = Column(String(40), nullable=False)          # CPF_VERIFY, LIVENESS_CHECK, DOC_UPLOAD, …
+    provider      = Column(String(40), nullable=False, default="manual")
+    status        = Column(String(20), nullable=False, default="PENDING")  # PENDING/APPROVED/REJECTED/ERROR
+    payload       = Column(JSONB, nullable=False, default={})
+    response      = Column(JSONB, default={})
+    error_message = Column(Text)
+    processed_at  = Column(DateTime(timezone=True))
+    created_at    = Column(DateTime(timezone=True), server_default=func.now())

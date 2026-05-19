@@ -41,8 +41,10 @@ async def get_db() -> AsyncSession:  # type: ignore[return]
     """Dependency FastAPI: sessão async com RLS ativado para o tenant corrente."""
     async with AsyncSessionLocal() as session:
         tid = current_tenant_id.get()
-        if tid:
-            # SET LOCAL é escopo de transação no Postgres; usa-se SET (sessão) aqui
-            # pois asyncpg reutiliza conexões do pool e cada request inicia nova sessão.
-            await session.execute(text("SELECT set_config('app.current_tenant', :tid, false)"), {"tid": tid})
+        # SET LOCAL garante escopo de transação (true = local), evitando vazamento
+        # de contexto de tenant entre conexões reutilizadas pelo pool.
+        await session.execute(
+            text("SELECT set_config('app.current_tenant', :tid, true)"),
+            {"tid": tid or ""},
+        )
         yield session

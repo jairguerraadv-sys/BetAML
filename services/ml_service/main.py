@@ -55,7 +55,8 @@ DATABASE_URL   = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@localhos
 REDIS_URL      = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
 MINIO_ACCESS   = os.getenv("MINIO_ACCESS_KEY", "minio")
-MINIO_SECRET   = os.getenv("MINIO_SECRET_KEY", "minio123")
+MINIO_SECRET   = os.getenv("MINIO_SECRET_KEY")
+assert MINIO_SECRET, "MINIO_SECRET_KEY env var must be set — refusing to start without it"
 BUCKET_MODELS  = os.getenv("ML_MODEL_BUCKET", "betaml-models")
 ENVIRONMENT    = os.getenv("ENVIRONMENT", "development").strip().lower()
 ML_ALLOW_SYNTHETIC_TRAINING = os.getenv("ML_ALLOW_SYNTHETIC_TRAINING", "").strip().lower() in {

@@ -1118,10 +1118,13 @@ def _persist_feature_snapshot(features: dict, feature_date) -> None:
         endpoint = os.getenv("MINIO_ENDPOINT", "http://minio:9000").replace("http://", "").replace("https://", "")
         secure = os.getenv("MINIO_ENDPOINT", "http://minio:9000").startswith("https://")
         bucket = os.getenv("MINIO_BUCKET", "betaml-lakehouse")
+        _minio_secret = os.getenv("MINIO_SECRET_KEY")
+        if not _minio_secret:
+            raise RuntimeError("MINIO_SECRET_KEY must be set")
         client = Minio(
             endpoint,
             access_key=os.getenv("MINIO_ACCESS_KEY", "minio"),
-            secret_key=os.getenv("MINIO_SECRET_KEY", "minio123"),
+            secret_key=_minio_secret,
             secure=secure,
         )
         object_name = str(
@@ -1732,10 +1735,13 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
         endpoint = os.getenv("MINIO_ENDPOINT", "http://minio:9000").replace("http://", "").replace("https://", "")
         secure = os.getenv("MINIO_ENDPOINT", "http://minio:9000").startswith("https://")
         bucket = os.getenv("MINIO_BUCKET", "betaml-lakehouse")
+        _minio_secret = os.getenv("MINIO_SECRET_KEY")
+        if not _minio_secret:
+            raise RuntimeError("MINIO_SECRET_KEY must be set")
         client = Minio(
             endpoint,
             access_key=os.getenv("MINIO_ACCESS_KEY", "minio"),
-            secret_key=os.getenv("MINIO_SECRET_KEY", "minio123"),
+            secret_key=_minio_secret,
             secure=secure,
         )
         obj = client.get_object(bucket, file_path)

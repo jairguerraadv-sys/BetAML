@@ -71,15 +71,6 @@ def _decode_auth_payload(token: str) -> dict | None:
             algorithms=[settings.jwt_algorithm],
         )
     except JWTError:
-        if settings.environment in ("development", "test"):
-            try:
-                return _jwt.decode(
-                    token,
-                    "dev-secret-change-me",
-                    algorithms=[settings.jwt_algorithm],
-                )
-            except JWTError:
-                return None
         return None
 
 
