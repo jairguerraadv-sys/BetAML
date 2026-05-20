@@ -45,7 +45,17 @@ def _seed_allowed() -> bool:
     if env in {"development", "test"}:
         return True
     explicit = os.getenv("ALLOW_SYNTHETIC_SEED", os.getenv("API_AUTO_SEED", "")).strip().lower()
-    return explicit in {"1", "true", "yes", "on"}
+    if explicit not in {"1", "true", "yes", "on"}:
+        return False
+    # Em staging/produção com ALLOW_SYNTHETIC_SEED=true: exige senha forte
+    if DEFAULT_SUPER_ADMIN_PASSWORD in ("superadmin123", "", "changeme"):
+        raise RuntimeError(
+            "SUPER_ADMIN_PASS não pode ser o valor padrão ('superadmin123') "
+            "quando ALLOW_SYNTHETIC_SEED=true fora de development/test. "
+            "Defina SUPER_ADMIN_PASS com uma senha segura. "
+            "Gere com: python -c \"import secrets; print(secrets.token_urlsafe(20))\""
+        )
+    return True
 
 # ──────────────────────────────────────────────────
 # 12 DSL Rules (default)

@@ -18,7 +18,7 @@ from sqlalchemy import select, and_, text, func
 
 from config import settings
 from database import AsyncSessionLocal
-from models import Alert, AuditLog, Case, FeatureSnapshot, Notification, Player, ReportPackage, ScoringConfig, Tenant, User, FinancialTransaction, Bet, IngestError
+from models import Alert, AuditLog, Case, FeatureSnapshot, ModelRegistry, Notification, Player, ReportPackage, ScoringConfig, Tenant, User, FinancialTransaction, Bet, IngestError
 
 logger = structlog.get_logger(__name__)
 
@@ -1064,3 +1064,210 @@ async def data_retention_batch() -> None:
     except Exception as exc:
         logger.error("data_retention_batch_failed", error=str(exc))
         await _notify_admins_job_failure("data_retention_batch", str(exc))
+
+
+async def auto_promote_challenger_models() -> None:
+    """
+    Champion-Challenger Auto-Promotion — roda diariamente às 07:30 UTC.
+
+    Para cada tenant que possui um modelo challenger ativo, compara a precisão
+    estimada do challenger vs do champion nos últimos 30 dias de alertas labelados.
+
+    Regras:
+      - PROMOÇÃO: challenger precision > champion precision + THRESHOLD (5 pp)
+        → promove challenger, arquiva champion, envia Notification + AuditLog.
+      - EXPIRAÇÃO: challenger está ativo há > 30 dias sem atingir o threshold
+        → arquiva challenger (sem promoção), envia Notification + AuditLog.
+
+    O threshold é configurável via CHALLENGER_PROMOTION_THRESHOLD (padrão: 0.05).
+    """
+    PROMOTION_THRESHOLD = float(
+        __import__("os").getenv("CHALLENGER_PROMOTION_THRESHOLD", "0.05")
+    )
+    CHALLENGER_MAX_DAYS = 30
+
+    try:
+        from sqlalchemy import desc, update as sa_update  # noqa: PLC0415
+
+        async with AsyncSessionLocal() as db:
+            tenants = (
+                await db.execute(select(Tenant).where(Tenant.active.is_(True)))
+            ).scalars().all()
+
+            now = datetime.now(UTC)
+            since = now - timedelta(days=30)
+
+            for tenant in tenants:
+                await _set_db_tenant_context(db, tenant.id)
+
+                # Busca challenger ativo do tenant (por model_type)
+                challengers = (
+                    await db.execute(
+                        select(ModelRegistry).where(
+                            ModelRegistry.tenant_id == tenant.id,
+                            ModelRegistry.is_challenger.is_(True),
+                            ModelRegistry.status == "challenger",
+                        )
+                    )
+                ).scalars().all()
+
+                for challenger in challengers:
+                    # Verifica expiração (challenger rodando há mais de 30 dias)
+                    designated_at = getattr(challenger, "trained_at", None) or now
+                    age_days = int((now - designated_at.replace(tzinfo=UTC)).total_seconds() // 86400)
+
+                    if age_days > CHALLENGER_MAX_DAYS:
+                        # Arquivar challenger expirado sem promoção
+                        challenger.status = "archived"
+                        challenger.is_challenger = False
+                        challenger.is_active = False
+                        db.add(AuditLog(
+                            tenant_id=tenant.id,
+                            user_id=None,
+                            action="CHALLENGER_EXPIRED",
+                            entity_type="ModelRegistry",
+                            entity_id=str(challenger.id),
+                            after={
+                                "model_type": challenger.model_type,
+                                "age_days": age_days,
+                                "reason": f"Challenger não atingiu threshold de {PROMOTION_THRESHOLD:.0%} em {CHALLENGER_MAX_DAYS}d",
+                            },
+                        ))
+                        logger.warning(
+                            "challenger_expired",
+                            tenant_id=tenant.id,
+                            model_id=str(challenger.id),
+                            age_days=age_days,
+                        )
+                        await db.commit()
+                        continue
+
+                    # Busca o champion correspondente
+                    champion = (
+                        await db.execute(
+                            select(ModelRegistry).where(
+                                ModelRegistry.tenant_id == tenant.id,
+                                ModelRegistry.model_type == challenger.model_type,
+                                ModelRegistry.status.in_(["champion", "active", "PRODUCTION"]),
+                            ).order_by(desc(ModelRegistry.trained_at))
+                        )
+                    ).scalar_one_or_none()
+
+                    if champion is None:
+                        continue
+
+                    # Computa precisão estimada usando alertas dos últimos 30d
+                    alerts_30d = (
+                        await db.execute(
+                            select(Alert).where(
+                                Alert.tenant_id == tenant.id,
+                                Alert.created_at >= since,
+                                Alert.label.in_(["TRUE_POSITIVE", "FALSE_POSITIVE"]),
+                            )
+                        )
+                    ).scalars().all()
+
+                    def _precision_for_model(model_id: str) -> float | None:
+                        tp = fp = 0
+                        for a in alerts_30d:
+                            evidence = a.evidence or {}
+                            if not isinstance(evidence, dict):
+                                continue
+                            if str(evidence.get("model_id", "")) != model_id:
+                                continue
+                            if a.label == "TRUE_POSITIVE":
+                                tp += 1
+                            elif a.label == "FALSE_POSITIVE":
+                                fp += 1
+                        return tp / (tp + fp) if (tp + fp) >= 5 else None
+
+                    ch_precision = _precision_for_model(str(challenger.id))
+                    cp_precision = _precision_for_model(str(champion.id))
+
+                    if ch_precision is None or cp_precision is None:
+                        # Amostras insuficientes (< 5 alertas) — não decide ainda
+                        logger.info(
+                            "challenger_insufficient_samples",
+                            tenant_id=tenant.id,
+                            challenger_id=str(challenger.id),
+                        )
+                        continue
+
+                    delta = ch_precision - cp_precision
+
+                    if delta >= PROMOTION_THRESHOLD:
+                        # ── AUTO-PROMOÇÃO ─────────────────────────────────
+                        await db.execute(
+                            sa_update(ModelRegistry).where(
+                                ModelRegistry.tenant_id == tenant.id,
+                                ModelRegistry.model_type == challenger.model_type,
+                                ModelRegistry.status.in_(["champion", "active", "PRODUCTION"]),
+                            ).values(status="archived", is_active=False, is_challenger=False, champion_id=None)
+                        )
+                        challenger.status = "champion"
+                        challenger.is_challenger = False
+                        challenger.is_active = True
+                        challenger.champion_id = None
+
+                        db.add(AuditLog(
+                            tenant_id=tenant.id,
+                            user_id=None,
+                            action="CHALLENGER_AUTO_PROMOTED",
+                            entity_type="ModelRegistry",
+                            entity_id=str(challenger.id),
+                            after={
+                                "model_type": challenger.model_type,
+                                "challenger_precision": round(ch_precision, 4),
+                                "champion_precision": round(cp_precision, 4),
+                                "delta": round(delta, 4),
+                                "threshold": PROMOTION_THRESHOLD,
+                                "previous_champion_id": str(champion.id),
+                            },
+                        ))
+
+                        # Notifica gestores/admins do tenant
+                        admins = (
+                            await db.execute(
+                                select(User).where(
+                                    User.tenant_id == tenant.id,
+                                    User.role.in_(["ADMIN", "GESTOR", "Operador_Gestor", "BetAML_SuperAdmin"]),
+                                    User.active.is_(True),
+                                )
+                            )
+                        ).scalars().all()
+                        for admin in admins:
+                            db.add(Notification(
+                                tenant_id=tenant.id,
+                                user_id=admin.id,
+                                type="MODEL_AUTO_PROMOTED",
+                                title="Challenger promovido automaticamente",
+                                body=(
+                                    f"Modelo {challenger.model_type} (id={str(challenger.id)[:8]}) "
+                                    f"promovido: precisão {ch_precision:.1%} vs champion {cp_precision:.1%} "
+                                    f"(+{delta:.1%})"
+                                ),
+                                reference_type="ModelRegistry",
+                                reference_id=str(challenger.id),
+                            ))
+
+                        await db.commit()
+                        logger.info(
+                            "challenger_auto_promoted",
+                            tenant_id=tenant.id,
+                            challenger_id=str(challenger.id),
+                            champion_precision=round(cp_precision, 4),
+                            challenger_precision=round(ch_precision, 4),
+                            delta=round(delta, 4),
+                        )
+                    else:
+                        logger.info(
+                            "challenger_below_threshold",
+                            tenant_id=tenant.id,
+                            challenger_id=str(challenger.id),
+                            delta=round(delta, 4),
+                            threshold=PROMOTION_THRESHOLD,
+                        )
+
+    except Exception as exc:
+        logger.error("auto_promote_challenger_models_failed", error=str(exc))
+        await _notify_admins_job_failure("auto_promote_challenger_models", str(exc))

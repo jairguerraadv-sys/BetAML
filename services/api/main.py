@@ -659,6 +659,18 @@ async def _startup():
             misfire_grace_time=3600,
         )
 
+        # Champion-Challenger Auto-Promotion — todo dia às 07:30 UTC
+        from jobs import auto_promote_challenger_models
+        scheduler.add_job(
+            auto_promote_challenger_models,
+            trigger="cron",
+            hour=7,
+            minute=30,
+            id="challenger_auto_promotion",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
         scheduler.start()
         logger.info(
             "scheduled_jobs_started",
@@ -669,9 +681,10 @@ async def _startup():
                 "sla_violations_check@1h",
                 "feature_population_stats@06:00",
                 "data_quality_alerting@06:30",
+                "challenger_auto_promotion@07:30",
+                "coaf_deadline_check@08:00",
                 "data_retention_batch@sun03:00",
                 "business_metrics_update@5min",
-                "coaf_deadline_check@08:00",
             ],
         )
     except ImportError:

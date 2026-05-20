@@ -7,12 +7,14 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
+import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import AppRole, require_role_any
+from config import settings
 from database import get_db
 from libs.models import Alert, AuditLog, ModelInferenceLog, ModelRegistry, ScoringConfig
 from libs.schemas import (
@@ -20,6 +22,7 @@ from libs.schemas import (
     ModelPerformanceSummaryOut,
     ModelRegistryOut,
 )
+from utils import write_audit
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["ml"])
@@ -589,3 +592,116 @@ async def designate_challenger(
                        {"model_type": model.model_type, "algorithm": model.algorithm, "champion_id": str(champion.id)})
     await db.commit()
     return {"status": "challenger", "model_id": model_id}
+
+
+# ── M5 — SHAP Persistence: computa e persiste SHAP values por alerta ─────────
+
+_SHAP_COMPUTE_ROLES = [AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN]
+_ML_SERVICE_TIMEOUT = 15.0  # segundos
+
+
+@router.post("/alerts/{alert_id}/shap")
+async def compute_and_persist_shap(
+    alert_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_role_any(_SHAP_COMPUTE_ROLES)),
+):
+    """Computa SHAP values via ML Service e persiste na evidência do alerta.
+
+    Garante trilha de auditoria: o resultado SHAP fica armazenado em
+    alert.evidence["shap_values"] para ser recuperado pelo endpoint
+    GET /alerts/{id}/explainability sem nova chamada ao ML Service.
+
+    Erros de comunicação com o ML Service retornam 503 (não 500).
+    """
+    alert = (
+        await db.execute(
+            select(Alert).where(
+                Alert.id == alert_id,
+                Alert.tenant_id == current_user.tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if alert is None:
+        raise HTTPException(404, "Alerta não encontrado")
+
+    # Extrai features do alerta (evidência + snapshot de features)
+    evidence = alert.evidence or {}
+    if not isinstance(evidence, dict):
+        evidence = {}
+
+    features: dict[str, Any] = {}
+    features.update({k: v for k, v in evidence.items() if isinstance(v, (int, float))})
+    feat_snapshot = evidence.get("features_snapshot") or {}
+    if isinstance(feat_snapshot, dict):
+        features.update(feat_snapshot)
+
+    if not features:
+        raise HTTPException(422, "Alerta não possui features para calcular SHAP")
+
+    # Determina model_type a partir da evidência ou default
+    model_type = str(evidence.get("model_type") or "IsolationForest")
+
+    shap_request = {
+        "tenant_id": str(current_user.tenant_id),
+        "player_id": str(alert.player_id) if alert.player_id else "unknown",
+        "features": features,
+        "model_type": model_type,
+    }
+
+    ml_service_url = settings.ml_service_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=_ML_SERVICE_TIMEOUT) as client:
+            resp = await client.post(f"{ml_service_url}/score/shap", json=shap_request)
+            resp.raise_for_status()
+            shap_result = resp.json()
+    except httpx.TimeoutException:
+        raise HTTPException(503, "ML Service timeout ao calcular SHAP — tente novamente")
+    except httpx.ConnectError:
+        raise HTTPException(503, "ML Service indisponível — SHAP não pode ser calculado agora")
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(503, f"ML Service retornou erro {exc.response.status_code}")
+
+    shap_values: dict[str, float] = shap_result.get("shap_values") or {}
+    baseline: float = float(shap_result.get("baseline") or 0.0)
+
+    # Persiste no alerta (merge preserva campos existentes)
+    new_evidence = {**evidence}
+    new_evidence["shap_values"] = shap_values
+    new_evidence["shap_baseline"] = baseline
+    new_evidence["shap_computed_at"] = datetime.now(UTC).isoformat()
+    new_evidence["shap_model_type"] = model_type
+    alert.evidence = new_evidence
+
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "SHAP_COMPUTED",
+        "Alert",
+        alert_id,
+        after={
+            "model_type": model_type,
+            "feature_count": len(shap_values),
+            "baseline": baseline,
+        },
+    )
+    await db.commit()
+
+    logger.info(
+        "shap_persisted",
+        alert_id=alert_id,
+        tenant_id=str(current_user.tenant_id),
+        feature_count=len(shap_values),
+        model_type=model_type,
+    )
+
+    return {
+        "alert_id": alert_id,
+        "player_id": str(alert.player_id) if alert.player_id else None,
+        "model_type": model_type,
+        "shap_values": shap_values,
+        "baseline": baseline,
+        "computed_at": new_evidence["shap_computed_at"],
+        "feature_count": len(shap_values),
+    }

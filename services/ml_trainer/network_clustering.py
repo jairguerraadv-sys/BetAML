@@ -30,6 +30,7 @@ import numpy as np
 import structlog
 from minio import Minio
 from sklearn.cluster import DBSCAN
+from sklearn.metrics import silhouette_score as _silhouette_score
 from sklearn.preprocessing import StandardScaler
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -217,6 +218,20 @@ async def train_network_clustering(
     artifact_uri = f"s3://{bucket}/{model_filename}"
     logger.info("network_clustering_saved", artifact_uri=artifact_uri)
 
+    # ── Métricas de qualidade do clustering ──
+    non_noise_mask = labels != -1
+    n_non_noise = int(non_noise_mask.sum())
+    if n_clusters >= 2 and n_non_noise >= 2:
+        try:
+            sil_score = float(
+                _silhouette_score(X_scaled[non_noise_mask], labels[non_noise_mask])
+            )
+        except Exception as exc:
+            logger.warning("silhouette_score_failed", error=str(exc))
+            sil_score = 0.0
+    else:
+        sil_score = 0.0  # insuficiente: < 2 clusters ou todos pontos são ruído
+
     return {
         "model_name": "network_clustering",
         "model_type": "network_detection",
@@ -229,7 +244,7 @@ async def train_network_clustering(
             "n_noise": n_noise,
             "suspicious_clusters_count": len(suspicious_clusters),
             "largest_cluster_size": max(cluster_sizes.values()) if cluster_sizes else 0,
-            "silhouette_score": 0.0,  # TODO: compute if needed
+            "silhouette_score": round(sil_score, 4),
         },
         "feature_columns": NETWORK_FEATURES,
         "training_metadata": {
