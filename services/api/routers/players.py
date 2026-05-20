@@ -68,6 +68,9 @@ async def list_players(
             "pep_flag": p.pep_flag,
             "risk_score": float(p.risk_score),
             "risk_band": p.risk_band,
+            "status": p.status,
+            "self_exclusion_flag": p.self_exclusion_flag,
+            "deposit_limit_daily": float(p.deposit_limit_daily) if p.deposit_limit_daily is not None else None,
             "created_at": p.created_at,
         }
         for p in players
@@ -147,6 +150,9 @@ async def get_player(
         "pep_flag": p.pep_flag,
         "risk_score": float(p.risk_score),
         "risk_band": p.risk_band,
+        "status": p.status,
+        "self_exclusion_flag": p.self_exclusion_flag,
+        "deposit_limit_daily": float(p.deposit_limit_daily) if p.deposit_limit_daily is not None else None,
         "declared_income_monthly": declared_income,
         "last_scored_at": p.last_scored_at,
         "income_compat": {

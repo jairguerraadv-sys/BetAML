@@ -285,6 +285,15 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "MINIO_SECRET_KEY must be changed from default in staging/production."
                 )
+            # Validação externa: provider mock não pode ser usado fora de dev/test
+            import os as _os
+            _ext_provider = _os.getenv("EXTERNAL_VALIDATION_PROVIDER", "mock_identity").strip().lower()
+            if _ext_provider in ("mock_identity", "mock"):
+                raise ValueError(
+                    "EXTERNAL_VALIDATION_PROVIDER must be set to a real provider in staging/production. "
+                    "The 'mock_identity' provider is only allowed in development/test environments. "
+                    "Set EXTERNAL_VALIDATION_PROVIDER to a configured identity provider."
+                )
             # On-prem: exige tenant pré-seed configurado
             if self.deployment_mode == "onprem" and not self.onprem_tenant_id:
                 raise ValueError(

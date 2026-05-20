@@ -1159,6 +1159,7 @@ async def generate_report_package(
     return {
         "report_package_id": rp.id, "status": rp.status,
         "decision": decision,
+        "pdf_available": rp.pdf_path is not None,
         "pdf_path": rp.pdf_path, "payload": payload,
     }
 

@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS users (
     username    TEXT NOT NULL,
     email       TEXT NOT NULL,
     password_hash TEXT NOT NULL,
-    role        TEXT NOT NULL CHECK (role IN ('ADMIN','AML_ANALYST','AUDITOR')),
+    role        TEXT NOT NULL,  -- validação de roles feita pela aplicação (auth.py)
     active      BOOLEAN NOT NULL DEFAULT TRUE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),

@@ -81,6 +81,8 @@ class Player(Base):
     features                = Column(JSONB, nullable=False, default={})
     cluster_id              = Column(Integer)
     cluster_size            = Column(Integer, nullable=False, default=0)
+    self_exclusion_flag     = Column(Boolean, nullable=False, default=False)
+    deposit_limit_daily     = Column(Numeric(15, 2))
     created_at              = Column(DateTime(timezone=True), server_default=func.now())
     updated_at              = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
