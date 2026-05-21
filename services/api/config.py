@@ -34,10 +34,12 @@ from pydantic_settings import BaseSettings
 
 _log = logging.getLogger(__name__)
 
-DEFAULT_JWT_SECRET = "dev-secret-change-me"
-DEFAULT_EPSILON_WEBHOOK_SECRET = "dev-secret-change-me"
-DEFAULT_PII_ENCRYPTION_KEY = "ZGV2LXNlY3JldC1lbmNyeXB0aW9uLWtleS0zMmJ5"
-DEFAULT_INTERNAL_WEBHOOK_SECRET = "dev-webhook-secret-change-me"
+DEFAULT_JWT_SECRET = "__CHANGE_ME_JWT_SECRET__"
+DEFAULT_EPSILON_WEBHOOK_SECRET = "__CHANGE_ME_EPSILON_WEBHOOK_SECRET__"
+# Sentinela — NÃO é uma chave AES real. O Fernet vai rejeitar ao tentar usar.
+# Defina PII_ENCRYPTION_KEY com uma chave gerada por: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+DEFAULT_PII_ENCRYPTION_KEY = "__CHANGE_ME_PII_KEY_NOT_A_VALID_FERNET_KEY__"
+DEFAULT_INTERNAL_WEBHOOK_SECRET = "__CHANGE_ME_INTERNAL_WEBHOOK_SECRET__"
 DEFAULT_DATABASE_URL = "postgresql://betaml:devpass@localhost:5432/betaml_dev"
 DEFAULT_REDIS_URL = "redis://:devpass@localhost:6379/0"
 DEFAULT_MINIO_SECRET_KEY = "minio123"
@@ -201,6 +203,8 @@ class Settings(BaseSettings):
 
     # Internal service endpoints / metrics
     ml_service_url: str = "http://ml-service:8001"
+    # T10: chave de autenticação para chamadas internas ao ml_service
+    ml_internal_api_key: str = ""
     rules_engine_metrics_url: str = "http://rules-engine:8002/metrics"
     stream_processor_metrics_url: str = "http://stream-processor:8003/metrics"
 

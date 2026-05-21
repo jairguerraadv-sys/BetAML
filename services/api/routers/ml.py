@@ -650,9 +650,13 @@ async def compute_and_persist_shap(
     }
 
     ml_service_url = settings.ml_service_url.rstrip("/")
+    # T10: autenticação interna — propagar API key se configurada
+    _ml_headers: dict[str, str] = {}
+    if settings.ml_internal_api_key:
+        _ml_headers["X-Internal-Api-Key"] = settings.ml_internal_api_key
     try:
         async with httpx.AsyncClient(timeout=_ML_SERVICE_TIMEOUT) as client:
-            resp = await client.post(f"{ml_service_url}/score/shap", json=shap_request)
+            resp = await client.post(f"{ml_service_url}/score/shap", json=shap_request, headers=_ml_headers)
             resp.raise_for_status()
             shap_result = resp.json()
     except httpx.TimeoutException:

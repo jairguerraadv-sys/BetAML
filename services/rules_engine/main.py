@@ -51,6 +51,8 @@ KAFKA_SERVERS    = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 REDIS_URL        = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DATABASE_URL     = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@localhost:5432/betaml_dev")
 ML_SERVICE_URL   = os.getenv("ML_SERVICE_URL", "http://ml-service:8001")
+# T10: API key para autenticação interna com ml_service
+_ML_INTERNAL_API_KEY: str = os.getenv("ML_INTERNAL_API_KEY", "")
 RULE_CACHE_TTL   = 300  # 5 minutos
 METRICS_PORT     = int(os.getenv("METRICS_PORT", "8002"))
 HEALTH_PORT      = int(os.getenv("HEALTH_PORT", "8012"))
@@ -442,6 +444,9 @@ def _normalize_ml_features(features: dict[str, Any]) -> dict[str, float | bool |
 def _score_ml_sync(tenant_id: str, player_id: str, features: dict[str, Any]) -> dict[str, Any]:
     ctx = structlog.contextvars.get_contextvars()
     headers = {"Content-Type": "application/json"}
+    # T10: autenticação interna — propagar API key se configurada
+    if _ML_INTERNAL_API_KEY:
+        headers["X-Internal-Api-Key"] = _ML_INTERNAL_API_KEY
     request_id = ctx.get("request_id")
     event_id = ctx.get("event_id")
     if isinstance(request_id, str) and request_id:

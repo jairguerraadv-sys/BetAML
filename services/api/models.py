@@ -364,6 +364,7 @@ class Alert(Base):
     label_note       = Column(Text)
     labeled_by       = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     labeled_at       = Column(DateTime(timezone=True))
+    triage_note      = Column(Text)      # coluna adicionada em migration_v34 (T08)
     triaged_by       = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     triaged_at       = Column(DateTime(timezone=True))
     created_at       = Column(DateTime(timezone=True), server_default=func.now())

@@ -174,7 +174,13 @@ async def list_alerts(
                 "title": a.title, "alert_type": a.alert_type,
                 "player_id": a.player_id, "rule_id": a.rule_id,
                 "anomaly_score": float(a.anomaly_score) if a.anomaly_score else None,
-                "case_id": a.case_id, "created_at": a.created_at,
+                "composite_score": float(a.composite_score) if a.composite_score else None,
+                "case_id": a.case_id,
+                "label": a.label,
+                "triaged_by": str(a.triaged_by) if a.triaged_by else None,
+                "triaged_at": a.triaged_at.isoformat() if a.triaged_at else None,
+                "created_at": a.created_at,
+                "updated_at": a.updated_at,
             }
             for a in alerts
         ],
@@ -314,9 +320,23 @@ async def triage_alert(
     a.status = body.disposition
     a.triaged_by = current_user.id
     a.triaged_at = datetime.now(timezone.utc)
-    await write_audit(db, current_user.tenant_id, current_user.id, "TRIAGE", "Alert", alert_id)
+    # Persistir nota de triagem (T08 — era silenciosamente descartada)
+    triage_note = body.note or body.notes
+    if triage_note:
+        a.triage_note = triage_note
+    await write_audit(
+        db, current_user.tenant_id, current_user.id, "TRIAGE", "Alert", alert_id,
+        after={"disposition": body.disposition, "note": triage_note},
+    )
     await db.commit()
-    return {"id": alert_id, "status": a.status}
+    return {
+        "id": alert_id,
+        "status": a.status,
+        "disposition": body.disposition,
+        "triaged_by": str(a.triaged_by) if a.triaged_by else None,
+        "triaged_at": a.triaged_at.isoformat() if a.triaged_at else None,
+        "triage_note": triage_note,
+    }
 
 
 @router.post("/alerts/{alert_id}/close")

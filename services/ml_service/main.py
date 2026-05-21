@@ -16,6 +16,7 @@ Registro:  Postgres (model_registry)
 """
 from __future__ import annotations
 
+import hmac
 import io
 import hashlib
 import json
@@ -500,6 +501,49 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="BetAML ML Service", version="1.0.0", lifespan=lifespan)
+
+# ── Autenticação interna obrigatória (T10) ────────────────────────────────────
+# O ML Service só deve receber chamadas da API interna. Um API key estático
+# partilhado via variável de ambiente protege contra acesso externo não autorizado.
+_ML_INTERNAL_API_KEY: str = os.getenv("ML_INTERNAL_API_KEY", "")
+_ML_AUTH_EXEMPT_PATHS: frozenset[str] = frozenset({"/health", "/metrics", "/openapi.json", "/docs"})
+
+
+@app.middleware("http")
+async def require_internal_api_key(request: Request, call_next: Any) -> Response:
+    """Rejeita requisições sem o header X-Internal-Api-Key correto.
+
+    Rotas isentas: /health, /metrics (Prometheus scrape), /docs.
+    Em dev local (ML_INTERNAL_API_KEY vazio) emite WARNING mas deixa passar
+    para não bloquear inicialização sem docker-compose completo.
+    """
+    if request.url.path in _ML_AUTH_EXEMPT_PATHS:
+        return await call_next(request)
+
+    if not _ML_INTERNAL_API_KEY:
+        if ENVIRONMENT == "development":
+            # Dev sem variável configurada: passa com aviso (não produção)
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "ml_service_auth_disabled ML_INTERNAL_API_KEY not set; "
+                "set it to enable authentication"
+            )
+            return await call_next(request)
+        else:
+            return Response(
+                status_code=500,
+                content='{"detail":"ML_INTERNAL_API_KEY not configured"}',
+                media_type="application/json",
+            )
+
+    provided = request.headers.get("X-Internal-Api-Key", "")
+    if not hmac.compare_digest(provided.encode(), _ML_INTERNAL_API_KEY.encode()):
+        return Response(
+            status_code=401,
+            content='{"detail":"Unauthorized"}',
+            media_type="application/json",
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")

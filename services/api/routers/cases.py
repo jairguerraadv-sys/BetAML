@@ -16,7 +16,7 @@ from typing import Any, Optional
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response as FastAPIResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func as sqlfunc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from auth import AppRole, decrypt_pii, get_current_user, get_effective_roles, mask_cpf, require_roles, require_role, require_role_any, require_permission
@@ -362,6 +362,30 @@ class ReportPackageIn(BaseModel):
         description="Informações adicionais obrigatórias para todos os códigos de ocorrência.",
     )
 
+    @model_validator(mode="after")
+    def validate_file_sar_required_fields(self) -> "ReportPackageIn":
+        """Garante que campos obrigatórios pela Portaria SPA/MF 1.143/2024 estejam presentes
+        quando decision=FILE_SAR. Falha-rápido antes de qualquer persistência."""
+        if self.decision == "FILE_SAR":
+            if not self.occurrence_codes:
+                raise ValueError(
+                    "occurrence_codes é obrigatório quando decision=FILE_SAR "
+                    "(Portaria SPA/MF 1.143/2024, art. 15). "
+                    "Use códigos Siscoaf válidos (1407–1428)."
+                )
+            invalid = [c for c in self.occurrence_codes if c not in _VALID_OCCURRENCE_CODES]
+            if invalid:
+                raise ValueError(
+                    f"Códigos de ocorrência inválidos: {invalid}. "
+                    "Consulte SISCOAF_OCCURRENCE_CODES para a lista de códigos válidos (1407–1428)."
+                )
+            if not self.informacoes_adicionais or not self.informacoes_adicionais.strip():
+                raise ValueError(
+                    "informacoes_adicionais é obrigatório quando decision=FILE_SAR "
+                    "(Portaria SPA/MF 1.143/2024)."
+                )
+        return self
+
 
 class CaseEventCreate(BaseModel):
     event_type: str = "NOTE"
@@ -631,7 +655,11 @@ async def _build_report_payload(
         "decision_basis": "Análise conforme COAF Res. 36/2021 e regulamentação Bacen/MF",
     }
     final_payload["chain_of_custody"] = {
+        # report_payload_sha256 cobre APENAS os campos acima (antes de chain_of_custody ser inserido).
+        # Isso é intencional: o hash não pode incluir a si mesmo.
+        # Para verificar integridade: recalcule _sha256_json excluindo a chave "chain_of_custody".
         "report_payload_sha256": _sha256_json(final_payload),
+        "hash_scope": "payload_excluding_chain_of_custody",
         "attachments_count": len(attachments),
         "attachments_sha256": [a["sha256"] for a in attachments if a.get("sha256")],
         "generated_at": generated_at.isoformat(),

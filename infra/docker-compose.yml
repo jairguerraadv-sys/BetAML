@@ -294,6 +294,8 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-redpanda:29092}
       REDIS_URL:               ${REDIS_URL:-redis://:devpass@redis:6379/0}
       ML_SERVICE_URL:          ${ML_SERVICE_URL:-http://ml-service:8001}
+      # T10: deve ser a mesma chave configurada em ml-service
+      ML_INTERNAL_API_KEY:     ${ML_INTERNAL_API_KEY:-}
       METRICS_PORT:            ${RULES_ENGINE_METRICS_PORT:-8002}
       ENVIRONMENT:             ${ENVIRONMENT:-development}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
@@ -321,6 +323,9 @@ services:
       ML_MODEL_BUCKET:  ${ML_MODEL_BUCKET:-betaml-models}
       REDPANDA_ADMIN_URL: ${REDPANDA_ADMIN_URL:-http://redpanda:9644}
       ENVIRONMENT:      ${ENVIRONMENT:-development}
+      # T10: API key para proteger endpoints do ml_service.
+      # Em dev pode ficar vazio (só emite WARNING). Em staging/prod DEVE ser definida.
+      ML_INTERNAL_API_KEY: ${ML_INTERNAL_API_KEY:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
     ports:
       - "8001:8001"

@@ -251,15 +251,24 @@ async def _process_alert_event(payload: dict, Session: async_sessionmaker) -> No
         )
 
         if should_create_case and player_id and alert.id:
-            # Verificar se já existe Case OPEN para o player
-            existing_case = await db.execute(
-                select(Case).where(
-                    Case.tenant_id == tenant_id,
-                    Case.player_id == player_id,
-                    Case.status.in_(["OPEN", "INVESTIGATING"]),
-                ).limit(1)
-            )
-            existing = existing_case.scalar_one_or_none()
+            # Recarregar o alerta do DB para capturar case_id que o rules_engine pode ter setado
+            # antes do Kafka entregar a mensagem (race condition T09)
+            await db.refresh(alert)
+
+            # Se o alerta já foi vinculado a um caso (rules_engine chegou primeiro), apenas vincular
+            if alert.case_id:
+                existing = await db.get(Case, str(alert.case_id))
+            else:
+                # Verificar se já existe Case ativo para o player (status ampliado para cobrir
+                # todos os estados não-finais e evitar duplicação com rules_engine)
+                existing_case = await db.execute(
+                    select(Case).where(
+                        Case.tenant_id == tenant_id,
+                        Case.player_id == player_id,
+                        Case.status.in_(["OPEN", "INVESTIGATING", "IN_REVIEW", "PENDING_REVIEW"]),
+                    ).limit(1)
+                )
+                existing = existing_case.scalar_one_or_none()
 
             if existing:
                 # Vincular alerta ao case existente e adicionar evento
