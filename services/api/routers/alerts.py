@@ -1,13 +1,15 @@
 """routers/alerts.py — Listagem, detalhe, triage, close, link-to-case, SSE stream, labeling."""
 import asyncio
+import csv
+import io as _io
 import json
 from datetime import datetime, timedelta, timezone
-from typing import AsyncGenerator, Literal, Optional
+from typing import AsyncGenerator, List, Literal, Optional
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -166,8 +168,14 @@ async def list_alerts(
     )
     total = await repo.count_filtered(current_user.tenant_id)
 
+    _now = datetime.now(timezone.utc)
     return {
         "total": total,
+        "next_cursor": (
+            {"created_at": alerts[-1].created_at.isoformat() if alerts[-1].created_at else None,
+             "id": str(alerts[-1].id)}
+            if alerts and len(alerts) == limit else None
+        ),
         "items": [
             {
                 "id": a.id, "severity": a.severity, "status": a.status,
@@ -179,6 +187,14 @@ async def list_alerts(
                 "label": a.label,
                 "triaged_by": str(a.triaged_by) if a.triaged_by else None,
                 "triaged_at": a.triaged_at.isoformat() if a.triaged_at else None,
+                # T17: priority e sla_due_at eram campos mortos — agora expostos
+                "priority": a.priority,
+                "sla_due_at": a.sla_due_at.isoformat() if a.sla_due_at else None,
+                "sla_status": (
+                    "OVERDUE" if a.sla_due_at and a.sla_due_at < _now
+                    else "WARNING" if a.sla_due_at and a.sla_due_at < _now + timedelta(hours=24)
+                    else "OK" if a.sla_due_at else None
+                ),
                 "created_at": a.created_at,
                 "updated_at": a.updated_at,
             }
@@ -249,6 +265,83 @@ async def stream_alerts(
     )
 
 
+# ── T20: Exportação CSV — rota estática registrada ANTES de /alerts/{alert_id} ───────────────
+
+_CSV_EXPORT_FIELDS = [
+    "id", "severity", "status", "priority", "title", "alert_type",
+    "player_id", "composite_score", "anomaly_score", "sla_due_at",
+    "triaged_by", "triaged_at", "label", "created_at",
+]
+
+
+@router.get("/alerts/export", summary="Exportar alertas como CSV (máx. 5.000 registros)")
+async def export_alerts_csv(
+    severity: Optional[str] = None,
+    status_filter: Optional[str] = Query(None, alias="status"),
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Exporta até 5.000 alertas filtrados como CSV para auditoria e revisão offline.
+
+    Campos PII (nome, CPF, etc.) são deliberadamente excluídos da exportação
+    — apenas IDs opacos são incluídos (LGPD Art. 46).
+    A operação é auditada via write_audit com ação EXPORT_ALERTS_CSV.
+    """
+    stmt = select(Alert).where(Alert.tenant_id == current_user.tenant_id)
+    if severity:
+        stmt = stmt.where(Alert.severity == severity)
+    if status_filter:
+        stmt = stmt.where(Alert.status == status_filter)
+    if date_from:
+        stmt = stmt.where(Alert.created_at >= date_from)
+    if date_to:
+        stmt = stmt.where(Alert.created_at <= date_to)
+    stmt = stmt.order_by(Alert.created_at.desc()).limit(5000)
+
+    alerts_exp = list((await db.execute(stmt)).scalars().all())
+
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "EXPORT_ALERTS_CSV", "Alert", None,
+        after={"count": len(alerts_exp), "severity": severity, "status": status_filter},
+    )
+    await db.commit()
+
+    output = _io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=_CSV_EXPORT_FIELDS, extrasaction="ignore")
+    writer.writeheader()
+    for a in alerts_exp:
+        writer.writerow({
+            "id": str(a.id),
+            "severity": a.severity or "",
+            "status": a.status or "",
+            "priority": a.priority or "",
+            "title": (a.title or "")[:200],
+            "alert_type": a.alert_type or "",
+            "player_id": str(a.player_id) if a.player_id else "",
+            "composite_score": str(round(float(a.composite_score), 4)) if a.composite_score else "",
+            "anomaly_score": str(round(float(a.anomaly_score), 4)) if a.anomaly_score else "",
+            "sla_due_at": a.sla_due_at.isoformat() if a.sla_due_at else "",
+            "triaged_by": str(a.triaged_by) if a.triaged_by else "",
+            "triaged_at": a.triaged_at.isoformat() if a.triaged_at else "",
+            "label": a.label or "",
+            "created_at": a.created_at.isoformat() if a.created_at else "",
+        })
+
+    output.seek(0)
+    filename = (
+        f"alerts_{current_user.tenant_id}_"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
+    )
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/alerts/{alert_id}")
 async def get_alert(
     alert_id: str,
@@ -281,7 +374,16 @@ async def get_alert(
         "case_status": case_status,
         "case_title": case_title,
         "triaged_by": a.triaged_by, "triaged_at": a.triaged_at,
+        "triage_note": a.triage_note if hasattr(a, "triage_note") else None,
         "label": a.label, "label_note": a.label_note, "labeled_at": a.labeled_at,
+        # T17: priority e sla_due_at expostos no detalhe
+        "priority": a.priority,
+        "sla_due_at": a.sla_due_at.isoformat() if a.sla_due_at else None,
+        "sla_status": (
+            "OVERDUE" if a.sla_due_at and a.sla_due_at < datetime.now(timezone.utc)
+            else "WARNING" if a.sla_due_at and a.sla_due_at < datetime.now(timezone.utc) + timedelta(hours=24)
+            else "OK" if a.sla_due_at else None
+        ),
     }
 
 
@@ -299,6 +401,90 @@ async def get_alert_explainability(
         raise HTTPException(404, "Explicabilidade indisponível para este alerta")
     return explainability
 
+
+# ── T15: Bulk Triage ─────────────────────────────────────────────────────────
+
+class BulkTriageRequest(BaseModel):
+    alert_ids: List[str] = Field(..., min_length=1, max_length=100)
+    disposition: Literal["IN_REVIEW", "CONFIRMED", "DISMISSED", "FALSE_POSITIVE"]
+    note: Optional[str] = Field(None, max_length=1000)
+
+
+@router.post("/alerts/bulk-triage", summary="Triagem em lote de múltiplos alertas")
+async def bulk_triage_alerts(
+    body: BulkTriageRequest,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Triagem em lote: aplica disposition e nota a até 100 alertas de uma vez."""
+    _ensure_alert_write_access(current_user)
+    now = datetime.now(timezone.utc)
+
+    stmt = select(Alert).where(
+        Alert.id.in_(body.alert_ids),
+        Alert.tenant_id == current_user.tenant_id,
+    )
+    alerts_found = list((await db.execute(stmt)).scalars().all())
+    found_ids = {str(a.id) for a in alerts_found}
+    not_found = [aid for aid in body.alert_ids if aid not in found_ids]
+
+    for a in alerts_found:
+        a.status = body.disposition
+        a.triaged_by = current_user.id
+        a.triaged_at = now
+        if body.note:
+            a.triage_note = body.note
+        await write_audit(
+            db, current_user.tenant_id, current_user.id, "BULK_TRIAGE", "Alert", str(a.id),
+            after={"disposition": body.disposition, "note": body.note},
+        )
+
+    await db.commit()
+    return {
+        "disposition": body.disposition,
+        "updated_count": len(alerts_found),
+        "updated": [str(a.id) for a in alerts_found],
+        "not_found": not_found,
+    }
+
+
+# ── T19: Alterar prioridade do alerta ────────────────────────────────────────
+
+class AlertPriorityUpdate(BaseModel):
+    priority: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    reason: Optional[str] = Field(None, max_length=500)
+
+
+@router.patch("/alerts/{alert_id}/priority", summary="Alterar prioridade de um alerta")
+async def update_alert_priority(
+    alert_id: str,
+    body: AlertPriorityUpdate,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permite ao analista promover/rebaixar a prioridade de um alerta manualmente."""
+    _ensure_alert_write_access(current_user)
+    a = await db.get(Alert, alert_id)
+    if not a or a.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Alerta não encontrado")
+    old_priority = a.priority
+    a.priority = body.priority
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "UPDATE_PRIORITY", "Alert", alert_id,
+        before={"priority": old_priority},
+        after={"priority": body.priority, "reason": body.reason},
+    )
+    await db.commit()
+    return {
+        "id": alert_id,
+        "priority": a.priority,
+        "previous_priority": old_priority,
+        "updated_by": str(current_user.id),
+    }
+
+
+# ── Single triage ─────────────────────────────────────────────────────────────
 
 class TriageRequest(BaseModel):
     disposition: Literal["IN_REVIEW", "CONFIRMED", "DISMISSED", "FALSE_POSITIVE"] = "IN_REVIEW"
@@ -569,3 +755,5 @@ async def _enqueue_feedback_event(alert_id: str, label: str, tenant_id: str) -> 
             await _db.commit()
     except Exception as db_exc:  # noqa: BLE001
         logger.error("feedback_notification_store_failed", alert_id=alert_id, error=str(db_exc))
+
+

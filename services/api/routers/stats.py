@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import case as sqla_case, cast, Float, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import AppRole, get_current_user, require_roles, require_role_any
+from auth import AppRole, get_current_user, get_effective_roles, require_roles, require_role_any
 from database import get_db
 from models import (
     Alert, Case, CaseEvent, FeatureSnapshot, IngestError, IngestJob,
@@ -440,9 +440,14 @@ async def pld_kpis(
         )
     )).one()
 
-    # ── Carga por analista (ADMIN/AML_ANALYST only) ───────────────────────────
+    # ── Carga por analista (GESTOR / ADMIN — T16) ────────────────────────────
     analyst_workload: list[dict] = []
-    if current_user.role in ("ADMIN", "AML_ANALYST"):
+    effective_roles = get_effective_roles(current_user)
+    _can_see_workload = (
+        effective_roles.intersection({AppRole.GESTOR, AppRole.SUPER_ADMIN})
+        or current_user.role in ("ADMIN", "AML_ANALYST")  # backward compat
+    )
+    if _can_see_workload:
         workload_rows = (await db.execute(
             select(
                 Case.assigned_to,
@@ -468,11 +473,51 @@ async def pld_kpis(
             .order_by(func.count(Case.id).desc())
         )).all()
 
+        # T16: métricas de triagem por analista — alertas triados, tempo médio, taxa de FP (30d)
+        triage_rows = (await db.execute(
+            select(
+                Alert.triaged_by,
+                func.count(Alert.id).label("triaged_count"),
+                func.avg(
+                    sqla_case(
+                        (
+                            Alert.triaged_at.isnot(None) & Alert.created_at.isnot(None),
+                            func.extract("epoch", Alert.triaged_at - Alert.created_at) / 3600.0,
+                        ),
+                        else_=None,
+                    )
+                ).label("avg_triage_hours"),
+                func.sum(
+                    sqla_case((Alert.label == "FALSE_POSITIVE", 1), else_=0)
+                ).label("fp_labeled"),
+            )
+            .where(
+                Alert.tenant_id == tid,
+                Alert.triaged_by.isnot(None),
+                Alert.triaged_at >= since_30d,
+            )
+            .group_by(Alert.triaged_by)
+        )).all()
+
+        triage_by_user = {
+            str(r[0]): {
+                "triaged_count_30d": int(r[1] or 0),
+                "avg_triage_hours_30d": round(float(r[2]), 2) if r[2] else None,
+                "fp_labeled_30d": int(r[3] or 0),
+            }
+            for r in triage_rows
+        }
+
         analyst_workload = [
             {
                 "assigned_to": str(r[0]),
                 "open_cases": r[1],
                 "near_sla": r[2],
+                **triage_by_user.get(str(r[0]), {
+                    "triaged_count_30d": 0,
+                    "avg_triage_hours_30d": None,
+                    "fp_labeled_30d": 0,
+                }),
             }
             for r in workload_rows
         ]

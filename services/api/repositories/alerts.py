@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import Depends
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
@@ -33,9 +33,19 @@ class AlertRepository:
         rule_id: Optional[str] = None,
         created_after: Optional[datetime] = None,
         limit: int = 50,
+        # T18: cursor-based pagination para evitar OFFSET O(n)
+        cursor_created_at: Optional[datetime] = None,
+        cursor_id: Optional[str] = None,
+        # Mantém offset para backward-compat quando cursor não fornecido
         offset: int = 0,
     ) -> list[Alert]:
-        """Lista alertas com filtros opcionais, ordenados por created_at desc."""
+        """Lista alertas com filtros opcionais, ordenados por created_at desc.
+
+        Suporta dois modos de paginação:
+        - cursor-based (preferido): forneça cursor_created_at + cursor_id do último
+          item da página anterior. Evita OFFSET scan O(n) em volumes altos.
+        - offset-based (legado): forneça offset. Funcional, mas lento com >50k rows.
+        """
         q = select(Alert).where(Alert.tenant_id == tenant_id)
         if severity:
             q = q.where(Alert.severity == severity)
@@ -47,7 +57,19 @@ class AlertRepository:
             q = q.where(Alert.rule_id == rule_id)
         if created_after:
             q = q.where(Alert.created_at > created_after)
-        q = q.order_by(Alert.created_at.desc()).limit(limit).offset(offset)
+
+        if cursor_created_at and cursor_id:
+            # Keyset pagination: (created_at, id) < cursor — não escaneia rows anteriores
+            q = q.where(
+                or_(
+                    Alert.created_at < cursor_created_at,
+                    (Alert.created_at == cursor_created_at) & (Alert.id < cursor_id),
+                )
+            )
+        elif offset:
+            q = q.offset(offset)
+
+        q = q.order_by(Alert.created_at.desc(), Alert.id.desc()).limit(limit)
         return list((await self.db.execute(q)).scalars().all())
 
     async def count_filtered(
