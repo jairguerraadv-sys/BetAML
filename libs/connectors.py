@@ -335,21 +335,36 @@ class ConnectorEpsilon(BaseConnector):
         self.signing_secret = secret if secret is not None else signing_secret
 
     def validate_auth(self, headers: dict[str, str], body: bytes) -> bool:
-        """Validate HMAC-SHA256 signature.
-        
+        """Validate HMAC-SHA256 signature and replay-attack window.
+
         Expected header value: ``sha256=<hex_digest>``
+        Rejects requests if ``signing_secret`` is not configured (fail-closed),
+        or if the timestamp header is outside a ±5-minute window.
         """
         if not self.signing_secret:
-            return True  # bypass in dev if no secret configured
+            # Fail-closed: a secret must be configured for webhook validation.
+            return False
 
         sig_header = headers.get(EPSILON_SIGNATURE_HEADER, "")
         if not sig_header.startswith("sha256="):
             return False
 
-        received_hex = sig_header[len("sha256="):]
-        # optionally include timestamp in signed content to prevent replay
+        # Timestamp replay-attack prevention: reject if outside ±300s window
         ts = headers.get(EPSILON_TIMESTAMP_HEADER, "")
-        signed_body = (ts + ".").encode() + body if ts else body
+        if ts:
+            try:
+                import time as _time
+                ts_value = float(ts)
+                if abs(_time.time() - ts_value) > 300:
+                    return False
+            except (ValueError, TypeError):
+                return False
+        else:
+            # Timestamp header is required when a signing secret is configured
+            return False
+
+        received_hex = sig_header[len("sha256="):]
+        signed_body = (ts + ".").encode() + body
         expected = hmac.new(
             self.signing_secret.encode(),
             signed_body,

@@ -390,6 +390,9 @@ class Case(Base):
     auto_created         = Column(Boolean, nullable=False, default=False)  # criado automaticamente pelo sistema
     auto_created_reason  = Column(Text)   # ex: 'scoring.alerts: score=0.92, severity=CRITICAL'
     source_alert_id      = Column(UUID(as_uuid=False), ForeignKey("alerts.id", use_alter=True, name="fk_cases_source_alert"))
+    # GAP-R3: rastreabilidade de proveniência (migration_v27)
+    ingest_mode          = Column(String(20), nullable=False, default="incremental")
+    backfill_job_id      = Column(Text)
     created_at           = Column(DateTime(timezone=True), server_default=func.now())
     updated_at           = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -533,6 +536,9 @@ class ModelInferenceLog(Base):
     anomaly_score = Column(Numeric(7, 4), nullable=False, default=0.0)
     is_anomaly    = Column(Boolean, nullable=False, default=False)
     request_id    = Column(Text)
+    # scored_at é o nome real da coluna no DB (migration_v16).
+    # created_at é adicionado pela migration_v33 como coluna real (backfill de scored_at).
+    scored_at     = Column(DateTime(timezone=True), server_default=func.now())
     created_at    = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -629,10 +635,15 @@ class ExternalValidationRequest(Base):
 class SystemFlag(Base):
     __tablename__ = "system_flags"
 
-    key        = Column(Text, primary_key=True)
-    value      = Column(JSONB, nullable=False, default=None)
+    # Schema real: migration_v4 recriou a tabela com id UUID PK + tenant_id + flag_name/flag_value.
+    # A versão original (migration_v2) com key TEXT PK foi substituída — o ORM foi corrigido aqui.
+    id         = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id  = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    flag_name  = Column(Text, nullable=False)
+    flag_value = Column(JSONB, nullable=False, default=False)
     updated_by = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 # ── Eventos de Negócio (OLTP) ─────────────────────────────────────────────────
@@ -728,23 +739,33 @@ class DeviceEvent(Base):
 # ── KYC ───────────────────────────────────────────────────────────────────────
 
 class PlayerKycEvent(Base):
-    """Eventos de verificação KYC de players (IC-02).
+    """Eventos de ciclo de vida do player: KYC, jogo responsável e status.
+    Portaria SPA/MF 1.143/2024. Criada pela migration_v27.
 
-    Criada pela migration_v27.sql com player_id TEXT; a migration
-    20260519_000003 atualiza para UUID FK se todos os valores forem UUIDs válidos.
+    ATENÇÃO: player_id é TEXT no DB (migration_v27) — não UUID FK.
+    A migration pode ser atualizada futuramente se todos os valores forem UUIDs válidos.
     """
     __tablename__ = "player_kyc_events"
 
-    id            = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    tenant_id     = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    # player_id pode ser UUID ou TEXT dependendo do caminho de migração aplicado;
-    # o ORM usa UUID(as_uuid=False) que serializa como string em ambos os casos.
-    player_id     = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
-    event_type    = Column(String(40), nullable=False)          # CPF_VERIFY, LIVENESS_CHECK, DOC_UPLOAD, …
-    provider      = Column(String(40), nullable=False, default="manual")
-    status        = Column(String(20), nullable=False, default="PENDING")  # PENDING/APPROVED/REJECTED/ERROR
-    payload       = Column(JSONB, nullable=False, default={})
-    response      = Column(JSONB, default={})
-    error_message = Column(Text)
-    processed_at  = Column(DateTime(timezone=True))
-    created_at    = Column(DateTime(timezone=True), server_default=func.now())
+    id                    = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id             = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    # player_id é TEXT no DB (não FK UUID) — intencional; vide migration_v27 comentário
+    player_id             = Column(Text, nullable=False)
+    entity_type           = Column(String(40), nullable=False)
+    subtype               = Column(String(60), nullable=False)
+    provider              = Column(Text)
+    document_type         = Column(Text)
+    pep_flag              = Column(Boolean, nullable=False, default=False)
+    income_declared       = Column(Numeric(18, 2))
+    exclusion_source      = Column(Text)
+    exclusion_scope       = Column(Text)
+    exclusion_duration_days = Column(Integer)
+    old_deposit_limit     = Column(Numeric(18, 2))
+    new_deposit_limit     = Column(Numeric(18, 2))
+    previous_status       = Column(Text)
+    new_status            = Column(Text)
+    reason                = Column(Text)
+    ingest_mode           = Column(String(20), nullable=False, default="incremental")
+    backfill_job_id       = Column(Text)
+    occurred_at           = Column(DateTime(timezone=True), nullable=False)
+    created_at            = Column(DateTime(timezone=True), server_default=func.now())

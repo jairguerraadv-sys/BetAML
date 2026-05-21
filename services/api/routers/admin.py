@@ -250,17 +250,24 @@ async def set_maintenance_mode(
     current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """Toggle maintenance mode para o tenant (bloqueia ingest + scoring)."""
-    flag_key = f"{current_user.tenant_id}:maintenance_mode"
-    flag = await db.get(SystemFlag, flag_key)
+    flag = (
+        await db.execute(
+            select(SystemFlag).where(
+                SystemFlag.tenant_id == current_user.tenant_id,
+                SystemFlag.flag_name == "maintenance_mode",
+            )
+        )
+    ).scalar_one_or_none()
     new_value = {"enabled": enabled}
     if flag is None:
         db.add(SystemFlag(
-            key=flag_key,
-            value=new_value,
+            tenant_id=current_user.tenant_id,
+            flag_name="maintenance_mode",
+            flag_value=new_value,
             updated_by=current_user.id,
         ))
     else:
-        flag.value = new_value
+        flag.flag_value = new_value
         flag.updated_by = current_user.id
         flag.updated_at = datetime.now(UTC)
     await _write_audit(db, current_user.tenant_id, current_user.id,
@@ -299,8 +306,15 @@ async def get_ops_summary(
     since_24h = now_utc - timedelta(hours=24)
     tenant_id = current_user.tenant_id
 
-    maintenance_flag = await db.get(SystemFlag, f"{tenant_id}:maintenance_mode")
-    maintenance_enabled = bool((maintenance_flag.value or {}).get("enabled", False)) if maintenance_flag else False
+    maintenance_flag = (
+        await db.execute(
+            select(SystemFlag).where(
+                SystemFlag.tenant_id == tenant_id,
+                SystemFlag.flag_name == "maintenance_mode",
+            )
+        )
+    ).scalar_one_or_none()
+    maintenance_enabled = bool((maintenance_flag.flag_value or {}).get("enabled", False)) if maintenance_flag else False
 
     unresolved_dlq = int((await db.execute(
         select(sqlfunc.count(IngestError.id)).where(
@@ -744,10 +758,8 @@ async def list_system_flags(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
-    # Keys are stored as "{tenant_id}:{flag_name}"
-    prefix = f"{current_user.tenant_id}:%"
     result = await db.execute(
-        select(SystemFlag).where(SystemFlag.key.like(prefix))
+        select(SystemFlag).where(SystemFlag.tenant_id == current_user.tenant_id)
     )
     return result.scalars().all()
 
@@ -759,13 +771,24 @@ async def upsert_system_flag(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
-    flag_key = f"{current_user.tenant_id}:{flag_name}"
-    flag = await db.get(SystemFlag, flag_key)
+    flag = (
+        await db.execute(
+            select(SystemFlag).where(
+                SystemFlag.tenant_id == current_user.tenant_id,
+                SystemFlag.flag_name == flag_name,
+            )
+        )
+    ).scalar_one_or_none()
     if flag is None:
-        flag = SystemFlag(key=flag_key, value=body.value, updated_by=current_user.id)
+        flag = SystemFlag(
+            tenant_id=current_user.tenant_id,
+            flag_name=flag_name,
+            flag_value=body.value,
+            updated_by=current_user.id,
+        )
         db.add(flag)
     else:
-        flag.value = body.value
+        flag.flag_value = body.value
         flag.updated_by = current_user.id
         flag.updated_at = datetime.now(UTC)
     await db.commit()

@@ -93,12 +93,16 @@ OPENAPI_TAGS = [
 ]
 
 
+_is_dev = settings.environment in {"development", "test"}
+
 app = FastAPI(
     title="BetAML API",
     description="PLD/FT Platform para Operadores de Apostas",
     version="2.1.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    # Swagger/ReDoc apenas em ambientes não-produtivos (evita exposição de schema em produção)
+    docs_url="/docs" if _is_dev else None,
+    redoc_url="/redoc" if _is_dev else None,
+    openapi_url="/openapi.json" if _is_dev else None,
     contact={"name": "BetAML Compliance", "email": "compliance@betaml.io"},
     license_info={"name": "Proprietary"},
     openapi_tags=OPENAPI_TAGS,
@@ -115,18 +119,20 @@ async def _rate_limit_exception_handler(request: Request, exc: Exception):
 
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exception_handler)
 
-# Em desenvolvimento aceita localhost; em produção exige CORS_ALLOW_ORIGINS explícito.
+# CORS: em desenvolvimento aceita localhost explicitamente; produção exige CORS_ALLOW_ORIGINS.
+# NÃO usar wildcard "*" pois allow_credentials=True + "*" é rejeitado pelos browsers
+# e exporia a API a qualquer origem.
 _cors_origins: list[str] = (
-    ["*"]
-    if settings.environment == "development"
+    ["http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000"]
+    if _is_dev
     else [o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()]
 )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Tenant-ID"],
 )
 app.add_middleware(SlowAPIMiddleware)
 

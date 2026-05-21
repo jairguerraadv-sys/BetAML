@@ -180,7 +180,7 @@ class Settings(BaseSettings):
     # Gere com: python -c "import secrets; print(secrets.token_hex(32))"
     jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
-    access_token_expire_min: int = 60
+    access_token_expire_min: int = 15  # alinhado ao cookie max_age=900s (auth.py)
     epsilon_webhook_secret: str = DEFAULT_EPSILON_WEBHOOK_SECRET
 
     # CORS

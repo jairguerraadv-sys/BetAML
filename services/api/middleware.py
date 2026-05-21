@@ -112,12 +112,13 @@ async def _is_maintenance_enabled(tenant_id: str) -> bool:
             flag = (
                 await db.execute(
                     select(SystemFlag).where(
-                        SystemFlag.key == f"{tenant_id}:maintenance_mode"
+                        SystemFlag.tenant_id == tenant_id,
+                        SystemFlag.flag_name == "maintenance_mode",
                     )
                 )
             ).scalar_one_or_none()
-            if flag and isinstance(flag.value, dict):
-                enabled = bool(flag.value.get("enabled", False))
+            if flag and isinstance(flag.flag_value, dict):
+                enabled = bool(flag.flag_value.get("enabled", False))
     except Exception as exc:  # noqa: BLE001
         logger.warning("maintenance_flag_lookup_failed", tenant_id=tenant_id, error=str(exc))
 
