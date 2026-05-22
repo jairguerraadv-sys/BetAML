@@ -4,6 +4,7 @@ c4858da00f7aa9ff484db8612673cc5abba598e862a601a08d02d6c18127b83c  ./README.md
 2b5aef6c5cff4420186c19469de3b8a8714c255c0433dd7cf17be17cfaf7e982  ./artifacts/readiness/deploy-window-communication-2026-05-22.txt
 864ee8b207d21891e2a788d352b155a3da4b766c54ebd3fdde99ad5723035b4c  ./artifacts/readiness/fase1-api-regressao-2026-05-22.md
 83449e9eb705d6256143699efbe47b6f3adb4d6ab252a6f34bb71f9570a65bfe  ./artifacts/readiness/fase2-item8-contrato-ingestao-2026-05-22.md
+f2fa866e9f0a1a06c54029c8a43d454a21546d6d780d595ec7d1287acb922015  ./artifacts/readiness/fase2-item9-governanca-regras-2026-05-22.md
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ./artifacts/readiness/fase2-operacional-iteracao-2026-05-22.md
 ce6acb1e25d94100a4e4119c513bdd2d0d0564d0a16cf67d40f94f40e6b13268  ./artifacts/readiness/junit/fase1-api-regressao-2026-05-22.xml
 57073ddbdfded405a4b4526630b3210deaf63f1294d2ec4495f40db8644de7d7  ./artifacts/readiness/postgres_20260522T194524Z.sql.gz

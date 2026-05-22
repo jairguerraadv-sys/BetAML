@@ -432,7 +432,8 @@ async def test_simulate_rule_evaluates_events():
 
     events = [{"amount": 1000}, {"amount": 100}, {"amount": 750}]
 
-    with patch("libs.dsl_parser.eval_dsl", side_effect=[True, False, True]):
+    with patch("libs.dsl_parser.eval_dsl", side_effect=[True, False, True]), \
+         patch("routers.rules.write_audit", new_callable=AsyncMock) as write_audit_mock:
         result = await simulate_rule(
             rule_id="r1",
             body=SimulateRequest(events=events),
@@ -443,6 +444,7 @@ async def test_simulate_rule_evaluates_events():
     assert result["rule_id"] == "r1"
     assert result["matches"] == 2
     assert len(result["results"]) == 3
+    write_audit_mock.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -477,18 +479,20 @@ async def test_simulate_rule_historical_summary():
 
     db.execute = _execute
 
-    result = await simulate_rule(
-        rule_id="r1",
-        body=SimulateRequest(**{"from": date(2026, 3, 10), "to": date(2026, 3, 10)}),
-        current_user=user,
-        db=db,
-    )
+    with patch("routers.rules.write_audit", new_callable=AsyncMock) as write_audit_mock:
+        result = await simulate_rule(
+            rule_id="r1",
+            body=SimulateRequest(**{"from": date(2026, 3, 10), "to": date(2026, 3, 10)}),
+            current_user=user,
+            db=db,
+        )
 
     assert result["matches"] == 2
     assert sorted(result["players"]) == ["p1", "p2"]
     assert result["false_positive_estimated"] == pytest.approx(0.5)
     assert result["precision_estimated"] == pytest.approx(0.5)
     assert result["timeline"][0]["alerts"] == 2
+    write_audit_mock.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -534,3 +538,9 @@ def test_rules_router_has_simulate_endpoint():
     from routers.rules import router
     paths = [r.path for r in router.routes if hasattr(r, "path")]
     assert "/rules/{rule_id}/simulate" in paths
+
+
+def test_rules_router_has_impact_trail_endpoint():
+    from routers.rules import router
+    paths = [r.path for r in router.routes if hasattr(r, "path")]
+    assert "/rules/{rule_id}/impact-trail" in paths

@@ -734,6 +734,15 @@ POST /rules/{rule_id}/simulate
 - A resposta histórica retorna `total_alerts`, `players`, `false_positive_estimated`, `precision_estimated`, `recall_estimated`, `performance_score` e `timeline[]`.
 - A validação DSL agora aceita named args como `window="24h"`, `baseline_window="30d"` e `segment="profession"`, além do alias `if(...)`.
 
+### Trilha de impacto de regras
+
+```bash
+GET /rules/{rule_id}/impact-trail?limit=50
+```
+
+- Retorna trilha auditável de alterações e simulações (`CREATE`, `UPDATE`, `DELETE`, `SIMULATE_RULE`).
+- A trilha inclui `before`, `after`, `user_id`, `action` e `created_at` para governança operacional.
+
 ### Compound Rules e Player Lists
 
 ```bash

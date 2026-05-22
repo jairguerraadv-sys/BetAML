@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import AppRole, get_current_user, get_effective_roles, require_roles, require_role, require_role_any, require_permission
 from database import get_db
-from models import Alert, RuleDefinition, RuleMacro, User
+from models import Alert, AuditLog, RuleDefinition, RuleMacro, User
 from utils import write_audit
 
 logger = structlog.get_logger(__name__)
@@ -54,6 +54,32 @@ class SimulateRequest(BaseModel):
 
 class ValidateDSLRequest(BaseModel):
     expression: str
+
+
+class RuleImpactTrailItem(BaseModel):
+    id: str
+    action: str
+    created_at: datetime | None
+    user_id: str | None
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
+
+
+class RuleImpactTrailOut(BaseModel):
+    rule_id: str
+    total: int
+    items: list[RuleImpactTrailItem]
+
+
+def _audit_item(log: AuditLog) -> RuleImpactTrailItem:
+    return RuleImpactTrailItem(
+        id=str(log.id),
+        action=str(log.action or ""),
+        created_at=log.created_at,
+        user_id=str(log.user_id) if log.user_id else None,
+        before=log.before if isinstance(log.before, dict) else None,
+        after=log.after if isinstance(log.after, dict) else None,
+    )
 
 
 async def _tenant_macros(db: AsyncSession, tenant_id: str) -> dict[str, str]:
@@ -161,7 +187,7 @@ async def preview_dsl(
                 player_ids.add(str(alert.player_id))
             timeline_counts[alert.created_at.date().isoformat()] += 1
 
-    return {
+    payload = {
         "rule_id": None,
         "results": [],
         "matches": match_count,
@@ -179,6 +205,27 @@ async def preview_dsl(
         "errors": errors,
         "days": body.days,
     }
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "SIMULATE_RULE_PREVIEW",
+        "RuleDefinition",
+        None,
+        after={
+            "condition_dsl": body.condition_dsl,
+            "scope": body.scope,
+            "severity": body.severity,
+            "days": body.days,
+            "summary": {
+                "matches": payload["matches"],
+                "evaluated": payload["evaluated"],
+                "errors": payload["errors"],
+            },
+        },
+    )
+    await db.commit()
+    return payload
 
 
 @router.post("/rules", status_code=201)
@@ -310,7 +357,7 @@ async def simulate_rule(
                 continue
             results.append({"matched": matched, "event": evt})
         match_count = sum(1 for res in results if res.get("matched"))
-        return {
+        payload = {
             "rule_id": rule_id,
             "results": results,
             "matches": match_count,
@@ -322,6 +369,24 @@ async def simulate_rule(
             "performance_score": None,
             "timeline": [],
         }
+        await write_audit(
+            db,
+            current_user.tenant_id,
+            current_user.id,
+            "SIMULATE_RULE",
+            "RuleDefinition",
+            rule_id,
+            after={
+                "mode": "manual",
+                "events": len(body.events),
+                "summary": {
+                    "matches": payload["matches"],
+                    "total_alerts": payload["total_alerts"],
+                },
+            },
+        )
+        await db.commit()
+        return payload
 
     stmt = select(Alert).where(
         Alert.tenant_id == current_user.tenant_id,
@@ -364,7 +429,7 @@ async def simulate_rule(
 
     perf_parts = [v for v in (precision, recall) if v is not None]
     performance_score = (sum(perf_parts) / len(perf_parts)) if perf_parts else None
-    return {
+    payload = {
         "rule_id": rule_id,
         "results": [],
         "matches": len(alerts),
@@ -379,3 +444,55 @@ async def simulate_rule(
             for date_key, count in sorted(timeline_counts.items())
         ],
     }
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "SIMULATE_RULE",
+        "RuleDefinition",
+        rule_id,
+        after={
+            "mode": "historical",
+            "from": body.from_date.isoformat() if body.from_date else None,
+            "to": body.to_date.isoformat() if body.to_date else None,
+            "players_filter": body.player_ids,
+            "summary": {
+                "matches": payload["matches"],
+                "total_alerts": payload["total_alerts"],
+                "precision_estimated": payload["precision_estimated"],
+                "recall_estimated": payload["recall_estimated"],
+                "false_positive_estimated": payload["false_positive_estimated"],
+            },
+        },
+    )
+    await db.commit()
+    return payload
+
+
+@router.get("/rules/{rule_id}/impact-trail", response_model=RuleImpactTrailOut)
+async def rule_impact_trail(
+    rule_id: str,
+    limit: int = 50,
+    current_user: User = Depends(require_roles("GESTOR", "AML_ANALYST", "ADMIN", "BetAML_SuperAdmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retorna trilha de impacto da regra: mudanças + simulações auditadas."""
+    rule = await db.get(RuleDefinition, rule_id)
+    if not rule or rule.tenant_id != current_user.tenant_id:
+        raise HTTPException(404, "Regra não encontrada")
+
+    cap = max(1, min(limit, 200))
+    stmt = (
+        select(AuditLog)
+        .where(
+            AuditLog.tenant_id == current_user.tenant_id,
+            AuditLog.entity_type == "RuleDefinition",
+            AuditLog.entity_id == rule_id,
+            AuditLog.action.in_(["CREATE", "UPDATE", "DELETE", "SIMULATE_RULE"]),
+        )
+        .order_by(AuditLog.created_at.desc())
+        .limit(cap)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    items = [_audit_item(row) for row in rows]
+    return RuleImpactTrailOut(rule_id=rule_id, total=len(items), items=items)
