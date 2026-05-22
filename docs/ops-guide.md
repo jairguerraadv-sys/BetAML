@@ -360,6 +360,8 @@ O payload devolve as 5 features mais relevantes, com valor atual, baseline infer
 
 Quando houver volume novo de labels, drift de comportamento ou comparativo champion/challenger desfavoravel, execute retreino manual.
 
+O retreino automático do `ml_trainer` avalia o modelo em holdout temporal do período recente, e nao apenas no conjunto de treino, antes de registrar métricas e decidir promocao.
+
 ML service:
 
 ```bash

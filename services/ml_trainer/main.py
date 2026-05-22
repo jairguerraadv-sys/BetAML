@@ -94,6 +94,89 @@ def _extract_feature_vector(alert) -> list[float] | None:
     return [float(features.get(col, 0) or 0) for col in FEATURE_COLUMNS]
 
 
+def _alert_sort_key(alert) -> datetime:
+    created_at = getattr(alert, "created_at", None)
+    if isinstance(created_at, datetime):
+        return created_at
+    return datetime.min.replace(tzinfo=UTC)
+
+
+def _prepare_alert_samples(alerts) -> list[tuple[object, list[float], int]]:
+    samples: list[tuple[object, list[float], int]] = []
+    for alert in sorted(alerts, key=_alert_sort_key):
+        vec = _extract_feature_vector(alert)
+        if vec is None:
+            continue
+        samples.append((alert, vec, 1 if getattr(alert, "label", None) == "TRUE_POSITIVE" else 0))
+    return samples
+
+
+def _temporal_split_samples(
+    samples: list[tuple[object, list[float], int]],
+    validation_fraction: float = 0.2,
+    minimum_validation_samples: int = 10,
+) -> tuple[list[tuple[object, list[float], int]], list[tuple[object, list[float], int]]]:
+    if len(samples) < 2:
+        return samples, []
+
+    if len(samples) < minimum_validation_samples * 2:
+        validation_count = max(1, len(samples) // 5)
+    else:
+        validation_count = max(minimum_validation_samples, int(len(samples) * validation_fraction))
+
+    if validation_count >= len(samples):
+        validation_count = max(1, len(samples) // 2)
+
+    split_index = max(1, len(samples) - validation_count)
+    if split_index >= len(samples):
+        split_index = len(samples) - 1
+
+    return samples[:split_index], samples[split_index:]
+
+
+def _samples_to_arrays(samples: list[tuple[object, list[float], int]]) -> tuple[np.ndarray, np.ndarray]:
+    X = np.array([vec for _, vec, _ in samples], dtype=float)
+    y = np.array([label for _, _, label in samples], dtype=int)
+    return X, y
+
+
+def _evaluate_supervised_model(model, X_eval: np.ndarray, y_eval: np.ndarray) -> dict[str, float]:
+    preds_bin = model.predict(X_eval)
+    preds_prob = model.predict_proba(X_eval)[:, 1]
+    precision = float(precision_score(y_eval, preds_bin, zero_division=0))
+    recall = float(recall_score(y_eval, preds_bin, zero_division=0))
+    f1 = float(f1_score(y_eval, preds_bin, zero_division=0))
+    try:
+        auc_roc = float(roc_auc_score(y_eval, preds_prob))
+    except ValueError:
+        auc_roc = 0.0
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1_score": f1,
+        "auc_roc": auc_roc,
+    }
+
+
+def _evaluate_unsupervised_model(model, X_eval: np.ndarray, y_eval: np.ndarray) -> dict[str, float]:
+    preds = model.predict(X_eval)
+    preds_bin = np.where(preds == -1, 1, 0)
+    anomaly_scores = -model.decision_function(X_eval)
+    precision = float(precision_score(y_eval, preds_bin, zero_division=0))
+    recall = float(recall_score(y_eval, preds_bin, zero_division=0))
+    f1 = float(f1_score(y_eval, preds_bin, zero_division=0))
+    try:
+        auc_roc = float(roc_auc_score(y_eval, anomaly_scores))
+    except ValueError:
+        auc_roc = 0.0
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1_score": f1,
+        "auc_roc": auc_roc,
+    }
+
+
 def _normalize_registry_model_type(model_type: str | None) -> str:
     raw = str(model_type or "ANOMALY").strip()
     mapping = {
@@ -172,17 +255,10 @@ async def retrain_isolation_forest() -> None:
             labeled_alerts = (await db.execute(stmt_labeled)).scalars().all()
 
             # ── 2. Extrair features + labels dos alerts labelados ───────────────
-            X_labeled: list[list[float]] = []
-            y_labeled: list[int] = []
-            for alert in labeled_alerts:
-                vec = _extract_feature_vector(alert)
-                if vec is None:
-                    continue
-                X_labeled.append(vec)
-                y_labeled.append(1 if alert.label == "TRUE_POSITIVE" else 0)
-
-            labeled_sample_count = len(X_labeled)
+            labeled_samples = _prepare_alert_samples(labeled_alerts)
+            labeled_sample_count = len(labeled_samples)
             supervised_mode = labeled_sample_count >= 50
+            sample_pool_count = labeled_sample_count
 
             # ── 3. Decide training mode ─────────────────────────────────────────
             if supervised_mode:
@@ -196,8 +272,9 @@ async def retrain_isolation_forest() -> None:
                     labeled_samples=labeled_sample_count,
                 )
 
-                X_arr = np.array(X_labeled, dtype=float)
-                y_arr = np.array(y_labeled, dtype=int)
+                train_samples, validation_samples = _temporal_split_samples(labeled_samples)
+                X_arr, y_arr = _samples_to_arrays(train_samples)
+                X_eval_arr, y_eval_arr = _samples_to_arrays(validation_samples or train_samples)
 
                 model = GradientBoostingClassifier(
                     n_estimators=100,
@@ -207,16 +284,11 @@ async def retrain_isolation_forest() -> None:
                 )
                 model.fit(X_arr, y_arr)
 
-                # Avaliação in-sample (proxy; produção deve usar validação cruzada)
-                preds_bin = model.predict(X_arr)
-                preds_prob = model.predict_proba(X_arr)[:, 1]
-                precision = float(precision_score(y_arr, preds_bin, zero_division=0))
-                recall = float(recall_score(y_arr, preds_bin, zero_division=0))
-                f1 = float(f1_score(y_arr, preds_bin, zero_division=0))
-                try:
-                    auc_roc = float(roc_auc_score(y_arr, preds_prob))
-                except ValueError:
-                    auc_roc = 0.0
+                validation_metrics = _evaluate_supervised_model(model, X_eval_arr, y_eval_arr)
+                precision = validation_metrics["precision"]
+                recall = validation_metrics["recall"]
+                f1 = validation_metrics["f1_score"]
+                auc_roc = validation_metrics["auc_roc"]
 
                 model_type = "GradientBoosting"
                 model_filename = f"gradient_boosting_v{version}.pkl"
@@ -224,10 +296,13 @@ async def retrain_isolation_forest() -> None:
                     "n_estimators": 100,
                     "max_depth": 3,
                     "learning_rate": 0.1,
-                    "training_samples": labeled_sample_count,
+                    "training_samples": len(train_samples),
+                    "validation_samples": len(validation_samples or train_samples),
+                    "validation_strategy": "temporal_holdout_last_20pct",
                     "true_positives": int(y_arr.sum()),
                     "false_positives": int((y_arr == 0).sum()),
                     "training_window_days": 30,
+                    "validation_window_days": 30,
                     "feature_columns": FEATURE_COLUMNS,
                 }
 
@@ -249,26 +324,20 @@ async def retrain_isolation_forest() -> None:
                 )
                 all_alerts = (await db.execute(stmt_all)).scalars().all()
 
-                X_all: list[list[float]] = []
-                y_all: list[int] = []  # usado apenas para contamination estimate
-                for alert in all_alerts:
-                    vec = _extract_feature_vector(alert)
-                    if vec is None:
-                        continue
-                    X_all.append(vec)
-                    y_all.append(1 if alert.label == "TRUE_POSITIVE" else 0)
-
-                if len(X_all) < 50:
+                all_samples = _prepare_alert_samples(all_alerts)
+                sample_pool_count = len(all_samples)
+                if len(all_samples) < 50:
                     logger.warning(
                         "ml_training_skipped_not_enough_feature_vectors",
-                        count=len(X_all),
+                        count=len(all_samples),
                         labeled=labeled_sample_count,
                         minimum=50,
                     )
                     return
 
-                X_arr = np.array(X_all, dtype=float)
-                y_arr = np.array(y_all, dtype=int)
+                train_samples, validation_samples = _temporal_split_samples(all_samples)
+                X_arr, y_arr = _samples_to_arrays(train_samples)
+                X_eval_arr, y_eval_arr = _samples_to_arrays(validation_samples or train_samples)
 
                 # Contamination proporcional aos positivos conhecidos
                 contamination = float(
@@ -283,27 +352,23 @@ async def retrain_isolation_forest() -> None:
                 )
                 model.fit(X_arr)
 
-                # Avaliação in-sample: -1 = anomaly, 1 = normal → binariza para 0/1
-                preds = model.predict(X_arr)
-                preds_bin = np.where(preds == -1, 1, 0)
-                # decision_function: scores negativos = mais anômalo; invertemos para AUC
-                anomaly_scores = -model.decision_function(X_arr)
-                precision = float(precision_score(y_arr, preds_bin, zero_division=0))
-                recall = float(recall_score(y_arr, preds_bin, zero_division=0))
-                f1 = float(f1_score(y_arr, preds_bin, zero_division=0))
-                try:
-                    auc_roc = float(roc_auc_score(y_arr, anomaly_scores))
-                except ValueError:
-                    auc_roc = 0.0
+                validation_metrics = _evaluate_unsupervised_model(model, X_eval_arr, y_eval_arr)
+                precision = validation_metrics["precision"]
+                recall = validation_metrics["recall"]
+                f1 = validation_metrics["f1_score"]
+                auc_roc = validation_metrics["auc_roc"]
 
                 model_type = "IsolationForest"
                 model_filename = f"isolation_forest_v{version}.pkl"
                 training_metadata = {
                     "contamination": contamination,
                     "n_estimators": 100,
-                    "training_samples": len(X_all),
+                    "training_samples": len(train_samples),
+                    "validation_samples": len(validation_samples or train_samples),
+                    "validation_strategy": "temporal_holdout_last_20pct",
                     "true_positives": int(y_arr.sum()),
                     "training_window_days": 30,
+                    "validation_window_days": 30,
                     "feature_columns": FEATURE_COLUMNS,
                 }
 
@@ -316,6 +381,8 @@ async def retrain_isolation_forest() -> None:
                 f1=round(f1, 4),
                 auc_roc=round(auc_roc, 4),
                 samples=len(X_arr),
+                validation_samples=len(validation_samples or train_samples),
+                validation_strategy="temporal_holdout_last_20pct",
             )
 
             run_id = f"{model_type.lower()}-{version}"
@@ -329,6 +396,10 @@ async def retrain_isolation_forest() -> None:
                     "recall": recall,
                     "f1_score": f1,
                     "auc_roc": auc_roc,
+                    "validation_precision": precision,
+                    "validation_recall": recall,
+                    "validation_f1_score": f1,
+                    "validation_auc_roc": auc_roc,
                 },
                 "training_metadata": training_metadata,
                 "samples": len(X_arr),
@@ -423,7 +494,7 @@ async def retrain_isolation_forest() -> None:
                     model_version=version,
                     algorithm=model_type,
                     artifact_uri=f"s3://{bucket}/{model_filename}",
-                    training_rows=len(X_arr),
+                    training_rows=sample_pool_count,
                     feature_columns=FEATURE_COLUMNS,
                     metrics={
                         "run_id": run_id,
@@ -432,6 +503,10 @@ async def retrain_isolation_forest() -> None:
                         "recall": recall,
                         "f1_score": f1,
                         "auc_roc": auc_roc,
+                        "validation_precision": precision,
+                        "validation_recall": recall,
+                        "validation_f1_score": f1,
+                        "validation_auc_roc": auc_roc,
                         **training_metadata,
                     },
                     status="champion" if is_champion else "STAGING",

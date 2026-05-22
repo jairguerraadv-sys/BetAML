@@ -89,6 +89,12 @@ def _empty_alert() -> MagicMock:
     return a
 
 
+def _stamped_labeled_alert(day_offset: int, label: str = "TRUE_POSITIVE") -> MagicMock:
+    alert = _labeled_alert(label)
+    alert.created_at = datetime.now(UTC) - timedelta(days=day_offset)
+    return alert
+
+
 def _champion(precision: float = 0.90) -> MagicMock:
     c = MagicMock()
     c.is_champion = True
@@ -118,6 +124,28 @@ class _SQLColMock:
 
     def __ge__(self, other):  # noqa: D105
         return _SQLColMock()
+
+
+def test_temporal_split_samples_uses_latest_alerts_for_validation():
+    import importlib
+
+    stale_main = sys.modules.pop("main", None)
+    if not sys.path or sys.path[0] != _ml_trainer_path:
+        sys.path.insert(0, _ml_trainer_path)
+    try:
+        ml_main = importlib.import_module("main")
+    finally:
+        sys.modules.pop("main", None)
+        if stale_main is not None:
+            sys.modules["main"] = stale_main
+
+    alerts = [_stamped_labeled_alert(day_offset=9 - idx) for idx in range(10)]
+    samples = ml_main._prepare_alert_samples(alerts)
+    train_samples, validation_samples = ml_main._temporal_split_samples(samples)
+
+    assert len(train_samples) == 8
+    assert len(validation_samples) == 2
+    assert validation_samples[0][0].created_at > train_samples[-1][0].created_at
 
     def __le__(self, other):  # noqa: D105
         return _SQLColMock()
@@ -456,6 +484,53 @@ class TestMLTrainerSupervisedPath:
         mocks["if_cls"].assert_not_called()
         session.commit.assert_called_once()
         assert minio_inst.put_object.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_registry_metrics_include_temporal_validation_contract(self):
+        """O registry deve registrar métricas e metadados de validação temporal."""
+        labeled = [_stamped_labeled_alert(day_offset=59 - idx) for idx in range(60)]
+
+        def cfg_labeled(r):
+            r.scalars.return_value.all.return_value = labeled
+
+        def cfg_champion(r):
+            r.scalar_one_or_none.return_value = None
+
+        def cfg_admins(r):
+            r.scalars.return_value.all.return_value = []
+
+        factory, session = _session([cfg_labeled, cfg_champion, cfg_admins])
+        mock_models_mod = _mock_models()
+        mock_minio_mod, _ = _mock_minio()
+
+        gb_inst = MagicMock()
+        gb_inst.predict.side_effect = lambda X: np.ones(len(X), dtype=int)
+        gb_inst.predict_proba.side_effect = lambda X: np.column_stack([
+            np.full(len(X), 0.2),
+            np.full(len(X), 0.8),
+        ])
+
+        with ExitStack() as stack:
+            _apply_patches(
+                stack,
+                session_factory=factory,
+                mock_models_mod=mock_models_mod,
+                mock_minio_mod=mock_minio_mod,
+                gb_instance=gb_inst,
+                f1=0.81,
+                precision=0.84,
+                recall=0.79,
+            )
+            from main import retrain_isolation_forest
+            await retrain_isolation_forest()
+
+        registry_call_kwargs = mock_models_mod.ModelRegistry.call_args.kwargs
+        metrics = registry_call_kwargs["metrics"]
+        assert metrics["validation_f1_score"] == pytest.approx(0.81)
+        assert metrics["validation_precision"] == pytest.approx(0.84)
+        assert metrics["validation_recall"] == pytest.approx(0.79)
+        assert metrics["training_samples"] > 0
+        assert metrics["validation_samples"] > 0
 
     @pytest.mark.asyncio
     async def test_gradient_boosting_model_filename_in_minio(self):
