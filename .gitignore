@@ -17,6 +17,7 @@ package-lock.json
 !services/frontend/package-lock.json
 
 # IDE
+.DS_Store
 .vscode/
 .idea/
 *.swp

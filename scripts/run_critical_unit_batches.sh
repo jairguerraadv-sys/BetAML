@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ -n "${PYTEST_BIN:-}" ]]; then
   read -r -a PYTEST_CMD <<<"${PYTEST_BIN}"
+elif [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+  PYTEST_CMD=("$ROOT_DIR/.venv/bin/python" -m pytest)
 elif [[ -x "$ROOT_DIR/.venv-1/bin/pytest" ]]; then
   PYTEST_CMD=("$ROOT_DIR/.venv-1/bin/pytest")
 else
@@ -84,15 +86,23 @@ BATCH_2=(
 
 BATCHES=(BATCH_1 BATCH_2)
 
-declare -A CRITICAL_SET=()
-for file in "${BATCH_1[@]}" "${BATCH_2[@]}"; do
-  CRITICAL_SET["$file"]=1
-done
+CRITICAL_FILES=("${BATCH_1[@]}" "${BATCH_2[@]}")
+
+is_critical_file() {
+  local candidate="$1"
+  local file
+  for file in "${CRITICAL_FILES[@]}"; do
+    if [[ "$file" == "$candidate" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 if [[ "$INCLUDE_REMAINDER" == "true" ]]; then
   REMAINDER=()
   while IFS= read -r file; do
-    if [[ -z "${CRITICAL_SET[$file]+x}" ]]; then
+    if ! is_critical_file "$file"; then
       REMAINDER+=("$file")
     fi
   done < <(find tests -type f -name 'test_*.py' | sort)
@@ -134,5 +144,6 @@ for i in "${!BATCHES[@]}"; do
   fi
   # shellcheck disable=SC1083,SC2178
   eval "batch_files=(\"\${${batch_name}[@]}\")"
-  run_batch "${batch_name,,}" "$append_coverage" "$is_final" "${batch_files[@]}"
+  batch_label="$(printf '%s' "$batch_name" | tr '[:upper:]' '[:lower:]')"
+  run_batch "$batch_label" "$append_coverage" "$is_final" "${batch_files[@]}"
 done

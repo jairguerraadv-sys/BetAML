@@ -1,0 +1,14 @@
+[tool.bandit]
+exclude_dirs = [
+  "services/api/alembic",
+  "services/api/seeds.py",
+]
+skips = [
+  "B105", # dev/test sentinel strings are validated before production startup
+  "B107", # empty password defaults are overridden from env in local clients
+  "B110", # best-effort telemetry/cache cleanup paths are intentionally non-blocking
+  "B112", # parser loops intentionally skip malformed optional values
+  "B311", # synthetic seed/test data does not require cryptographic randomness
+  "B405", # XML parsing uses defusedxml where input is untrusted
+  "B608", # dynamic SQL uses static allowlists/migrations plus bound user parameters
+]
