@@ -105,6 +105,7 @@ In Docker Compose, automatic seeding is disabled by default in all environments.
 | `GET` | `/cases/{id}/report-filing-status` | AML_ANALYST+ | Show filing SLA/protocol status (OK/WARNING/BREACH) for latest report package |
 | `GET` | `/report-packages/filing-queue` | AML_ANALYST+ | List tenant filing queue prioritized by deadline risk (BREACH/WARNING/OK) |
 | `GET` | `/report-packages/filing-overview` | AML_ANALYST+ | Aggregate filing KPIs (requires_submission, missing protocol, breaches) |
+| `GET` | `/report-packages/filing-hotlist` | AML_ANALYST+ | Return actionable filing hotlist (submit report / register protocol) prioritized by urgency |
 | `GET` | `/cases/{id}/reconciliation` | AML_ANALYST+ | Reconcile end-to-end lineage: source event -> alert -> case -> report package |
 | `POST` | `/cases/{id}/report-package/submit` | ADMIN | Submit latest FILE_SAR package with maker-checker control |
 | `GET` | `/report-packages` | AML_ANALYST+ | Tenant-wide report-package history |

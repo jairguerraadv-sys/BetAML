@@ -788,6 +788,116 @@ async def test_get_report_filing_overview_sets_truncated_when_scan_limit_reached
 
 
 @pytest.mark.asyncio
+async def test_get_report_filing_hotlist_returns_only_actionable_items_sorted_by_priority():
+    from routers.cases import get_report_filing_hotlist
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+    now = datetime.now(UTC)
+
+    rp_breach = SimpleNamespace(
+        id="rp-breach",
+        tenant_id="t1",
+        case_id="case-a",
+        status="FINAL",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=40),
+        filed_at=None,
+        coaf_protocol_number=None,
+    )
+    rp_warning = SimpleNamespace(
+        id="rp-warning",
+        tenant_id="t1",
+        case_id="case-b",
+        status="FINAL",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=25),
+        filed_at=None,
+        coaf_protocol_number=None,
+    )
+    rp_missing_protocol = SimpleNamespace(
+        id="rp-filed-no-protocol",
+        tenant_id="t1",
+        case_id="case-c",
+        status="FILED",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=5),
+        filed_at=now - timedelta(days=4),
+        coaf_protocol_number=None,
+    )
+    rp_ok = SimpleNamespace(
+        id="rp-ok",
+        tenant_id="t1",
+        case_id="case-d",
+        status="FILED",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=2),
+        filed_at=now - timedelta(days=1),
+        coaf_protocol_number="COAF-OK",
+    )
+
+    result_obj = MagicMock()
+    result_obj.scalars.return_value.all.return_value = [rp_ok, rp_missing_protocol, rp_warning, rp_breach]
+    db.execute = AsyncMock(return_value=result_obj)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        result = await get_report_filing_hotlist(limit=10, include_all_versions=False, scan_limit=2000, current_user=user, db=db)
+
+    assert result.total_items == 3
+    assert [item.case_id for item in result.items] == ["case-a", "case-b", "case-c"]
+    assert result.items[0].action_required == "SUBMIT_REPORT"
+    assert result.items[2].action_required == "REGISTER_PROTOCOL"
+
+
+@pytest.mark.asyncio
+async def test_get_report_filing_hotlist_deduplicates_by_case_when_requested():
+    from routers.cases import get_report_filing_hotlist
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+    now = datetime.now(UTC)
+
+    rp_new = SimpleNamespace(
+        id="rp-new",
+        tenant_id="t1",
+        case_id="case-x",
+        status="FINAL",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=10),
+        filed_at=None,
+        coaf_protocol_number=None,
+    )
+    rp_old = SimpleNamespace(
+        id="rp-old",
+        tenant_id="t1",
+        case_id="case-x",
+        status="FINAL",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=20),
+        filed_at=None,
+        coaf_protocol_number=None,
+    )
+
+    result_obj = MagicMock()
+    result_obj.scalars.return_value.all.return_value = [rp_new, rp_old]
+    db.execute = AsyncMock(return_value=result_obj)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        dedup = await get_report_filing_hotlist(limit=10, include_all_versions=False, scan_limit=2000, current_user=user, db=db)
+        all_versions = await get_report_filing_hotlist(limit=10, include_all_versions=True, scan_limit=2000, current_user=user, db=db)
+
+    assert dedup.total_items == 1
+    assert dedup.items[0].report_package_id == "rp-new"
+    assert all_versions.total_items == 2
+
+
+@pytest.mark.asyncio
 async def test_add_case_comment_with_mentions_dispatches_notifications():
     """@mentions in a comment must each produce a CASE_MENTION Notification."""
     from routers.cases import add_case_comment

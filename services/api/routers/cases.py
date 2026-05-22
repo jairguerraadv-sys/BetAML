@@ -1581,6 +1581,24 @@ class ReportFilingOverviewOut(BaseModel):
     truncated: bool
 
 
+class ReportFilingHotlistItemOut(BaseModel):
+    case_id: str
+    report_package_id: str
+    report_status: str
+    deadline_state: str
+    action_required: str
+    priority_rank: int
+    requires_submission: bool
+    protocol_registered: bool
+    days_since_report_created: int | None
+    warnings: list[str]
+
+
+class ReportFilingHotlistOut(BaseModel):
+    total_items: int
+    items: list[ReportFilingHotlistItemOut]
+
+
 def _compute_filing_state_for_report_package(rp: ReportPackage) -> tuple[
     str | None,
     bool,
@@ -2014,6 +2032,97 @@ async def get_report_filing_overview(
         top_breach_case_ids=top_breach_case_ids,
         truncated=truncated,
     )
+
+
+@router.get("/report-packages/filing-hotlist", response_model=ReportFilingHotlistOut, tags=["cases"])
+async def get_report_filing_hotlist(
+    limit: int = Query(20, ge=1, le=200),
+    include_all_versions: bool = Query(False),
+    scan_limit: int = Query(2000, ge=100, le=10000),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retorna hotlist operacional de filing com foco apenas em ações pendentes."""
+    rows = (await db.execute(
+        select(ReportPackage)
+        .where(ReportPackage.tenant_id == current_user.tenant_id)
+        .order_by(ReportPackage.created_at.desc())
+        .limit(scan_limit)
+    )).scalars().all()
+
+    selected: list[ReportPackage] = []
+    seen_case_ids: set[str] = set()
+    for rp in rows:
+        case_key = str(rp.case_id)
+        if include_all_versions or case_key not in seen_case_ids:
+            selected.append(rp)
+            seen_case_ids.add(case_key)
+
+    actionable: list[ReportFilingHotlistItemOut] = []
+    for rp in selected:
+        (
+            _report_decision,
+            requires_submission,
+            protocol_registered,
+            _protocol_number,
+            days_since_report_created,
+            _days_since_filed,
+            deadline_state,
+            warnings,
+        ) = _compute_filing_state_for_report_package(rp)
+
+        is_missing_protocol = str(rp.status) == "FILED" and not protocol_registered
+        if not requires_submission and not is_missing_protocol:
+            continue
+
+        if requires_submission:
+            action_required = "SUBMIT_REPORT"
+            priority_rank = 0 if deadline_state == "BREACH" else 1 if deadline_state == "WARNING" else 2
+        else:
+            action_required = "REGISTER_PROTOCOL"
+            priority_rank = 3
+
+        actionable.append(
+            ReportFilingHotlistItemOut(
+                case_id=str(rp.case_id),
+                report_package_id=str(rp.id),
+                report_status=str(rp.status),
+                deadline_state=deadline_state,
+                action_required=action_required,
+                priority_rank=priority_rank,
+                requires_submission=requires_submission,
+                protocol_registered=protocol_registered,
+                days_since_report_created=days_since_report_created,
+                warnings=warnings,
+            )
+        )
+
+    actionable.sort(
+        key=lambda it: (
+            it.priority_rank,
+            -(it.days_since_report_created or 0),
+            it.case_id,
+        )
+    )
+    actionable = actionable[:limit]
+
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "VIEW_REPORT_FILING_HOTLIST",
+        "ReportPackage",
+        None,
+        after={
+            "limit": limit,
+            "scan_limit": scan_limit,
+            "include_all_versions": include_all_versions,
+            "returned_items": len(actionable),
+        },
+    )
+    await db.commit()
+
+    return ReportFilingHotlistOut(total_items=len(actionable), items=actionable)
 
 
 @router.get("/cases/{case_id}/reconciliation", tags=["cases"])

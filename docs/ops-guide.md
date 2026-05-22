@@ -462,6 +462,16 @@ curl -H "Authorization: Bearer <token>" \
 - Retorna totais agregados de pendência (`requires_submission_count`), protocolo pendente (`missing_protocol_count`) e distribuição de prazo (`deadline_state_counts`).
 - Use para checkpoint diário de operação e para report rápido em war room.
 
+### Hotlist acionável de filing (execução imediata)
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/report-packages/filing-hotlist?limit=20"
+```
+
+- Retorna apenas casos com ação pendente: `SUBMIT_REPORT` ou `REGISTER_PROTOCOL`.
+- Ordena por prioridade operacional (`BREACH` -> `WARNING` -> protocolo pendente), facilitando atuação do plantão.
+
 ### Validar cadeia de custódia do ReportPackage
 
 ```bash
