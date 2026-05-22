@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -141,6 +142,9 @@ async def _mock_provider_call(provider: str, validation_type: str, request_id: s
 async def _http_provider_call(provider: str, validation_type: str, request_id: str, payload: dict) -> dict:
     if not _VALIDATION_PROVIDER_URL:
         raise RuntimeError("external_validation_provider_url_missing")
+    provider_url = urllib.parse.urlparse(_VALIDATION_PROVIDER_URL)
+    if provider_url.scheme not in {"http", "https"} or not provider_url.netloc:
+        raise RuntimeError("external_validation_provider_url_invalid")
 
     timeout_seconds = _provider_timeout_seconds()
 
@@ -165,7 +169,7 @@ async def _http_provider_call(provider: str, validation_type: str, request_id: s
             headers=headers,
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:  # nosec B310
             parsed = json.loads(resp.read().decode("utf-8"))
             if not isinstance(parsed, dict):
                 raise RuntimeError("provider_response_not_json_object")

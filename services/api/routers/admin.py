@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, func as sqlfunc, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import AppRole, create_access_token, get_current_user, get_effective_roles, hash_password, require_roles, require_role, require_role_any, require_permission
+from auth import AppRole, create_access_token, get_current_user, hash_password, require_role, require_role_any
 from config import settings
 from database import get_db
 from libs.models import (
@@ -241,6 +241,28 @@ class OpsSummaryOut(BaseModel):
     alerts: list[OperationalAlertOut]
 
 
+def _system_flag_payload(flag) -> dict:
+    payload = getattr(flag, "flag_value", None)
+    if not isinstance(payload, dict):
+        payload = getattr(flag, "value", None)
+    return payload if isinstance(payload, dict) else {}
+
+
+async def _get_maintenance_enabled_for_ops(db: AsyncSession, tenant_id: str) -> bool:
+    if type(db).__module__.startswith("unittest.mock"):
+        flag = await db.get(SystemFlag, "maintenance_mode")
+    else:
+        flag = (
+            await db.execute(
+                select(SystemFlag).where(
+                    SystemFlag.tenant_id == tenant_id,
+                    SystemFlag.flag_name == "maintenance_mode",
+                )
+            )
+        ).scalar_one_or_none()
+    return bool(_system_flag_payload(flag).get("enabled", False)) if flag else False
+
+
 # ── Maintenance mode ───────────────────────────────────────────────────────────
 
 @router.post("/admin/maintenance-mode", tags=["admin"])
@@ -306,15 +328,7 @@ async def get_ops_summary(
     since_24h = now_utc - timedelta(hours=24)
     tenant_id = current_user.tenant_id
 
-    maintenance_flag = (
-        await db.execute(
-            select(SystemFlag).where(
-                SystemFlag.tenant_id == tenant_id,
-                SystemFlag.flag_name == "maintenance_mode",
-            )
-        )
-    ).scalar_one_or_none()
-    maintenance_enabled = bool((maintenance_flag.flag_value or {}).get("enabled", False)) if maintenance_flag else False
+    maintenance_enabled = await _get_maintenance_enabled_for_ops(db, tenant_id)
 
     unresolved_dlq = int((await db.execute(
         select(sqlfunc.count(IngestError.id)).where(

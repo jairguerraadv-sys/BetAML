@@ -745,6 +745,25 @@ async def data_quality_alerting() -> None:
                     )
                     critical = True
 
+                # Check global de integridade: nenhum player pode existir sem tenant_id.
+                players_without_tenant = (
+                    await db.execute(
+                        select(func.count()).select_from(Player).where(
+                            Player.tenant_id.is_(None),
+                        )
+                    )
+                ).scalar_one()
+                if int(players_without_tenant or 0) > 0:
+                    failures.append(
+                        {
+                            "name": "players_without_tenant",
+                            "value": int(players_without_tenant),
+                            "threshold": 0,
+                            "details": "Players sem tenant_id devem ser zero.",
+                        }
+                    )
+                    critical = True
+
                 unresolved_ingest_errors_24h = (
                     await db.execute(
                         select(func.count()).select_from(IngestError).where(

@@ -142,6 +142,7 @@ async def write_audit(
         entity_id=entity_id,
         before=_sanitize_audit_payload(before),
         after=_sanitize_audit_payload(after),
+        pii_accessed=pii_accessed,
         ip_address=ip,
     )
     db.add(al)

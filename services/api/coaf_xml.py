@@ -103,6 +103,8 @@ def generate_coaf_xml(
     _sub(cab, "Versao", _SCHEMA_VERSAO)
     # CodigoRegistro: identificador único desta submissão (máx 36 chars)
     _sub(cab, "CodigoRegistro", f"BETAML-{report_id[:28]}")
+    # Compatibilidade com consumidores que identificam o pacote pelo campo RIF.
+    _sub(cab, "RIF", f"BETAML-{report_id[:28]}")
     _sub(cab, "DataCriacao", generated_at.strftime("%Y-%m-%d"))
     _sub(cab, "HoraCriacao", generated_at.strftime("%H:%M:%S"))
     _sub(cab, "TipoComunicante", _TIPO_COMUNICANTE)

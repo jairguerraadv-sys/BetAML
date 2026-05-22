@@ -7,12 +7,12 @@ from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import case as sqla_case, func as sqlfunc, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import AppRole, compute_cpf_hmac, decrypt_pii, encrypt_pii, get_effective_roles, mask_cpf, require_roles, require_role, require_role_any, require_permission
+from auth import AppRole, compute_cpf_hmac, decrypt_pii, encrypt_pii, get_effective_roles, mask_cpf, require_role, require_role_any
 from database import get_db
 from models import Alert, Bet, Case, DeviceEvent, FinancialTransaction, Player, PlayerKycEvent, ScoringConfig, User
 from repositories import PlayerRepository
@@ -271,7 +271,8 @@ async def get_player_feature_history(
     def _query_ch() -> list:
         ch = ClickHouseClient()
         col_clause = ", ".join(_COLUMNS)
-        sql = f"""
+        sql = (  # nosec B608
+            f"""
             SELECT {col_clause}
                         FROM betaml.player_features_daily FINAL
             WHERE tenant_id = %(tid)s
@@ -279,6 +280,7 @@ async def get_player_feature_history(
               AND feature_date >= today() - %(days)s
             ORDER BY feature_date DESC
             """
+        )
         return ch.execute(
             sql,
             {"tid": current_user.tenant_id, "pid": player_id, "days": days},
@@ -1232,7 +1234,7 @@ class _KycEventIn(BaseModel):
     event_type: str
     provider: str = "manual"
     status: str = "PENDING"
-    payload: dict = {}
+    payload: dict = Field(default_factory=dict)
 
 
 @router.post("/players/{player_id}/kyc-events", status_code=201)
@@ -1257,10 +1259,13 @@ async def create_kyc_event(
     event = PlayerKycEvent(
         tenant_id=current_user.tenant_id,
         player_id=player_id,
+        entity_type="KYC_EVENT",
+        subtype=body.event_type.upper(),
         event_type=body.event_type.upper(),
         provider=body.provider,
         status=body.status.upper(),
         payload=body.payload,
+        occurred_at=_utcnow(),
         processed_at=_utcnow() if body.status.upper() in ("APPROVED", "REJECTED") else None,
     )
     db.add(event)
@@ -1274,7 +1279,7 @@ async def create_kyc_event(
     await write_audit(
         db, current_user.tenant_id, current_user.id,
         "PLAYER_KYC_EVENT", "Player", player_id,
-        after={"event_type": event.event_type, "status": event.status, "provider": event.provider, "player_status": p.status},
+        after={"event_type": event.event_type or event.subtype, "status": event.status, "provider": event.provider, "player_status": p.status},
     )
     await db.commit()
     await db.refresh(event)
@@ -1282,7 +1287,7 @@ async def create_kyc_event(
     return {
         "id": event.id,
         "player_id": player_id,
-        "event_type": event.event_type,
+        "event_type": event.event_type or event.subtype,
         "provider": event.provider,
         "status": event.status,
         "player_status": p.status,
@@ -1313,13 +1318,12 @@ async def list_kyc_events(
     return [
         {
             "id": ev.id,
-            "event_type": ev.event_type,
+            "event_type": ev.event_type or ev.subtype,
             "provider": ev.provider,
-            "status": ev.status,
+            "status": ev.status or "COMPLETED",
             "error_message": ev.error_message,
             "processed_at": ev.processed_at,
             "created_at": ev.created_at,
         }
         for ev in events
     ]
-

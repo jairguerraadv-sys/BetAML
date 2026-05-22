@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import AppRole, get_current_user, get_effective_roles, require_roles, require_role, require_role_any, require_permission
+from auth import AppRole, get_current_user, get_effective_roles, require_role_any
 from database import AsyncSessionLocal, get_db
 from libs.schemas import AlertExplainabilityOut
 from models import Alert, Bet, Case, FinancialTransaction, Notification, User
@@ -33,6 +33,20 @@ def _numeric_or_none(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _optional_datetime(value) -> datetime | None:
+    return value if isinstance(value, datetime) else None
+
+
+def _alert_sla_status(sla_due_at: datetime | None, now: datetime) -> str | None:
+    if not sla_due_at:
+        return None
+    if sla_due_at < now:
+        return "OVERDUE"
+    if sla_due_at < now + timedelta(hours=24):
+        return "WARNING"
+    return "OK"
 
 
 def _ensure_alert_write_access(current_user: User) -> None:
@@ -169,6 +183,26 @@ async def list_alerts(
     total = await repo.count_filtered(current_user.tenant_id)
 
     _now = datetime.now(timezone.utc)
+    items = []
+    for a in alerts:
+        sla_due_at = _optional_datetime(getattr(a, "sla_due_at", None))
+        items.append({
+            "id": a.id, "severity": a.severity, "status": a.status,
+            "title": a.title, "alert_type": a.alert_type,
+            "player_id": a.player_id, "rule_id": a.rule_id,
+            "anomaly_score": float(a.anomaly_score) if a.anomaly_score else None,
+            "composite_score": float(a.composite_score) if a.composite_score else None,
+            "case_id": a.case_id,
+            "label": a.label,
+            "triaged_by": str(a.triaged_by) if a.triaged_by else None,
+            "triaged_at": a.triaged_at.isoformat() if a.triaged_at else None,
+            # T17: priority e sla_due_at eram campos mortos — agora expostos
+            "priority": getattr(a, "priority", None),
+            "sla_due_at": sla_due_at.isoformat() if sla_due_at else None,
+            "sla_status": _alert_sla_status(sla_due_at, _now),
+            "created_at": a.created_at,
+            "updated_at": a.updated_at,
+        })
     return {
         "total": total,
         "next_cursor": (
@@ -176,30 +210,7 @@ async def list_alerts(
              "id": str(alerts[-1].id)}
             if alerts and len(alerts) == limit else None
         ),
-        "items": [
-            {
-                "id": a.id, "severity": a.severity, "status": a.status,
-                "title": a.title, "alert_type": a.alert_type,
-                "player_id": a.player_id, "rule_id": a.rule_id,
-                "anomaly_score": float(a.anomaly_score) if a.anomaly_score else None,
-                "composite_score": float(a.composite_score) if a.composite_score else None,
-                "case_id": a.case_id,
-                "label": a.label,
-                "triaged_by": str(a.triaged_by) if a.triaged_by else None,
-                "triaged_at": a.triaged_at.isoformat() if a.triaged_at else None,
-                # T17: priority e sla_due_at eram campos mortos — agora expostos
-                "priority": a.priority,
-                "sla_due_at": a.sla_due_at.isoformat() if a.sla_due_at else None,
-                "sla_status": (
-                    "OVERDUE" if a.sla_due_at and a.sla_due_at < _now
-                    else "WARNING" if a.sla_due_at and a.sla_due_at < _now + timedelta(hours=24)
-                    else "OK" if a.sla_due_at else None
-                ),
-                "created_at": a.created_at,
-                "updated_at": a.updated_at,
-            }
-            for a in alerts
-        ],
+        "items": items,
     }
 
 
@@ -360,6 +371,8 @@ async def get_alert(
             case_reference_number = case_obj.reference_number
             case_status = case_obj.status
             case_title = case_obj.title
+    sla_due_at = _optional_datetime(getattr(a, "sla_due_at", None))
+    now = datetime.now(timezone.utc)
     return {
         "id": a.id, "severity": a.severity, "status": a.status,
         "title": a.title, "description": a.description,
@@ -377,13 +390,9 @@ async def get_alert(
         "triage_note": a.triage_note if hasattr(a, "triage_note") else None,
         "label": a.label, "label_note": a.label_note, "labeled_at": a.labeled_at,
         # T17: priority e sla_due_at expostos no detalhe
-        "priority": a.priority,
-        "sla_due_at": a.sla_due_at.isoformat() if a.sla_due_at else None,
-        "sla_status": (
-            "OVERDUE" if a.sla_due_at and a.sla_due_at < datetime.now(timezone.utc)
-            else "WARNING" if a.sla_due_at and a.sla_due_at < datetime.now(timezone.utc) + timedelta(hours=24)
-            else "OK" if a.sla_due_at else None
-        ),
+        "priority": getattr(a, "priority", None),
+        "sla_due_at": sla_due_at.isoformat() if sla_due_at else None,
+        "sla_status": _alert_sla_status(sla_due_at, now),
     }
 
 
@@ -755,5 +764,3 @@ async def _enqueue_feedback_event(alert_id: str, label: str, tenant_id: str) -> 
             await _db.commit()
     except Exception as db_exc:  # noqa: BLE001
         logger.error("feedback_notification_store_failed", alert_id=alert_id, error=str(db_exc))
-
-

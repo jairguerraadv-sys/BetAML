@@ -37,6 +37,65 @@ async def _run_health_checks() -> dict[str, str]:
         logger.warning("health_check_postgres_failed", error=str(exc))
         checks["postgres"] = "error"
 
+    # ── Data Quality (OPS1) ────────────────────────────────────────────────
+    # Reusa os checks críticos do script scripts/data_quality_checks.py para
+    # integrar qualidade de dados ao readiness endpoint.
+    try:
+        from sqlalchemy import text
+
+        async with AsyncSessionLocal() as db:
+            players_without_tenant = (
+                await asyncio.wait_for(
+                    db.execute(text("SELECT COUNT(*) FROM players WHERE tenant_id IS NULL")),
+                    timeout=2.0,
+                )
+            ).scalar_one()
+            alerts_invalid_status = (
+                await asyncio.wait_for(
+                    db.execute(
+                        text(
+                            "SELECT COUNT(*) FROM alerts "
+                            "WHERE status NOT IN ('OPEN','IN_REVIEW','CLOSED','FALSE_POSITIVE')"
+                        )
+                    ),
+                    timeout=2.0,
+                )
+            ).scalar_one()
+            snapshots_missing_version = (
+                await asyncio.wait_for(
+                    db.execute(text("SELECT COUNT(*) FROM feature_snapshots WHERE feature_version IS NULL")),
+                    timeout=2.0,
+                )
+            ).scalar_one()
+            unresolved_ingest_errors_24h = (
+                await asyncio.wait_for(
+                    db.execute(
+                        text(
+                            "SELECT COUNT(*) FROM ingest_errors "
+                            "WHERE resolved = false AND created_at < (now() - interval '24 hours')"
+                        )
+                    ),
+                    timeout=2.0,
+                )
+            ).scalar_one()
+
+        failures = []
+        if int(players_without_tenant or 0) > 0:
+            failures.append("players_without_tenant")
+        if int(alerts_invalid_status or 0) > 0:
+            failures.append("alerts_invalid_status")
+        if int(snapshots_missing_version or 0) > 0:
+            failures.append("feature_snapshots_missing_version")
+        if int(unresolved_ingest_errors_24h or 0) > 100:
+            failures.append("unresolved_ingest_errors_24h")
+
+        checks["data_quality"] = "ok" if not failures else "error"
+        if failures:
+            logger.warning("health_check_data_quality_failed", failures=failures)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("health_check_data_quality_probe_failed", error=str(exc))
+        checks["data_quality"] = "error"
+
     # ── Redis ─────────────────────────────────────────────────────────────
     try:
         import redis.asyncio as aioredis

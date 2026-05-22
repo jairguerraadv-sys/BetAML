@@ -16,11 +16,16 @@ from models import AuditLog, User
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["audit"])
+__all__ = ["require_roles"]
+
+
+def _optional_str(value: object) -> Optional[str]:
+    return value if isinstance(value, str) else None
 
 
 def _serialize_audit(lo: AuditLog) -> dict:
     action = lo.action or ""
-    pii_accessed: Optional[str] = None
+    pii_accessed = _optional_str(getattr(lo, "pii_accessed", None))
     if action.startswith("ACCESS_PII:"):
         pii_accessed = action.split(":", 1)[1]
     return {

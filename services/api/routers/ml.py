@@ -27,7 +27,13 @@ from utils import write_audit
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["ml"])
 
-MODEL_REGISTRY_ROLES = [AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN]
+MODEL_REGISTRY_READ_ROLES = [
+    AppRole.ANALISTA,
+    AppRole.GESTOR,
+    AppRole.ADMIN_TECNICO,
+    AppRole.SUPER_ADMIN,
+]
+MODEL_REGISTRY_WRITE_ROLES = [AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN]
 
 
 def _tenant_filter(model, tenant_id: str):
@@ -375,7 +381,7 @@ def _build_ab_metrics(
 async def list_models(
     model_type: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role_any(MODEL_REGISTRY_ROLES)),
+    current_user=Depends(require_role_any(MODEL_REGISTRY_READ_ROLES)),
 ):
     stmt = select(ModelRegistry).where(_tenant_filter(ModelRegistry, current_user.tenant_id))
     if model_type:
@@ -389,7 +395,7 @@ async def list_models(
 async def get_model_performance_summary(
     days: int = Query(30, ge=1, le=180),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role_any(MODEL_REGISTRY_ROLES)),
+    current_user=Depends(require_role_any(MODEL_REGISTRY_READ_ROLES)),
 ):
     since = datetime.now(UTC) - timedelta(days=days)
 
@@ -424,7 +430,7 @@ async def get_model_performance_summary(
 async def get_model(
     model_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role_any(MODEL_REGISTRY_ROLES)),
+    current_user=Depends(require_role_any(MODEL_REGISTRY_READ_ROLES)),
 ):
     model = (await db.execute(
         select(ModelRegistry).where(
@@ -442,7 +448,7 @@ async def get_model_ab_metrics(
     model_id: str,
     days: int = Query(30, ge=1, le=180),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role_any(MODEL_REGISTRY_ROLES)),
+    current_user=Depends(require_role_any(MODEL_REGISTRY_READ_ROLES)),
 ):
     model = (await db.execute(
         select(ModelRegistry).where(
@@ -509,7 +515,7 @@ async def get_model_ab_metrics(
 async def promote_model(
     model_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role_any(MODEL_REGISTRY_ROLES)),
+    current_user=Depends(require_role_any(MODEL_REGISTRY_WRITE_ROLES)),
 ):
     """Promove um modelo challenger para champion, arquivando o champion atual."""
     model = (await db.execute(
@@ -548,7 +554,7 @@ async def promote_model(
 async def designate_challenger(
     model_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_role_any(MODEL_REGISTRY_ROLES)),
+    current_user=Depends(require_role_any(MODEL_REGISTRY_WRITE_ROLES)),
 ):
     """Designa um modelo STAGING como challenger para A/B evaluation."""
     model = (await db.execute(

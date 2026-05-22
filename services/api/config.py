@@ -36,6 +36,7 @@ _log = logging.getLogger(__name__)
 
 DEFAULT_JWT_SECRET = "__CHANGE_ME_JWT_SECRET__"
 DEFAULT_EPSILON_WEBHOOK_SECRET = "__CHANGE_ME_EPSILON_WEBHOOK_SECRET__"
+LEGACY_DEFAULT_EPSILON_WEBHOOK_SECRET = "dev-secret-change-me"
 # Sentinela — NÃO é uma chave AES real. O Fernet vai rejeitar ao tentar usar.
 # Defina PII_ENCRYPTION_KEY com uma chave gerada por: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 DEFAULT_PII_ENCRYPTION_KEY = "__CHANGE_ME_PII_KEY_NOT_A_VALID_FERNET_KEY__"
@@ -261,7 +262,10 @@ class Settings(BaseSettings):
                     "JWT_SECRET must be changed from default in staging/production. "
                     "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
                 )
-            if self.epsilon_webhook_secret == DEFAULT_EPSILON_WEBHOOK_SECRET:
+            if self.epsilon_webhook_secret in {
+                DEFAULT_EPSILON_WEBHOOK_SECRET,
+                LEGACY_DEFAULT_EPSILON_WEBHOOK_SECRET,
+            }:
                 raise ValueError(
                     "EPSILON_WEBHOOK_SECRET must be changed from default in staging/production. "
                     "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
