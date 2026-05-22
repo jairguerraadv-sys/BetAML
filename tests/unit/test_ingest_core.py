@@ -794,3 +794,11 @@ def test_ingest_router_has_errors_endpoint():
     paths = [r.path for r in router.routes if hasattr(r, "path")]
     error_paths = [p for p in paths if "error" in p.lower()]
     assert error_paths, f"No error endpoints found in ingest router. Paths: {paths}"
+
+
+def test_ingest_router_has_contract_endpoint():
+    """The ingest router must register GET /ingest/contract."""
+    from routers.ingest import router
+
+    paths = [r.path for r in router.routes if hasattr(r, "path")]
+    assert "/ingest/contract" in paths, f"GET /ingest/contract not found. Paths: {paths}"

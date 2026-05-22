@@ -22,6 +22,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from jose import JWTError, jwt
+from prometheus_client import Info
 from pydantic import BaseModel, model_validator
 from sqlalchemy import and_, desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +61,11 @@ ALLOWED_SOURCE_SYSTEMS = frozenset(
 )
 
 router = APIRouter(tags=["ingest"])
+
+_INGEST_CONTRACT_INFO = Info(
+    "betaml_ingest_contract",
+    "Official ingest contract metadata for operational monitoring",
+)
 
 _INGEST_WS_RUNTIME: dict[str, dict[str, Any]] = {}
 
@@ -203,6 +209,49 @@ class ConnectorParseSummary(BaseModel):
     errors: list[dict[str, Any]]
 
 
+class IngestContractOut(BaseModel):
+    pipeline_mode: str
+    official_path: str
+    source_topics: list[str]
+    contract_version: str
+    monitored_by: list[str]
+
+
+def _current_ingest_contract() -> IngestContractOut:
+    """Contrato oficial de ingestão monitorado por endpoint e métrica Prometheus."""
+    # O runtime atual oficializa canonical-first: API valida/aplica mapping e publica em canonical.*
+    # As trilhas raw.* permanecem como tópicos de entrada legada/backfill controlado.
+    return IngestContractOut(
+        pipeline_mode=settings.ingest_pipeline_mode,
+        official_path="api_ingest_to_canonical_topics",
+        source_topics=[
+            "canonical.players",
+            "canonical.transactions",
+            "canonical.bets",
+            "canonical.device_events",
+            "canonical.kyc_events",
+            "canonical.responsible_gambling_events",
+            "canonical.account_status_changes",
+        ],
+        contract_version="2026-05-22.v1",
+        monitored_by=["prometheus:betaml_ingest_contract", "api:/ingest/contract"],
+    )
+
+
+def _publish_ingest_contract_info() -> None:
+    contract = _current_ingest_contract()
+    _INGEST_CONTRACT_INFO.info(
+        {
+            "pipeline_mode": contract.pipeline_mode,
+            "official_path": contract.official_path,
+            "contract_version": contract.contract_version,
+        }
+    )
+
+
+_publish_ingest_contract_info()
+
+
 def _kafka_headers_from_context() -> list[tuple[str, bytes]] | None:
     """Build Kafka headers for request correlation (best-effort).
 
@@ -216,6 +265,17 @@ def _kafka_headers_from_context() -> list[tuple[str, bytes]] | None:
     except Exception:
         return None
     return None
+
+
+@router.get("/ingest/contract", response_model=IngestContractOut)
+async def get_ingest_contract(
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "BetAML_SuperAdmin")),
+) -> IngestContractOut:
+    """Retorna o contrato oficial de ingestão vigente da plataforma.
+
+    Este endpoint serve como fonte operacional para evitar drift entre docs e runtime.
+    """
+    return _current_ingest_contract()
 
 
 async def _publish_with_retries(

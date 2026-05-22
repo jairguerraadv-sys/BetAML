@@ -206,6 +206,9 @@ class Settings(BaseSettings):
     ml_service_url: str = "http://ml-service:8001"
     # T10: chave de autenticação para chamadas internas ao ml_service
     ml_internal_api_key: str = ""
+    # Contrato oficial de ingestão da plataforma.
+    # Valores aceitos: canonical-first | raw-first
+    ingest_pipeline_mode: str = "canonical-first"
     rules_engine_metrics_url: str = "http://rules-engine:8002/metrics"
     stream_processor_metrics_url: str = "http://stream-processor:8003/metrics"
 
@@ -239,6 +242,14 @@ class Settings(BaseSettings):
         if value is None:
             return "development"
         return str(value).strip().lower()
+
+    @field_validator("ingest_pipeline_mode", mode="before")
+    @classmethod
+    def normalize_ingest_pipeline_mode(cls, value):
+        mode = str(value or "canonical-first").strip().lower()
+        if mode not in {"canonical-first", "raw-first"}:
+            raise ValueError("INGEST_PIPELINE_MODE must be 'canonical-first' or 'raw-first'")
+        return mode
 
     @field_validator(
         "pii_encryption_key",

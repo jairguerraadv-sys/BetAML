@@ -249,6 +249,15 @@ docker compose up -d --build
 
 ## 5.1 Operações de Ingestão (Módulo 1)
 
+### Contrato oficial de ingestão
+
+- Documento canônico: `docs/ingest-contract.md`
+- Modo oficial atual: `canonical-first`
+- Endpoint operacional: `GET /ingest/contract`
+- Metrica de monitoramento: `betaml_ingest_contract`
+
+Antes de qualquer go-live, valide que o contrato retornado pelo endpoint coincide com o contrato documentado.
+
 ### Backfill de dados históricos
 
 Use o fluxo de backfill quando houver arquivos legados, correção de mapping ou onboard de um tenant antigo.
