@@ -89,6 +89,9 @@ def _start_health_server():
 
 
 TOPICS = [
+    "raw.transactions",
+    "raw.bets",
+    "raw.device_events",
     "canonical.transactions",
     "canonical.bets",
     "canonical.device_events",
@@ -1174,7 +1177,7 @@ async def process_transaction(msg_value: dict, redis_client, ch_client, producer
         await redis_client.sadd_member(pbank_key, holder_doc)
 
     # Determine if this payment instrument is new for this player (before recording it)
-    instr_method = payload.get("method", "")
+    instr_method = str(payload.get("method") or "")
     instr_parts = [instr_method]
     if isinstance(instrument, dict):
         for k in sorted(instrument.keys()):
@@ -1620,6 +1623,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
     # GAP-stream: propagar ingest_mode para todos os envelopes publicados
     ingest_mode = str(msg_value.get("ingest_mode") or "incremental")
     backfill_job_id = msg_value.get("backfill_job_id")
+    suppress_alerts = bool(msg_value.get("suppress_alerts", False))
 
     if not job_id or not tenant_id:
         logger.warning("ingest_job_missing_fields", msg=msg_value)
@@ -1891,6 +1895,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                         "channel": "connector-reprocess",
                         "ingest_mode": ingest_mode,
                         "backfill_job_id": backfill_job_id,
+                        "suppress_alerts": suppress_alerts,
                     },
                 }
                 topic = f"canonical.{entity_type}s"
@@ -2016,6 +2021,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                         "source": "file",
                         "ingest_mode": ingest_mode,
                         "backfill_job_id": backfill_job_id,
+                        "suppress_alerts": suppress_alerts,
                     },
                 }
                 topic = f"canonical.{entity_type}s"
@@ -2163,7 +2169,13 @@ async def main():
                 if isinstance(highwater, int) and isinstance(offset, int):
                     CONSUMER_LAG.labels(group_id="stream-processor", topic=topic).set(max(highwater - offset - 1, 0))
 
-                if topic == "canonical.transactions":
+                if topic == "raw.transactions":
+                    await process_raw_transaction(value, producer)
+                elif topic == "raw.bets":
+                    await process_raw_bet(value, producer)
+                elif topic == "raw.device_events":
+                    await process_raw_device_event(value, producer)
+                elif topic == "canonical.transactions":
                     await process_transaction(value, redis_client, ch_client, producer)
                 elif topic == "canonical.bets":
                     await process_bet(value, redis_client, ch_client, producer)

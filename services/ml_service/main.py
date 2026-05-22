@@ -21,7 +21,6 @@ import io
 import hashlib
 import json
 import os
-import pickle
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -33,7 +32,7 @@ import numpy as np
 import structlog
 from fastapi import FastAPI, HTTPException, Header, Query, Request
 from fastapi.responses import Response
-from prometheus_client import Counter
+from prometheus_client import REGISTRY, Counter
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 
@@ -41,29 +40,40 @@ from libs.telemetry import init_opentelemetry_stub
 
 logger = structlog.get_logger()
 
-ML_SCORING_FAILURES = Counter(
-    "betaml_ml_service_scoring_failures_total",
-    "Falhas de scoring no ml_service por tenant e motivo",
-    ["tenant_id", "reason"],
-)
-
 FEATURE_ALIASES = {
     "unique_instruments_used_7d": "unique_instruments_7d",
     "bonus_to_real_money_ratio_30d": "bonus_to_real_ratio_30d",
 }
 
-DATABASE_URL   = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@localhost:5432/betaml_dev")
-REDIS_URL      = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-MINIO_ACCESS   = os.getenv("MINIO_ACCESS_KEY", "minio")
-MINIO_SECRET   = os.getenv("MINIO_SECRET_KEY")
-assert MINIO_SECRET, "MINIO_SECRET_KEY env var must be set — refusing to start without it"
-BUCKET_MODELS  = os.getenv("ML_MODEL_BUCKET", "betaml-models")
 ENVIRONMENT    = os.getenv("ENVIRONMENT", "development").strip().lower()
 ML_ALLOW_SYNTHETIC_TRAINING = os.getenv("ML_ALLOW_SYNTHETIC_TRAINING", "").strip().lower() in {
     "1", "true", "yes", "on",
 }
 NON_PROD_ENVIRONMENTS = {"development", "test"}
+DATABASE_URL   = os.getenv("DATABASE_URL", "postgresql://betaml:devpass@localhost:5432/betaml_dev")
+REDIS_URL      = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+MINIO_ACCESS   = os.getenv("MINIO_ACCESS_KEY", "minio")
+MINIO_SECRET   = os.getenv("MINIO_SECRET_KEY")
+if not MINIO_SECRET and ENVIRONMENT in NON_PROD_ENVIRONMENTS:
+    MINIO_SECRET = "minio123"
+if not MINIO_SECRET:
+    raise RuntimeError("MINIO_SECRET_KEY env var must be set — refusing to start without it")
+BUCKET_MODELS  = os.getenv("ML_MODEL_BUCKET", "betaml-models")
+
+
+def _counter_once(name: str, documentation: str, labelnames: list[str]) -> Counter:
+    existing = REGISTRY._names_to_collectors.get(name)  # type: ignore[attr-defined]
+    if existing is not None:
+        return existing  # type: ignore[return-value]
+    return Counter(name, documentation, labelnames)
+
+
+ML_SCORING_FAILURES = _counter_once(
+    "betaml_ml_service_scoring_failures_total",
+    "Falhas de scoring no ml_service por tenant e motivo",
+    ["tenant_id", "reason"],
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Feature columns usados no treinamento (mesma ordem no score)
@@ -1142,7 +1152,7 @@ def train_graph(req: TrainRequest):
 
     try:
         artifact_uri = upload_model_artifact(tenant_id, model_id, clf)
-    except Exception as e:
+    except Exception:
         artifact_uri = f"memory://{tenant_id}/{model_id}.pkl"
 
     try:
@@ -1214,7 +1224,7 @@ def train_recurrence(req: TrainRequest):
 
     try:
         artifact_uri = upload_model_artifact(tenant_id, model_id, clf)
-    except Exception as e:
+    except Exception:
         artifact_uri = f"memory://{tenant_id}/{model_id}.pkl"
 
     try:

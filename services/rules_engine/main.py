@@ -505,7 +505,6 @@ async def evaluate_rules(
             "status":   payload.get("status", ""),
             "currency": payload.get("currency", "BRL"),
         }
-        player_id = payload.get("player_id", "")
     elif entity_type == "BET":
         ctx_bet = {
             "stakeAmount": float(payload.get("stake_amount", 0)),
@@ -514,7 +513,6 @@ async def evaluate_rules(
             "productType": payload.get("product_type", "SPORTSBOOK"),
             "gameCategory": payload.get("game_category", ""),
         }
-        player_id = payload.get("player_id", "")
     else:
         return []
 
@@ -931,7 +929,9 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
             # Atualizar risk_score e risk_band do player com base na severidade do alerta
             # (apenas sobe o score, nunca diminui — persistência de risco)
             if alert.get("player_id"):
-                new_score = float(alert.get("composite_score") or _SEVERITY_SCORE.get(alert.get("severity", "LOW"), 0.30))
+                severity = str(alert.get("severity") or "LOW").upper()
+                raw_score = alert.get("composite_score")
+                new_score = float(raw_score if raw_score is not None else _SEVERITY_SCORE.get(severity, 0.30))
                 conn.execute(sa.text("""
                     UPDATE players
                     SET risk_score = GREATEST(risk_score, :score),
@@ -1008,8 +1008,18 @@ async def main():
                 tenant_id = value.get("tenant_id")
                 payload   = value.get("payload", {})
                 player_id = payload.get("player_id") or payload.get("playerId", "")
+                ingest_meta = value.get("ingest_metadata") or {}
+                suppress_alerts = bool(ingest_meta.get("suppress_alerts") or value.get("suppress_alerts"))
 
                 if not tenant_id:
+                    continue
+                if suppress_alerts:
+                    EVENTS_PROCESSED.labels(topic=topic, status="suppressed").inc()
+                    logger.info(
+                        "rules_suppressed_by_ingest_metadata",
+                        tenant_id=tenant_id,
+                        source_event_id=value.get("source_event_id") or value.get("event_id"),
+                    )
                     continue
 
                 rules          = await load_rules(tenant_id)

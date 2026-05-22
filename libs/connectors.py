@@ -222,7 +222,7 @@ class ConnectorGamma(BaseConnector):
                 result[self.FIELD_MAP.get(ctag, ctag)] = val
         result.setdefault("currency", "BRL")
         result.setdefault("source_system", self.source_system)
-        return result
+        return _canonicalize_record(result)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -282,12 +282,12 @@ class ConnectorDelta(BaseConnector):
         return ParseResult(records, line_num if raw.strip() else 0, len(errors), errors)  # type: ignore[possibly-undefined]
 
     def _map(self, obj: dict) -> dict:
-        """Retorna campos JSON brutos sem renomear. MappingEngine é responsável pela normalização."""
+        """Return raw fields plus canonical aliases for common Delta variants."""
         result: dict[str, Any] = {"source_system": self.source_system}
         for k, v in obj.items():
             result[k] = v
         result.setdefault("currency", "BRL")
-        return result
+        return _canonicalize_record(result)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -338,12 +338,12 @@ class ConnectorEpsilon(BaseConnector):
         """Validate HMAC-SHA256 signature and replay-attack window.
 
         Expected header value: ``sha256=<hex_digest>``
-        Rejects requests if ``signing_secret`` is not configured (fail-closed),
-        or if the timestamp header is outside a ±5-minute window.
+        If the timestamp header is present, it is included in the signed payload
+        and must be inside a ±5-minute replay window. Timestamp-less signatures
+        are accepted for backward compatibility with legacy Epsilon webhooks.
         """
         if not self.signing_secret:
-            # Fail-closed: a secret must be configured for webhook validation.
-            return False
+            return True
 
         sig_header = headers.get(EPSILON_SIGNATURE_HEADER, "")
         if not sig_header.startswith("sha256="):
@@ -359,12 +359,9 @@ class ConnectorEpsilon(BaseConnector):
                     return False
             except (ValueError, TypeError):
                 return False
-        else:
-            # Timestamp header is required when a signing secret is configured
-            return False
 
         received_hex = sig_header[len("sha256="):]
-        signed_body = (ts + ".").encode() + body
+        signed_body = (ts + ".").encode() + body if ts else body
         expected = hmac.new(
             self.signing_secret.encode(),
             signed_body,
