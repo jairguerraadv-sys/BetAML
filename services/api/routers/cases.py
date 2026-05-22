@@ -1598,6 +1598,110 @@ async def get_report_package_chain_of_custody(
     }
 
 
+@router.get("/cases/{case_id}/reconciliation", tags=["cases"])
+async def get_case_reconciliation(
+    case_id: str,
+    rp_id: str | None = Query(None, description="ReportPackage específico para reconciliar"),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reconcilia trilha ponta-a-ponta: evento de origem -> alerta -> caso -> report package."""
+    c = await db.get(Case, case_id)
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Caso não encontrado")
+
+    alerts = (await db.execute(
+        select(Alert)
+        .where(
+            Alert.tenant_id == current_user.tenant_id,
+            Alert.case_id == case_id,
+        )
+        .order_by(Alert.created_at.asc())
+    )).scalars().all()
+
+    rp_stmt = (
+        select(ReportPackage)
+        .where(
+            ReportPackage.tenant_id == current_user.tenant_id,
+            ReportPackage.case_id == case_id,
+        )
+        .order_by(ReportPackage.created_at.desc())
+    )
+    if rp_id:
+        rp_stmt = rp_stmt.where(ReportPackage.id == rp_id)
+    report_package = (await db.execute(rp_stmt)).scalars().first()
+
+    source_alert = None
+    if c.source_alert_id:
+        source_alert = await db.get(Alert, str(c.source_alert_id))
+        if source_alert and str(source_alert.tenant_id) != str(current_user.tenant_id):
+            source_alert = None
+
+    linked_alert_ids = {str(a.id) for a in alerts}
+    source_alert_linked = bool(source_alert and str(source_alert.id) in linked_alert_ids)
+
+    source_events = [a.source_event_id for a in alerts if a.source_event_id]
+    unique_source_events = sorted({str(eid) for eid in source_events})
+
+    if report_package and isinstance(report_package.payload, dict):
+        rp_decision = report_package.payload.get("decisionLegacy") or report_package.payload.get("decision") or report_package.decision
+        rp_report_id = report_package.payload.get("reportId") or report_package.payload.get("report_id")
+    else:
+        rp_decision = report_package.decision if report_package else None
+        rp_report_id = None
+
+    stages = {
+        "event_to_alert": {
+            "ok": len(unique_source_events) > 0,
+            "source_event_ids": unique_source_events,
+            "alerts_count": len(alerts),
+        },
+        "alert_to_case": {
+            "ok": len(alerts) > 0 and (source_alert_linked or c.source_alert_id is None),
+            "case_source_alert_id": str(c.source_alert_id) if c.source_alert_id else None,
+            "linked_alert_ids": sorted(linked_alert_ids),
+            "source_alert_linked": source_alert_linked,
+        },
+        "case_to_report_package": {
+            "ok": report_package is not None,
+            "report_package_id": str(report_package.id) if report_package else None,
+            "report_id": str(rp_report_id) if rp_report_id else None,
+            "report_status": str(report_package.status) if report_package else None,
+            "report_decision": str(rp_decision) if rp_decision else None,
+            "filed_at": report_package.filed_at if report_package else None,
+        },
+    }
+
+    all_ok = all(stage.get("ok") is True for stage in stages.values())
+    gaps = [
+        name
+        for name, stage in stages.items()
+        if stage.get("ok") is not True
+    ]
+
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "VIEW_CASE_RECONCILIATION",
+        "Case",
+        case_id,
+        after={
+            "all_ok": all_ok,
+            "gaps": gaps,
+            "report_package_id": str(report_package.id) if report_package else None,
+        },
+    )
+    await db.commit()
+
+    return {
+        "case_id": case_id,
+        "all_stages_ok": all_ok,
+        "gaps": gaps,
+        "stages": stages,
+    }
+
+
 @router.patch("/cases/{case_id}/report-packages/{rp_id}/protocol-number", status_code=200)
 async def register_coaf_protocol_number(
     case_id: str,

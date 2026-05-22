@@ -434,6 +434,16 @@ curl -H "Authorization: Bearer <token>" \
 - Em caso de divergência (`integrity_ok=false`), o pacote deve ser tratado como
   incidente de integridade e revalidado antes de qualquer filing regulatório.
 
+### Reconciliação ponta-a-ponta (evento -> alerta -> caso -> report)
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/cases/<case-id>/reconciliation"
+```
+
+- O retorno traz `all_stages_ok` e `gaps[]` para identificar rapidamente falhas de encadeamento.
+- Use `?rp_id=<report-package-id>` para reconciliar contra um pacote específico quando houver múltiplas versões.
+
 ### Corrigir item em Quarentena
 
 1. Acesse `Quarentena de Erros`.

@@ -384,6 +384,109 @@ async def test_get_report_package_chain_of_custody_detects_hash_mismatch():
 
 
 @pytest.mark.asyncio
+async def test_get_case_reconciliation_all_stages_ok():
+    from routers.cases import get_case_reconciliation
+    from models import Case, Alert
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+
+    case_obj = _make_case(case_id="c1", tenant_id="t1")
+    case_obj.source_alert_id = "a1"
+
+    alert = SimpleNamespace(
+        id="a1",
+        tenant_id="t1",
+        case_id="c1",
+        source_event_id="evt-1",
+        created_at=datetime.now(UTC),
+    )
+    report_package = SimpleNamespace(
+        id="rp-1",
+        tenant_id="t1",
+        case_id="c1",
+        status="FILED",
+        decision="REPORT",
+        filed_at=datetime.now(UTC),
+        payload={"reportId": "rid-1", "decisionLegacy": "FILE_SAR"},
+        created_at=datetime.now(UTC),
+    )
+
+    async def _db_get(model, pk):
+        if model is Case:
+            return case_obj
+        if model is Alert and str(pk) == "a1":
+            return alert
+        return None
+
+    db.get = AsyncMock(side_effect=_db_get)
+
+    execute_calls = 0
+
+    async def _execute(_stmt):
+        nonlocal execute_calls
+        execute_calls += 1
+        res = MagicMock()
+        if execute_calls == 1:
+            res.scalars.return_value.all.return_value = [alert]
+            return res
+        res.scalars.return_value.first.return_value = report_package
+        return res
+
+    db.execute = AsyncMock(side_effect=_execute)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        result = await get_case_reconciliation(case_id="c1", current_user=user, db=db)
+
+    assert result["all_stages_ok"] is True
+    assert result["gaps"] == []
+    assert result["stages"]["event_to_alert"]["ok"] is True
+    assert result["stages"]["alert_to_case"]["ok"] is True
+    assert result["stages"]["case_to_report_package"]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_case_reconciliation_reports_gaps_when_missing_report_and_source_event():
+    from routers.cases import get_case_reconciliation
+    from models import Case
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+
+    case_obj = _make_case(case_id="c2", tenant_id="t1")
+    case_obj.source_alert_id = None
+
+    async def _db_get(model, pk):
+        if model is Case:
+            return case_obj
+        return None
+
+    db.get = AsyncMock(side_effect=_db_get)
+
+    execute_calls = 0
+
+    async def _execute(_stmt):
+        nonlocal execute_calls
+        execute_calls += 1
+        res = MagicMock()
+        if execute_calls == 1:
+            res.scalars.return_value.all.return_value = []
+            return res
+        res.scalars.return_value.first.return_value = None
+        return res
+
+    db.execute = AsyncMock(side_effect=_execute)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        result = await get_case_reconciliation(case_id="c2", current_user=user, db=db)
+
+    assert result["all_stages_ok"] is False
+    assert "event_to_alert" in result["gaps"]
+    assert "alert_to_case" in result["gaps"]
+    assert "case_to_report_package" in result["gaps"]
+
+
+@pytest.mark.asyncio
 async def test_add_case_comment_with_mentions_dispatches_notifications():
     """@mentions in a comment must each produce a CASE_MENTION Notification."""
     from routers.cases import add_case_comment
