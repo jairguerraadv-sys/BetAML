@@ -10,7 +10,9 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: betaml-postgres
-    env_file: ../.env
+    env_file:
+      - path: ../.env
+        required: false
     environment:
       POSTGRES_USER:     ${POSTGRES_USER:-betaml}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpass}
@@ -50,6 +52,9 @@ services:
       - ./migration_v30.sql:/docker-entrypoint-initdb.d/30-migration.sql
       - ./migration_v31.sql:/docker-entrypoint-initdb.d/31-migration.sql
       - ./migration_v32.sql:/docker-entrypoint-initdb.d/32-migration.sql
+      - ./migration_v33.sql:/docker-entrypoint-initdb.d/33-migration.sql
+      - ./migration_v34.sql:/docker-entrypoint-initdb.d/34-migration.sql
+      - ./migration_v35.sql:/docker-entrypoint-initdb.d/35-migration.sql
     ports:
       - "5432:5432"
     healthcheck:
@@ -187,7 +192,9 @@ services:
       context: ..
       dockerfile: services/api/Dockerfile
     container_name: betaml-api
-    env_file: ../.env
+    env_file:
+      - path: ../.env
+        required: false
     depends_on:
       postgres: {condition: service_healthy}
       redis:    {condition: service_healthy}
@@ -212,6 +219,7 @@ services:
       RULES_ENGINE_METRICS_URL: ${RULES_ENGINE_METRICS_URL:-http://rules-engine:8002/metrics}
       STREAM_PROCESSOR_METRICS_URL: ${STREAM_PROCESSOR_METRICS_URL:-http://stream-processor:8003/metrics}
       REDPANDA_ADMIN_URL:      ${REDPANDA_ADMIN_URL:-http://redpanda:9644}
+      EPSILON_WEBHOOK_SECRET:  ${EPSILON_WEBHOOK_SECRET:-dev-secret-change-me}
       # ATENÇÃO: PII_ENCRYPTION_KEY DEVE ser substituído em staging/produção.
       # Se JWT_SECRET ou PII_ENCRYPTION_KEY mantiverem valor padrão fora de 'development',
       # o startup da API lançará RuntimeError e recusará subir.
@@ -227,12 +235,14 @@ services:
     volumes:
       - ../services/api:/app
       - ../libs:/app/libs
+      - ./migration_v35.sql:/app/migration_v35.sql:ro
       - ../datasets/sanctions_sample.csv:/data/sanctions.csv:ro
     command: >
       bash -c "set -euo pipefail; \
       APP_DATABASE_URL=\"$$DATABASE_URL\"; \
       SEED_DATABASE_URL=\"postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@postgres:5432/$$POSTGRES_DB\"; \
       AUTO_SEED=\"$${API_AUTO_SEED:-false}\"; \
+      DATABASE_URL=\"$$SEED_DATABASE_URL\" python apply_sql_migration.py /app/migration_v35.sql; \
       if [ \"$$AUTO_SEED\" = \"true\" ]; then \
         echo 'Running API seed bootstrap'; \
         DATABASE_URL=\"$$SEED_DATABASE_URL\" ALLOW_SYNTHETIC_SEED=true python seeds.py; \
@@ -253,7 +263,9 @@ services:
       context: ..
       dockerfile: services/stream_processor/Dockerfile
     container_name: betaml-stream-processor
-    env_file: ../.env
+    env_file:
+      - path: ../.env
+        required: false
     depends_on:
       redpanda: {condition: service_healthy}
       redis:    {condition: service_healthy}
@@ -284,7 +296,9 @@ services:
       context: ..
       dockerfile: services/rules_engine/Dockerfile
     container_name: betaml-rules-engine
-    env_file: ../.env
+    env_file:
+      - path: ../.env
+        required: false
     depends_on:
       redpanda: {condition: service_healthy}
       redis:    {condition: service_healthy}
@@ -310,7 +324,9 @@ services:
       context: ..
       dockerfile: services/ml_service/Dockerfile
     container_name: betaml-ml-service
-    env_file: ../.env
+    env_file:
+      - path: ../.env
+        required: false
     depends_on:
       postgres: {condition: service_healthy}
       redis:    {condition: service_healthy}
@@ -340,7 +356,9 @@ services:
       context: ..
       dockerfile: services/ml_trainer/Dockerfile
     container_name: betaml-ml-trainer
-    env_file: ../.env
+    env_file:
+      - path: ../.env
+        required: false
     depends_on:
       postgres: {condition: service_healthy}
       minio:    {condition: service_started}
