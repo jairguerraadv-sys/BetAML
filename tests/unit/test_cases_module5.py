@@ -487,6 +487,34 @@ async def test_get_case_reconciliation_reports_gaps_when_missing_report_and_sour
 
 
 @pytest.mark.asyncio
+async def test_get_report_filing_contract_exposes_manual_portal_contract():
+    from routers.cases import get_report_filing_contract
+    from models import Case
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+    case_obj = _make_case(case_id="c3", tenant_id="t1")
+
+    async def _db_get(model, pk):
+        if model is Case:
+            return case_obj
+        return None
+
+    db.get = AsyncMock(side_effect=_db_get)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        result = await get_report_filing_contract(case_id="c3", current_user=user, db=db)
+
+    assert result.channel == "MANUAL_PORTAL"
+    assert result.mode == "manual"
+    assert result.required_decision == "FILE_SAR"
+    assert result.maker_checker_required is True
+    assert result.protocol_required_post_submit is True
+    assert result.api_submission_available is False
+    assert "xml_sha256" in result.required_chain_fields
+
+
+@pytest.mark.asyncio
 async def test_add_case_comment_with_mentions_dispatches_notifications():
     """@mentions in a comment must each produce a CASE_MENTION Notification."""
     from routers.cases import add_case_comment

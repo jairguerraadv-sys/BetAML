@@ -1522,6 +1522,20 @@ class _ProtocolNumberIn(BaseModel):
     coaf_protocol_number: str
 
 
+class ReportFilingContractOut(BaseModel):
+    channel: str
+    mode: str
+    submit_endpoint: str
+    protocol_endpoint: str
+    required_decision: str
+    maker_checker_required: bool
+    protocol_required_post_submit: bool
+    required_chain_fields: list[str]
+    supported_status_flow: list[str]
+    api_submission_available: bool
+    notes: list[str]
+
+
 @router.get("/cases/{case_id}/report-packages/{rp_id}/chain-of-custody", tags=["cases"])
 async def get_report_package_chain_of_custody(
     case_id: str,
@@ -1596,6 +1610,52 @@ async def get_report_package_chain_of_custody(
         },
         "filed_at": rp.filed_at,
     }
+
+
+@router.get("/cases/{case_id}/report-filing-contract", response_model=ReportFilingContractOut, tags=["cases"])
+async def get_report_filing_contract(
+    case_id: str,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Expõe contrato operacional de filing do report package para o caso."""
+    c = await db.get(Case, case_id)
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Caso não encontrado")
+
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "VIEW_REPORT_FILING_CONTRACT",
+        "Case",
+        case_id,
+        after={"channel": "MANUAL_PORTAL", "mode": "manual"},
+    )
+    await db.commit()
+
+    return ReportFilingContractOut(
+        channel="MANUAL_PORTAL",
+        mode="manual",
+        submit_endpoint="POST /cases/{case_id}/report-package/submit",
+        protocol_endpoint="PATCH /cases/{case_id}/report-packages/{rp_id}/protocol-number",
+        required_decision="FILE_SAR",
+        maker_checker_required=True,
+        protocol_required_post_submit=True,
+        required_chain_fields=[
+            "report_payload_sha256",
+            "xml_sha256",
+            "xml_path",
+            "tracking_id",
+        ],
+        supported_status_flow=["DRAFT", "FINAL", "FILED"],
+        api_submission_available=False,
+        notes=[
+            "A submissão é registrada internamente com channel=MANUAL_PORTAL.",
+            "Após submissão no portal Siscoaf, registrar coaf_protocol_number para fechar a trilha.",
+            "Quando API oficial COAF existir, o canal poderá mudar para integração automática.",
+        ],
+    )
 
 
 @router.get("/cases/{case_id}/reconciliation", tags=["cases"])

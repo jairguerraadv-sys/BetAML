@@ -422,6 +422,16 @@ Regras aplicadas:
 - o último pacote precisa ter `decisionLegacy=FILE_SAR`
 - o mesmo usuário que gerou o pacote não pode submetê-lo
 
+### Consultar contrato operacional de filing
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/cases/<case-id>/report-filing-contract"
+```
+
+- Expõe canal atual (`MANUAL_PORTAL`), requisitos de maker-checker e campos mínimos de cadeia de custódia.
+- Útil para runbook e auditoria quando houver mudança de processo (manual -> integração automática).
+
 ### Validar cadeia de custódia do ReportPackage
 
 ```bash
