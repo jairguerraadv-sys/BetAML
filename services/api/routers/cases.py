@@ -1551,6 +1551,85 @@ class ReportFilingStatusOut(BaseModel):
     warnings: list[str]
 
 
+class ReportFilingQueueItemOut(BaseModel):
+    case_id: str
+    report_package_id: str
+    report_status: str
+    report_decision: str | None
+    requires_submission: bool
+    protocol_registered: bool
+    coaf_protocol_number: str | None
+    days_since_report_created: int | None
+    days_since_filed: int | None
+    deadline_state: str
+    warnings: list[str]
+
+
+class ReportFilingQueueOut(BaseModel):
+    total_items: int
+    deadline_state_counts: dict[str, int]
+    items: list[ReportFilingQueueItemOut]
+
+
+def _compute_filing_state_for_report_package(rp: ReportPackage) -> tuple[
+    str | None,
+    bool,
+    bool,
+    str | None,
+    int | None,
+    int | None,
+    str,
+    list[str],
+]:
+    if rp and isinstance(rp.payload, dict):
+        report_decision = rp.payload.get("decisionLegacy") or rp.payload.get("decision") or rp.decision
+    else:
+        report_decision = rp.decision
+
+    report_status = str(rp.status)
+    requires_submission = bool(str(report_decision) in {"FILE_SAR", "REPORT"} and report_status != "FILED")
+    protocol_number = str(rp.coaf_protocol_number).strip() if rp.coaf_protocol_number else None
+    protocol_registered = bool(protocol_number)
+
+    now = datetime.now(UTC)
+    days_since_report_created: int | None = None
+    if rp.created_at:
+        created_at = rp.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        days_since_report_created = max(0, (now - created_at).days)
+
+    days_since_filed: int | None = None
+    if rp.filed_at:
+        filed_at = rp.filed_at
+        if filed_at.tzinfo is None:
+            filed_at = filed_at.replace(tzinfo=UTC)
+        days_since_filed = max(0, (now - filed_at).days)
+
+    deadline_state = "OK"
+    warnings: list[str] = []
+    if requires_submission and days_since_report_created is not None:
+        if days_since_report_created >= 30:
+            deadline_state = "BREACH"
+            warnings.append("Prazo regulatório excedido para submissão do report package FILE_SAR.")
+        elif days_since_report_created >= 23:
+            deadline_state = "WARNING"
+            warnings.append("Prazo regulatório próximo do vencimento para submissão do report package FILE_SAR.")
+    if report_status == "FILED" and not protocol_registered:
+        warnings.append("Report package FILED sem coaf_protocol_number registrado.")
+
+    return (
+        str(report_decision) if report_decision is not None else None,
+        requires_submission,
+        protocol_registered,
+        protocol_number,
+        days_since_report_created,
+        days_since_filed,
+        deadline_state,
+        warnings,
+    )
+
+
 @router.get("/cases/{case_id}/report-packages/{rp_id}/chain-of-custody", tags=["cases"])
 async def get_report_package_chain_of_custody(
     case_id: str,
@@ -1693,44 +1772,28 @@ async def get_report_filing_status(
         .order_by(ReportPackage.created_at.desc())
     )).scalars().first()
 
-    if rp and isinstance(rp.payload, dict):
-        report_decision = rp.payload.get("decisionLegacy") or rp.payload.get("decision") or rp.decision
+    if rp is None:
+        report_decision = None
+        report_status = None
+        requires_submission = False
+        protocol_registered = False
+        protocol_number = None
+        days_since_report_created = None
+        days_since_filed = None
+        deadline_state = "NO_REPORT"
+        warnings: list[str] = []
     else:
-        report_decision = rp.decision if rp else None
-
-    report_status = str(rp.status) if rp else None
-    requires_submission = bool(rp and str(report_decision) in {"FILE_SAR", "REPORT"} and report_status != "FILED")
-    protocol_number = str(rp.coaf_protocol_number).strip() if rp and rp.coaf_protocol_number else None
-    protocol_registered = bool(protocol_number)
-
-    now = datetime.now(UTC)
-    days_since_report_created: int | None = None
-    if rp and rp.created_at:
-        created_at = rp.created_at
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=UTC)
-        days_since_report_created = max(0, (now - created_at).days)
-
-    days_since_filed: int | None = None
-    if rp and rp.filed_at:
-        filed_at = rp.filed_at
-        if filed_at.tzinfo is None:
-            filed_at = filed_at.replace(tzinfo=UTC)
-        days_since_filed = max(0, (now - filed_at).days)
-
-    deadline_state = "NO_REPORT"
-    warnings: list[str] = []
-    if rp is not None:
-        deadline_state = "OK"
-        if requires_submission and days_since_report_created is not None:
-            if days_since_report_created >= 30:
-                deadline_state = "BREACH"
-                warnings.append("Prazo regulatório excedido para submissão do report package FILE_SAR.")
-            elif days_since_report_created >= 23:
-                deadline_state = "WARNING"
-                warnings.append("Prazo regulatório próximo do vencimento para submissão do report package FILE_SAR.")
-        if report_status == "FILED" and not protocol_registered:
-            warnings.append("Report package FILED sem coaf_protocol_number registrado.")
+        (
+            report_decision,
+            requires_submission,
+            protocol_registered,
+            protocol_number,
+            days_since_report_created,
+            days_since_filed,
+            deadline_state,
+            warnings,
+        ) = _compute_filing_state_for_report_package(rp)
+        report_status = str(rp.status)
 
     await write_audit(
         db,
@@ -1761,6 +1824,96 @@ async def get_report_filing_status(
         days_since_filed=days_since_filed,
         deadline_state=deadline_state,
         warnings=warnings,
+    )
+
+
+@router.get("/report-packages/filing-queue", response_model=ReportFilingQueueOut, tags=["cases"])
+async def get_report_filing_queue(
+    limit: int = Query(50, ge=1, le=200),
+    include_all_versions: bool = Query(False),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lista fila operacional de filing COAF do tenant, priorizada por risco de prazo."""
+    scan_limit = min(1000, max(limit, limit * 5))
+    rows = (await db.execute(
+        select(ReportPackage)
+        .where(ReportPackage.tenant_id == current_user.tenant_id)
+        .order_by(ReportPackage.created_at.desc())
+        .limit(scan_limit)
+    )).scalars().all()
+
+    selected: list[ReportPackage] = []
+    seen_case_ids: set[str] = set()
+    for rp in rows:
+        case_key = str(rp.case_id)
+        if include_all_versions or case_key not in seen_case_ids:
+            selected.append(rp)
+            seen_case_ids.add(case_key)
+
+    items: list[ReportFilingQueueItemOut] = []
+    for rp in selected:
+        (
+            report_decision,
+            requires_submission,
+            protocol_registered,
+            protocol_number,
+            days_since_report_created,
+            days_since_filed,
+            deadline_state,
+            warnings,
+        ) = _compute_filing_state_for_report_package(rp)
+        items.append(
+            ReportFilingQueueItemOut(
+                case_id=str(rp.case_id),
+                report_package_id=str(rp.id),
+                report_status=str(rp.status),
+                report_decision=report_decision,
+                requires_submission=requires_submission,
+                protocol_registered=protocol_registered,
+                coaf_protocol_number=protocol_number,
+                days_since_report_created=days_since_report_created,
+                days_since_filed=days_since_filed,
+                deadline_state=deadline_state,
+                warnings=warnings,
+            )
+        )
+
+    priority = {"BREACH": 0, "WARNING": 1, "OK": 2}
+    items.sort(
+        key=lambda it: (
+            priority.get(it.deadline_state, 9),
+            -(it.days_since_report_created or 0),
+            it.case_id,
+        )
+    )
+    items = items[:limit]
+
+    counts = {"BREACH": 0, "WARNING": 0, "OK": 0}
+    for item in items:
+        if item.deadline_state in counts:
+            counts[item.deadline_state] += 1
+
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "VIEW_REPORT_FILING_QUEUE",
+        "ReportPackage",
+        None,
+        after={
+            "limit": limit,
+            "include_all_versions": include_all_versions,
+            "returned_items": len(items),
+            "deadline_state_counts": counts,
+        },
+    )
+    await db.commit()
+
+    return ReportFilingQueueOut(
+        total_items=len(items),
+        deadline_state_counts=counts,
+        items=items,
     )
 
 

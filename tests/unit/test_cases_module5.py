@@ -599,6 +599,107 @@ async def test_get_report_filing_status_warns_when_filed_without_protocol():
 
 
 @pytest.mark.asyncio
+async def test_get_report_filing_queue_prioritizes_breach_and_warning():
+    from routers.cases import get_report_filing_queue
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+
+    now = datetime.now(UTC)
+    rp_breach = SimpleNamespace(
+        id="rp-breach",
+        tenant_id="t1",
+        case_id="case-a",
+        status="FINAL",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=35),
+        filed_at=None,
+        coaf_protocol_number=None,
+    )
+    rp_warning = SimpleNamespace(
+        id="rp-warning",
+        tenant_id="t1",
+        case_id="case-b",
+        status="FINAL",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=24),
+        filed_at=None,
+        coaf_protocol_number=None,
+    )
+    rp_ok = SimpleNamespace(
+        id="rp-ok",
+        tenant_id="t1",
+        case_id="case-c",
+        status="FILED",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=3),
+        filed_at=now - timedelta(days=2),
+        coaf_protocol_number="COAF-123",
+    )
+
+    result_obj = MagicMock()
+    result_obj.scalars.return_value.all.return_value = [rp_ok, rp_warning, rp_breach]
+    db.execute = AsyncMock(return_value=result_obj)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        result = await get_report_filing_queue(limit=10, include_all_versions=False, current_user=user, db=db)
+
+    assert result.total_items == 3
+    assert result.items[0].deadline_state == "BREACH"
+    assert result.items[1].deadline_state == "WARNING"
+    assert result.deadline_state_counts["BREACH"] == 1
+    assert result.deadline_state_counts["WARNING"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_report_filing_queue_deduplicates_latest_report_per_case():
+    from routers.cases import get_report_filing_queue
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+    now = datetime.now(UTC)
+
+    rp_latest = SimpleNamespace(
+        id="rp-new",
+        tenant_id="t1",
+        case_id="case-x",
+        status="FINAL",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=2),
+        filed_at=None,
+        coaf_protocol_number=None,
+    )
+    rp_old = SimpleNamespace(
+        id="rp-old",
+        tenant_id="t1",
+        case_id="case-x",
+        status="FINAL",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=12),
+        filed_at=None,
+        coaf_protocol_number=None,
+    )
+
+    result_obj = MagicMock()
+    # Ordem desc por created_at: newest first (como o endpoint consulta)
+    result_obj.scalars.return_value.all.return_value = [rp_latest, rp_old]
+    db.execute = AsyncMock(return_value=result_obj)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        dedup = await get_report_filing_queue(limit=10, include_all_versions=False, current_user=user, db=db)
+        all_versions = await get_report_filing_queue(limit=10, include_all_versions=True, current_user=user, db=db)
+
+    assert dedup.total_items == 1
+    assert dedup.items[0].report_package_id == "rp-new"
+    assert all_versions.total_items == 2
+
+
+@pytest.mark.asyncio
 async def test_add_case_comment_with_mentions_dispatches_notifications():
     """@mentions in a comment must each produce a CASE_MENTION Notification."""
     from routers.cases import add_case_comment

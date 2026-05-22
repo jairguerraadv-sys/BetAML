@@ -442,6 +442,16 @@ curl -H "Authorization: Bearer <token>" \
 - Retorna `deadline_state` (`OK`, `WARNING`, `BREACH` ou `NO_REPORT`) para o pacote mais recente do caso.
 - Expõe `requires_submission`, `protocol_registered` e `warnings[]` para triagem rápida de pendências regulatórias.
 
+### Fila operacional de filing do tenant
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/report-packages/filing-queue?limit=50"
+```
+
+- Ordena por criticidade de prazo (`BREACH` -> `WARNING` -> `OK`) e idade do pacote.
+- Por padrão traz apenas a versão mais recente por caso; use `include_all_versions=true` para auditoria detalhada.
+
 ### Validar cadeia de custódia do ReportPackage
 
 ```bash
