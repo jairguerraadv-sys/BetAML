@@ -352,6 +352,109 @@
         ]
       }
     },
+    "/alerts/export": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Exportar alertas como CSV (m\u00e1x. 5.000 registros)",
+        "description": "Exporta at\u00e9 5.000 alertas filtrados como CSV para auditoria e revis\u00e3o offline.\n\nCampos PII (nome, CPF, etc.) s\u00e3o deliberadamente exclu\u00eddos da exporta\u00e7\u00e3o\n\u2014 apenas IDs opacos s\u00e3o inclu\u00eddos (LGPD Art. 46).\nA opera\u00e7\u00e3o \u00e9 auditada via write_audit com a\u00e7\u00e3o EXPORT_ALERTS_CSV.",
+        "operationId": "export_alerts_csv_alerts_export_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Severity"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "date_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date From"
+            }
+          },
+          {
+            "name": "date_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/alerts/{alert_id}": {
       "get": {
         "tags": [
@@ -428,6 +531,107 @@
                 "schema": {
                   "$ref": "#/components/schemas/AlertExplainabilityOut"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/alerts/bulk-triage": {
+      "post": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Triagem em lote de m\u00faltiplos alertas",
+        "description": "Triagem em lote: aplica disposition e nota a at\u00e9 100 alertas de uma vez.",
+        "operationId": "bulk_triage_alerts_alerts_bulk_triage_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkTriageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/alerts/{alert_id}/priority": {
+      "patch": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Alterar prioridade de um alerta",
+        "description": "Permite ao analista promover/rebaixar a prioridade de um alerta manualmente.",
+        "operationId": "update_alert_priority_alerts__alert_id__priority_patch",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "alert_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Alert Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertPriorityUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -643,6 +847,24 @@
               "default": 50,
               "title": "Limit"
             }
+          },
+          {
+            "name": "product_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtrar apostas por modalidade (SPORTSBOOK, CASINO_LIVE, SLOT, ...)",
+              "title": "Product Type"
+            },
+            "description": "Filtrar apostas por modalidade (SPORTSBOOK, CASINO_LIVE, SLOT, ...)"
           }
         ],
         "responses": {
@@ -1477,6 +1699,55 @@
         }
       }
     },
+    "/cases/{case_id}/evidence/{event_id}/download": {
+      "get": {
+        "tags": [
+          "cases"
+        ],
+        "summary": "Download Case Evidence",
+        "operationId": "download_case_evidence_cases__case_id__evidence__event_id__download_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/cases/{case_id}/report-package": {
       "post": {
         "tags": [
@@ -1510,7 +1781,13 @@
                   }
                 ],
                 "default": {
-                  "decision": "PENDING"
+                  "decision": "PENDING",
+                  "occurrence_codes": [],
+                  "involvement_types": [
+                    49
+                  ],
+                  "valor_premio": 0.0,
+                  "valor_apostas": 0.0
                 },
                 "title": "Body"
               }
@@ -1756,6 +2033,71 @@
         }
       }
     },
+    "/cases/{case_id}/report-packages/{rp_id}/protocol-number": {
+      "patch": {
+        "tags": [
+          "cases"
+        ],
+        "summary": "Register Coaf Protocol Number",
+        "description": "Registra o n\u00famero de protocolo retornado pelo portal Siscoaf ap\u00f3s a submiss\u00e3o manual.\n\nDeve ser chamado pelo analista logo ap\u00f3s receber a confirma\u00e7\u00e3o do COAF.\nApenas ReportPackages com status=FILED podem receber o n\u00famero de protocolo.",
+        "operationId": "register_coaf_protocol_number_cases__case_id__report_packages__rp_id__protocol_number_patch",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "rp_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rp Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_ProtocolNumberIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/cases/{case_id}/report-package/json": {
       "get": {
         "tags": [
@@ -1867,7 +2209,7 @@
           "cases"
         ],
         "summary": "Download Coaf Xml",
-        "description": "Gera XML de Comunica\u00e7\u00e3o ao COAF conforme Resolu\u00e7\u00e3o COAF 36/2021.\n\nBusca o ReportPackage mais recente do caso para obter a narrativa do analista.\nO CNPJ do operador \u00e9 lido de Tenant.settings[\"cnpj\"]; se ausente, usa\n\"00000000000000\" e registra warning no log.\n\nReturns:\n    application/xml \u2014 arquivo para download.",
+        "description": "Gera XML de Comunica\u00e7\u00e3o ao COAF conforme Resolu\u00e7\u00e3o COAF 40/2021\n(formato COS v2.1 \u2014 Comunicado Siscoaf 97 / Portaria SPA/MF 1.143/2024).\n\nBusca o ReportPackage mais recente do caso para obter payload completo\n(narrativa, siscoaf codes, transa\u00e7\u00f5es). O CPF \u00e9 inclu\u00eddo sem m\u00e1scara no\nXML conforme exige o COAF. O CNPJ do operador \u00e9 lido de ``Tenant.cnpj``\nou ``Tenant.settings[\"cnpj\"]``.\n\nReturns:\n    application/xml \u2014 arquivo para download/submiss\u00e3o ao Siscoaf.",
         "operationId": "download_coaf_xml_cases__case_id__report_package_coaf_xml_get",
         "security": [
           {
@@ -1914,7 +2256,7 @@
           "cases"
         ],
         "summary": "Download Coaf Xml",
-        "description": "Gera XML de Comunica\u00e7\u00e3o ao COAF conforme Resolu\u00e7\u00e3o COAF 36/2021.\n\nBusca o ReportPackage mais recente do caso para obter a narrativa do analista.\nO CNPJ do operador \u00e9 lido de Tenant.settings[\"cnpj\"]; se ausente, usa\n\"00000000000000\" e registra warning no log.\n\nReturns:\n    application/xml \u2014 arquivo para download.",
+        "description": "Gera XML de Comunica\u00e7\u00e3o ao COAF conforme Resolu\u00e7\u00e3o COAF 40/2021\n(formato COS v2.1 \u2014 Comunicado Siscoaf 97 / Portaria SPA/MF 1.143/2024).\n\nBusca o ReportPackage mais recente do caso para obter payload completo\n(narrativa, siscoaf codes, transa\u00e7\u00f5es). O CPF \u00e9 inclu\u00eddo sem m\u00e1scara no\nXML conforme exige o COAF. O CNPJ do operador \u00e9 lido de ``Tenant.cnpj``\nou ``Tenant.settings[\"cnpj\"]``.\n\nReturns:\n    application/xml \u2014 arquivo para download/submiss\u00e3o ao Siscoaf.",
         "operationId": "download_coaf_xml_cases__case_id__report_package_xml_get",
         "security": [
           {
@@ -2174,6 +2516,74 @@
               "minimum": 1,
               "default": 10,
               "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cases/{case_id}/timeline": {
+      "get": {
+        "tags": [
+          "cases"
+        ],
+        "summary": "Get Case Timeline",
+        "description": "Timeline de evid\u00eancias do caso cobrindo a janela em torno da data de cria\u00e7\u00e3o.\n\nDiferentemente de /players/{id}/timeline (centrado no player, sem limite de caso),\neste endpoint:\n- ancora a janela na data de cria\u00e7\u00e3o do caso (case.created_at)\n- inclui case_events (audit trail do caso) junto com eventos do player\n- retorna sum\u00e1rio de risk_score ao longo da janela (evolu\u00e7\u00e3o do composite_score)",
+        "operationId": "get_case_timeline_cases__case_id__timeline_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "window_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 365,
+              "minimum": 1,
+              "default": 90,
+              "title": "Window Days"
+            }
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "transactions,bets,devices,alerts,case_events",
+              "title": "Include"
             }
           }
         ],
@@ -3248,6 +3658,51 @@
             }
           }
         }
+      }
+    },
+    "/ingest/backfill": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "Start Backfill",
+        "description": "Inicia importa\u00e7\u00e3o hist\u00f3rica em massa (backfill).\n\nDiferen\u00e7as em rela\u00e7\u00e3o ao reprocessamento normal:\n- Cria IngestJob com ingest_mode='backfill' e is_backfill=True\n- Publica no t\u00f3pico ingest.jobs (mesmo worker), mas com ingest_mode=backfill no envelope\n- O stream_processor e rules_engine l\u00eaem ingest_mode e suprimem cria\u00e7\u00e3o de casos/alertas\n- Ideal para onboarding de novo operador com hist\u00f3rico de meses/anos de dados",
+        "operationId": "start_backfill_ingest_backfill_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackfillRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
       }
     },
     "/ingest/connectors/{connector_name}/parse": {
@@ -4667,6 +5122,24 @@
               "default": 90,
               "title": "Days"
             }
+          },
+          {
+            "name": "product_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtrar por modalidade (SPORTSBOOK, CASINO_LIVE, SLOT, ...)",
+              "title": "Product Type"
+            },
+            "description": "Filtrar por modalidade (SPORTSBOOK, CASINO_LIVE, SLOT, ...)"
           }
         ],
         "responses": {
@@ -4743,8 +5216,68 @@
           "players"
         ],
         "summary": "Get Player Network",
-        "description": "Players relacionados por device_hash ou bank_account_hash partilhados.",
+        "description": "Grafo de rede do player para visualiza\u00e7\u00e3o de clusters e lavagem via intermedi\u00e1rios.\n\nRetorna nodes + edges compat\u00edvel com D3-force / Cytoscape.js.\nArestas representam elementos compartilhados: dispositivo, conta banc\u00e1ria ou IP.\n\nCampos de cada n\u00f3:\n  id, external_player_id, risk_score, risk_band, pep_flag, cluster_risk\n\nCampos de cada aresta:\n  source, target, edge_type (device|bank_account|ip), shared_hash_prefix,\n  event_count (quantos eventos compartilhados), weight (0..1)\n\nIndicadores de cluster:\n  total_nodes, total_edges, max_cluster_risk, network_risk_score,\n  has_pep_connection, shared_device_count, shared_bank_count, shared_ip_count",
         "operationId": "get_player_network_players__player_id__network_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "player_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Player Id"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 2,
+              "minimum": 1,
+              "description": "Profundidade do grafo (1=vizinhos diretos, 2=vizinhos de vizinhos)",
+              "default": 1,
+              "title": "Depth"
+            },
+            "description": "Profundidade do grafo (1=vizinhos diretos, 2=vizinhos de vizinhos)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/players/{player_id}/case-alert-history": {
+      "get": {
+        "tags": [
+          "players"
+        ],
+        "summary": "Get Player Case Alert History",
+        "description": "Hist\u00f3rico de casos e alertas anteriores do player para o painel de investiga\u00e7\u00e3o.",
+        "operationId": "get_player_case_alert_history_players__player_id__case_alert_history_get",
         "security": [
           {
             "OAuth2PasswordBearer": []
@@ -4783,14 +5316,299 @@
         }
       }
     },
-    "/players/{player_id}/case-alert-history": {
+    "/players/{player_id}/timeline": {
       "get": {
         "tags": [
           "players"
         ],
-        "summary": "Get Player Case Alert History",
-        "description": "Hist\u00f3rico de casos e alertas anteriores do player para o painel de investiga\u00e7\u00e3o.",
-        "operationId": "get_player_case_alert_history_players__player_id__case_alert_history_get",
+        "summary": "Get Player Timeline",
+        "description": "Linha do tempo cronol\u00f3gica do apostador com blocos por dia.\n\nPar\u00e2metros:\n- window_days: janela retroativa em dias (padr\u00e3o 90)\n- include: tipos de evento desejados (transactions, bets, devices, alerts)",
+        "operationId": "get_player_timeline_players__player_id__timeline_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "player_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Player Id"
+            }
+          },
+          {
+            "name": "window_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 365,
+              "minimum": 1,
+              "default": 90,
+              "title": "Window Days"
+            }
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Tipos de eventos separados por v\u00edrgula",
+              "default": "transactions,bets,devices,alerts",
+              "title": "Include"
+            },
+            "description": "Tipos de eventos separados por v\u00edrgula"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/players/{player_id}/self-exclusion": {
+      "post": {
+        "tags": [
+          "players"
+        ],
+        "summary": "Set Self Exclusion",
+        "description": "Ativa auto-exclus\u00e3o do player (Lei 14.790/2023 Art. 33 e Portaria SPA/MF 1.143/2024).\n\nDefine self_exclusion_flag=True e muda status para SELF_EXCLUDED.\nRequer roles ANALISTA ou GESTOR.",
+        "operationId": "set_self_exclusion_players__player_id__self_exclusion_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "player_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Player Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/_SelfExclusionIn"
+                  }
+                ],
+                "default": {},
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "players"
+        ],
+        "summary": "Clear Self Exclusion",
+        "description": "Remove a auto-exclus\u00e3o do player. Requer role GESTOR.\n\nRetorna status para ACTIVE ap\u00f3s revis\u00e3o manual.",
+        "operationId": "clear_self_exclusion_players__player_id__self_exclusion_delete",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "player_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Player Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/players/{player_id}/deposit-limit": {
+      "patch": {
+        "tags": [
+          "players"
+        ],
+        "summary": "Update Deposit Limit",
+        "description": "Define ou atualiza o limite di\u00e1rio de dep\u00f3sito do player (Lei 14.790/2023 Art. 33).",
+        "operationId": "update_deposit_limit_players__player_id__deposit_limit_patch",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "player_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Player Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_DepositLimitIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/players/{player_id}/kyc-events": {
+      "post": {
+        "tags": [
+          "players"
+        ],
+        "summary": "Create Kyc Event",
+        "description": "Registra um evento KYC para o player.\n\nTipos comuns: DOCUMENT_CHECK, FACIAL_BIOMETRY, PEP_CHECK, SANCTIONS_CHECK,\nADDRESS_VERIFICATION, PHONE_VERIFICATION, MANUAL_APPROVAL, MANUAL_REJECTION.\n\nQuando status=APPROVED: atualiza player.status para ACTIVE (se estava PENDING_KYC).\nQuando status=REJECTED: atualiza player.status para PENDING_KYC.",
+        "operationId": "create_kyc_event_players__player_id__kyc_events_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "player_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Player Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_KycEventIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "players"
+        ],
+        "summary": "List Kyc Events",
+        "description": "Lista todos os eventos KYC do player em ordem cronol\u00f3gica decrescente.",
+        "operationId": "list_kyc_events_players__player_id__kyc_events_get",
         "security": [
           {
             "OAuth2PasswordBearer": []
@@ -5076,6 +5894,51 @@
         },
         "responses": {
           "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/rules/preview-dsl": {
+      "post": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Preview Dsl",
+        "description": "Pr\u00e9-visualiza quantos eventos uma DSL matcharia nos \u00faltimos N dias,\nsem criar a regra permanentemente no banco.",
+        "operationId": "preview_dsl_rules_preview_dsl_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewDslRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -5883,7 +6746,7 @@
           "admin"
         ],
         "summary": "Create Tenant",
-        "description": "Onboarding de novo tenant via API.\n\nCria automaticamente:\n- Tenant com slug \u00fanico\n- Usu\u00e1rio ADMIN inicial\n- ScoringConfig com thresholds padr\u00e3o\n- 5 regras DSL de partida\n\nRequer role ADMIN (multi-tenant hierarchy \u2014 ADMIN de qualquer tenant pode criar tenants em dev).\nEm produ\u00e7\u00e3o, considere restringir para SUPER_ADMIN dedicado.",
+        "description": "Onboarding de novo tenant via API.\n\nCria automaticamente:\n- Tenant com slug \u00fanico\n- Usu\u00e1rio ADMIN inicial\n- ScoringConfig com thresholds padr\u00e3o\n\nRequer role ADMIN (multi-tenant hierarchy \u2014 ADMIN de qualquer tenant pode criar tenants em dev).\nEm produ\u00e7\u00e3o, considere restringir para SUPER_ADMIN dedicado.",
         "operationId": "create_tenant_admin_tenants_post",
         "requestBody": {
           "content": {
@@ -7026,6 +7889,52 @@
         }
       }
     },
+    "/alerts/{alert_id}/shap": {
+      "post": {
+        "tags": [
+          "ml"
+        ],
+        "summary": "Compute And Persist Shap",
+        "description": "Computa SHAP values via ML Service e persiste na evid\u00eancia do alerta.\n\nGarante trilha de auditoria: o resultado SHAP fica armazenado em\nalert.evidence[\"shap_values\"] para ser recuperado pelo endpoint\nGET /alerts/{id}/explainability sem nova chamada ao ML Service.\n\nErros de comunica\u00e7\u00e3o com o ML Service retornam 503 (n\u00e3o 500).",
+        "operationId": "compute_and_persist_shap_alerts__alert_id__shap_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "alert_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Alert Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/notifications": {
       "get": {
         "tags": [
@@ -7164,7 +8073,7 @@
           "search"
         ],
         "summary": "Global search",
-        "description": "Search players, cases and alerts across the current tenant.\nMatches on:\n - Players: external_player_id (prefix), name (partial) and CPF digits (best effort)\n - Cases: reference_number (prefix), title (partial)\n - Alerts: alert_id (prefix), alert_type (partial)",
+        "description": "Search players, cases and alerts across the current tenant.\nMatches on:\n - Players: external_player_id (prefix), name (partial), CPF (HMAC index O(1))\n - Cases: reference_number (prefix), title (partial)\n - Alerts: alert_id (prefix), alert_type (partial)",
         "operationId": "global_search_search_get",
         "security": [
           {
@@ -7214,6 +8123,56 @@
         "summary": "Dashboard KPI counts",
         "description": "Returns pre-aggregated counts for the dashboard KPI cards.\nSingle DB call \u2014 avoids client-side filtering of paginated lists.",
         "operationId": "dashboard_stats_stats_dashboard_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/stats/pld-kpis": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "KPIs PLD/FT para analista de compliance",
+        "description": "KPIs operacionais do analista de PLD/FT \u2014 m\u00e9tricas que realmente importam.\n\nResponde em uma \u00fanica chamada ao banco com:\n- Funil de comunica\u00e7\u00e3o COAF (alertas \u2192 casos \u2192 RIF enviados)\n- Taxa de encerramento e tempo m\u00e9dio de resolu\u00e7\u00e3o de casos (30d)\n- Efici\u00eancia de detec\u00e7\u00e3o: precision (TP/FP ratio) dos \u00faltimos 30d\n- Conformidade de SLA: percentual de casos encerrados dentro do prazo\n- Carga por analista (ADMIN/AML_ANALYST)\n- Regras com mais acionamentos e mais falsos positivos (30d)",
+        "operationId": "pld_kpis_stats_pld_kpis_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/stats/data-quality": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Dashboard de qualidade de dados",
+        "description": "Dashboard de qualidade de dados para o analista de PLD.\n\nConsolida em uma \u00fanica chamada:\n- Null ratios por feature (\u00faltimos 7d \u2014 feature_snapshots)\n- Drift score m\u00e9dio/m\u00e1ximo por feature (\u00faltimos 7d)\n- Erros de ingest\u00e3o por source_system (\u00faltimos 30d)\n- Frescor dos dados: \u00faltimo registro ingerido por source_system\n- Jobs com taxa de erro > 10% nos \u00faltimos 7d",
+        "operationId": "data_quality_stats_data_quality_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -7519,6 +8478,101 @@
             }
           }
         }
+      }
+    },
+    "/sanctions/check": {
+      "post": {
+        "tags": [
+          "sanctions"
+        ],
+        "summary": "Check Sanctions",
+        "description": "Verifica se o CPF HMAC ou nome informado constam em alguma lista de san\u00e7\u00f5es/PEP.\n\nPelo menos um campo (cpf_hmac ou name) deve ser informado.\nA consulta \u00e9 realizada contra o \u00edndice em mem\u00f3ria \u2014 sem I/O ao banco.",
+        "operationId": "check_sanctions_sanctions_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SanctionsCheckIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/sanctions/status": {
+      "get": {
+        "tags": [
+          "sanctions"
+        ],
+        "summary": "Sanctions Status",
+        "description": "Retorna o estado atual do checker de san\u00e7\u00f5es: entradas carregadas e \u00faltima recarga.",
+        "operationId": "sanctions_status_sanctions_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/sanctions/reload": {
+      "post": {
+        "tags": [
+          "sanctions"
+        ],
+        "summary": "Force Reload Sanctions",
+        "description": "For\u00e7a a recarga imediata do CSV de san\u00e7\u00f5es/PEP.\n\nNormalmente executado automaticamente via job di\u00e1rio \u00e0s 06:00 UTC.\nUse este endpoint ap\u00f3s atualizar o arquivo CSV sem aguardar o pr\u00f3ximo ciclo.",
+        "operationId": "force_reload_sanctions_sanctions_reload_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
       }
     }
   },
@@ -7863,6 +8917,37 @@
         ],
         "title": "AlertLabelIn"
       },
+      "AlertPriorityUpdate": {
+        "properties": {
+          "priority": {
+            "type": "string",
+            "enum": [
+              "LOW",
+              "MEDIUM",
+              "HIGH",
+              "CRITICAL"
+            ],
+            "title": "Priority"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "priority"
+        ],
+        "title": "AlertPriorityUpdate"
+      },
       "ApiKeyCreate": {
         "properties": {
           "name": {
@@ -8157,6 +9242,67 @@
         ],
         "title": "AssignRequest"
       },
+      "BackfillRequest": {
+        "properties": {
+          "source_system": {
+            "type": "string",
+            "title": "Source System"
+          },
+          "file_reference": {
+            "type": "string",
+            "title": "File Reference"
+          },
+          "mapping_config_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mapping Config Id"
+          },
+          "date_range_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Range Start"
+          },
+          "date_range_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Range End"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": "historical_import"
+          },
+          "suppress_alerts": {
+            "type": "boolean",
+            "title": "Suppress Alerts",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_system",
+          "file_reference"
+        ],
+        "title": "BackfillRequest"
+      },
       "Body_ingest_file_ingest_file_post": {
         "properties": {
           "file": {
@@ -8228,6 +9374,17 @@
             "type": "string",
             "title": "Entity Type",
             "default": "TRANSACTION"
+          },
+          "mapping_config_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mapping Config Id"
           }
         },
         "type": "object",
@@ -8268,6 +9425,47 @@
           "file"
         ],
         "title": "Body_upload_list_csv_player_lists__list_id__upload_csv_post"
+      },
+      "BulkTriageRequest": {
+        "properties": {
+          "alert_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Alert Ids"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "IN_REVIEW",
+              "CONFIRMED",
+              "DISMISSED",
+              "FALSE_POSITIVE"
+            ],
+            "title": "Disposition"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "alert_ids",
+          "disposition"
+        ],
+        "title": "BulkTriageRequest"
       },
       "CaseCommentIn": {
         "properties": {
@@ -8692,6 +9890,35 @@
         },
         "type": "object",
         "title": "CompoundRuleUpdate"
+      },
+      "DLQBreakdownOut": {
+        "properties": {
+          "source_system": {
+            "type": "string",
+            "title": "Source System"
+          },
+          "entity_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Type"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_system",
+          "count"
+        ],
+        "title": "DLQBreakdownOut"
       },
       "ExternalValidationRequestIn": {
         "properties": {
@@ -9445,14 +10672,29 @@
             "default": "json"
           },
           "sample": {
-            "type": "object",
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Sample"
+          },
+          "sample_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Text"
           }
         },
         "type": "object",
-        "required": [
-          "sample"
-        ],
         "title": "MappingPreviewIn"
       },
       "MappingTestIn": {
@@ -10322,6 +11564,45 @@
             "type": "integer",
             "title": "Unresolved Dlq Events"
           },
+          "dlq_breakdown": {
+            "items": {
+              "$ref": "#/components/schemas/DLQBreakdownOut"
+            },
+            "type": "array",
+            "title": "Dlq Breakdown"
+          },
+          "ingest_rate_limit_per_min": {
+            "type": "integer",
+            "title": "Ingest Rate Limit Per Min"
+          },
+          "ws_active_connections": {
+            "type": "integer",
+            "title": "Ws Active Connections"
+          },
+          "ws_queued_messages": {
+            "type": "integer",
+            "title": "Ws Queued Messages"
+          },
+          "ws_peak_queue_depth": {
+            "type": "integer",
+            "title": "Ws Peak Queue Depth"
+          },
+          "ws_backpressure_events": {
+            "type": "integer",
+            "title": "Ws Backpressure Events"
+          },
+          "ws_last_backpressure_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ws Last Backpressure At"
+          },
           "stale_models": {
             "type": "integer",
             "title": "Stale Models"
@@ -10352,6 +11633,12 @@
           "kafka_consumer_lag",
           "ingest_error_rate_24h_percent",
           "unresolved_dlq_events",
+          "dlq_breakdown",
+          "ingest_rate_limit_per_min",
+          "ws_active_connections",
+          "ws_queued_messages",
+          "ws_peak_queue_depth",
+          "ws_backpressure_events",
           "stale_models",
           "alerts"
         ],
@@ -10770,6 +12057,36 @@
         "type": "object",
         "title": "PreviewBandCount"
       },
+      "PreviewDslRequest": {
+        "properties": {
+          "condition_dsl": {
+            "type": "string",
+            "title": "Condition Dsl"
+          },
+          "severity": {
+            "type": "string",
+            "title": "Severity",
+            "default": "MEDIUM"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope",
+            "default": "TRANSACTION"
+          },
+          "days": {
+            "type": "integer",
+            "maximum": 90.0,
+            "minimum": 1.0,
+            "title": "Days",
+            "default": 30
+          }
+        },
+        "type": "object",
+        "required": [
+          "condition_dsl"
+        ],
+        "title": "PreviewDslRequest"
+      },
       "ReplayIngestErrorRequest": {
         "properties": {
           "corrected_payload": {
@@ -10797,6 +12114,22 @@
               }
             ],
             "title": "Mapping Config Id"
+          },
+          "mapping_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mapping Version Id"
+          },
+          "apply_mapping": {
+            "type": "boolean",
+            "title": "Apply Mapping",
+            "default": true
           },
           "resolve_original": {
             "type": "boolean",
@@ -10846,6 +12179,48 @@
             ],
             "title": "Decision",
             "default": "PENDING"
+          },
+          "occurrence_codes": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Occurrence Codes",
+            "description": "C\u00f3digos de ocorr\u00eancia Siscoaf (1407\u20131428). Obrigat\u00f3rio para decision=FILE_SAR."
+          },
+          "involvement_types": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Involvement Types",
+            "description": "Tipos de envolvimento Siscoaf: 1=Titular, 8=Outros, 49=Apostador, 50=Usu\u00e1rio de Plataforma."
+          },
+          "valor_premio": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Valor Premio",
+            "description": "Valor do pr\u00eamio recebido pelo apostador (R$). \u2265 0.",
+            "default": 0.0
+          },
+          "valor_apostas": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Valor Apostas",
+            "description": "Valor total das apostas no per\u00edodo analisado (R$). \u2265 0.",
+            "default": 0.0
+          },
+          "informacoes_adicionais": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Informacoes Adicionais",
+            "description": "Informa\u00e7\u00f5es adicionais obrigat\u00f3rias para todos os c\u00f3digos de ocorr\u00eancia."
           }
         },
         "type": "object",
@@ -11156,6 +12531,34 @@
         },
         "type": "object",
         "title": "RuleUpdate"
+      },
+      "SanctionsCheckIn": {
+        "properties": {
+          "cpf_hmac": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpf Hmac"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "title": "SanctionsCheckIn"
       },
       "ScoringConfigOut": {
         "properties": {
@@ -11880,6 +13283,13 @@
             "type": "string",
             "title": "Role"
           },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
           "tenant_id": {
             "type": "string",
             "title": "Tenant Id"
@@ -11889,6 +13299,7 @@
         "required": [
           "access_token",
           "role",
+          "roles",
           "tenant_id"
         ],
         "title": "TokenResponse"
@@ -12079,6 +13490,76 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "_DepositLimitIn": {
+        "properties": {
+          "deposit_limit_daily": {
+            "type": "number",
+            "title": "Deposit Limit Daily"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deposit_limit_daily"
+        ],
+        "title": "_DepositLimitIn"
+      },
+      "_KycEventIn": {
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider",
+            "default": "manual"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "PENDING"
+          },
+          "payload": {
+            "type": "object",
+            "title": "Payload"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event_type"
+        ],
+        "title": "_KycEventIn"
+      },
+      "_ProtocolNumberIn": {
+        "properties": {
+          "coaf_protocol_number": {
+            "type": "string",
+            "title": "Coaf Protocol Number"
+          }
+        },
+        "type": "object",
+        "required": [
+          "coaf_protocol_number"
+        ],
+        "title": "_ProtocolNumberIn"
+      },
+      "_SelfExclusionIn": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "title": "_SelfExclusionIn"
       }
     },
     "securitySchemes": {
