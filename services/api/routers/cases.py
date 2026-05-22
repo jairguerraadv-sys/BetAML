@@ -1571,6 +1571,16 @@ class ReportFilingQueueOut(BaseModel):
     items: list[ReportFilingQueueItemOut]
 
 
+class ReportFilingOverviewOut(BaseModel):
+    total_cases_with_reports: int
+    requires_submission_count: int
+    missing_protocol_count: int
+    deadline_state_counts: dict[str, int]
+    oldest_pending_submission_days: int | None
+    top_breach_case_ids: list[str]
+    truncated: bool
+
+
 def _compute_filing_state_for_report_package(rp: ReportPackage) -> tuple[
     str | None,
     bool,
@@ -1914,6 +1924,95 @@ async def get_report_filing_queue(
         total_items=len(items),
         deadline_state_counts=counts,
         items=items,
+    )
+
+
+@router.get("/report-packages/filing-overview", response_model=ReportFilingOverviewOut, tags=["cases"])
+async def get_report_filing_overview(
+    include_all_versions: bool = Query(False),
+    scan_limit: int = Query(5000, ge=100, le=10000),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retorna visão agregada do filing COAF para o tenant (SLA/protocolo/pior risco)."""
+    rows = (await db.execute(
+        select(ReportPackage)
+        .where(ReportPackage.tenant_id == current_user.tenant_id)
+        .order_by(ReportPackage.created_at.desc())
+        .limit(scan_limit)
+    )).scalars().all()
+
+    selected: list[ReportPackage] = []
+    seen_case_ids: set[str] = set()
+    for rp in rows:
+        case_key = str(rp.case_id)
+        if include_all_versions or case_key not in seen_case_ids:
+            selected.append(rp)
+            seen_case_ids.add(case_key)
+
+    deadline_state_counts = {"BREACH": 0, "WARNING": 0, "OK": 0}
+    requires_submission_count = 0
+    missing_protocol_count = 0
+    oldest_pending_submission_days: int | None = None
+    breach_case_ids: list[str] = []
+
+    for rp in selected:
+        (
+            _report_decision,
+            requires_submission,
+            protocol_registered,
+            _protocol_number,
+            days_since_report_created,
+            _days_since_filed,
+            deadline_state,
+            _warnings,
+        ) = _compute_filing_state_for_report_package(rp)
+
+        if deadline_state in deadline_state_counts:
+            deadline_state_counts[deadline_state] += 1
+
+        if requires_submission:
+            requires_submission_count += 1
+            if days_since_report_created is not None:
+                if oldest_pending_submission_days is None or days_since_report_created > oldest_pending_submission_days:
+                    oldest_pending_submission_days = days_since_report_created
+
+        if str(rp.status) == "FILED" and not protocol_registered:
+            missing_protocol_count += 1
+
+        if deadline_state == "BREACH":
+            breach_case_ids.append(str(rp.case_id))
+
+    top_breach_case_ids = breach_case_ids[:10]
+    truncated = len(rows) >= scan_limit
+
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "VIEW_REPORT_FILING_OVERVIEW",
+        "ReportPackage",
+        None,
+        after={
+            "include_all_versions": include_all_versions,
+            "scan_limit": scan_limit,
+            "selected_items": len(selected),
+            "deadline_state_counts": deadline_state_counts,
+            "requires_submission_count": requires_submission_count,
+            "missing_protocol_count": missing_protocol_count,
+            "truncated": truncated,
+        },
+    )
+    await db.commit()
+
+    return ReportFilingOverviewOut(
+        total_cases_with_reports=len(selected),
+        requires_submission_count=requires_submission_count,
+        missing_protocol_count=missing_protocol_count,
+        deadline_state_counts=deadline_state_counts,
+        oldest_pending_submission_days=oldest_pending_submission_days,
+        top_breach_case_ids=top_breach_case_ids,
+        truncated=truncated,
     )
 
 

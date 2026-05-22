@@ -452,6 +452,16 @@ curl -H "Authorization: Bearer <token>" \
 - Ordena por criticidade de prazo (`BREACH` -> `WARNING` -> `OK`) e idade do pacote.
 - Por padrão traz apenas a versão mais recente por caso; use `include_all_versions=true` para auditoria detalhada.
 
+### Overview agregado de filing (KPI executivo)
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/report-packages/filing-overview"
+```
+
+- Retorna totais agregados de pendência (`requires_submission_count`), protocolo pendente (`missing_protocol_count`) e distribuição de prazo (`deadline_state_counts`).
+- Use para checkpoint diário de operação e para report rápido em war room.
+
 ### Validar cadeia de custódia do ReportPackage
 
 ```bash

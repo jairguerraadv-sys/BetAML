@@ -700,6 +700,94 @@ async def test_get_report_filing_queue_deduplicates_latest_report_per_case():
 
 
 @pytest.mark.asyncio
+async def test_get_report_filing_overview_aggregates_counts():
+    from routers.cases import get_report_filing_overview
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+    now = datetime.now(UTC)
+
+    rp_breach = SimpleNamespace(
+        id="rp-breach",
+        tenant_id="t1",
+        case_id="case-a",
+        status="FINAL",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=31),
+        filed_at=None,
+        coaf_protocol_number=None,
+    )
+    rp_filed_no_protocol = SimpleNamespace(
+        id="rp-filed",
+        tenant_id="t1",
+        case_id="case-b",
+        status="FILED",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=5),
+        filed_at=now - timedelta(days=4),
+        coaf_protocol_number=None,
+    )
+    rp_ok = SimpleNamespace(
+        id="rp-ok",
+        tenant_id="t1",
+        case_id="case-c",
+        status="FILED",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=2),
+        filed_at=now - timedelta(days=1),
+        coaf_protocol_number="COAF-321",
+    )
+
+    result_obj = MagicMock()
+    result_obj.scalars.return_value.all.return_value = [rp_ok, rp_filed_no_protocol, rp_breach]
+    db.execute = AsyncMock(return_value=result_obj)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        result = await get_report_filing_overview(include_all_versions=False, scan_limit=5000, current_user=user, db=db)
+
+    assert result.total_cases_with_reports == 3
+    assert result.requires_submission_count == 1
+    assert result.missing_protocol_count == 1
+    assert result.deadline_state_counts["BREACH"] == 1
+    assert "case-a" in result.top_breach_case_ids
+    assert result.truncated is False
+
+
+@pytest.mark.asyncio
+async def test_get_report_filing_overview_sets_truncated_when_scan_limit_reached():
+    from routers.cases import get_report_filing_overview
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+    now = datetime.now(UTC)
+
+    rp_single = SimpleNamespace(
+        id="rp-1",
+        tenant_id="t1",
+        case_id="case-z",
+        status="FINAL",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=now - timedelta(days=1),
+        filed_at=None,
+        coaf_protocol_number=None,
+    )
+
+    result_obj = MagicMock()
+    result_obj.scalars.return_value.all.return_value = [rp_single]
+    db.execute = AsyncMock(return_value=result_obj)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        result = await get_report_filing_overview(include_all_versions=False, scan_limit=1, current_user=user, db=db)
+
+    assert result.total_cases_with_reports == 1
+    assert result.truncated is True
+
+
+@pytest.mark.asyncio
 async def test_add_case_comment_with_mentions_dispatches_notifications():
     """@mentions in a comment must each produce a CASE_MENTION Notification."""
     from routers.cases import add_case_comment
