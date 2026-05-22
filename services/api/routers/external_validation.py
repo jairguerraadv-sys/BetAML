@@ -31,6 +31,15 @@ class ExternalValidationRequestIn(BaseModel):
     payload: dict = Field(default_factory=dict)
 
 
+class ExternalValidationProviderStatusOut(BaseModel):
+    configured_provider: str
+    provider_url_configured: bool
+    provider_token_configured: bool
+    environment: str
+    mock_allowed: bool
+    timeout_seconds: float
+
+
 IDEMPOTENCY_WINDOW_MINUTES = 10
 MAX_PROVIDER_RETRIES = 3
 _PROVIDER_CB_UNTIL: dict[str, datetime] = {}
@@ -102,6 +111,26 @@ def _serialize_validation(req: ExternalValidationRequest) -> dict:
         "completed_at": req.completed_at,
         "error_message": req.error_message,
     }
+
+
+@router.get("/external-validation/provider-contract", response_model=ExternalValidationProviderStatusOut)
+async def get_external_validation_provider_contract(
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "AUDITOR")),
+) -> ExternalValidationProviderStatusOut:
+    """Expõe o contrato operacional do provider de validação externa.
+
+    O endpoint existe para readiness/go-live: o ambiente deve usar provider real
+    fora de development/test e deixar isso explícito para operação e auditoria.
+    """
+    configured_provider = _VALIDATION_PROVIDER or "mock_identity"
+    return ExternalValidationProviderStatusOut(
+        configured_provider=configured_provider,
+        provider_url_configured=bool(_VALIDATION_PROVIDER_URL),
+        provider_token_configured=bool(_VALIDATION_PROVIDER_TOKEN),
+        environment=_BETAML_ENV,
+        mock_allowed=_BETAML_ENV in {"development", "test"},
+        timeout_seconds=_provider_timeout_seconds(),
+    )
 
 
 async def _set_tenant_context(db: AsyncSession, tenant_id: str) -> None:

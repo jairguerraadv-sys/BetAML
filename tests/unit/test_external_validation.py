@@ -16,6 +16,18 @@ async def test_mock_provider_force_fail(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_external_validation_provider_contract_exposes_runtime_configuration():
+    from routers.external_validation import get_external_validation_provider_contract
+
+    result = await get_external_validation_provider_contract(current_user=_make_user(role="ADMIN"))
+
+    assert result.configured_provider in {"mock_identity", "mock"}
+    assert result.environment in {"development", "test", "staging", "production"}
+    assert result.mock_allowed is True
+    assert result.timeout_seconds >= 1.0
+
+
+@pytest.mark.asyncio
 async def test_history_filters_are_applied():
     from routers.external_validation import list_external_validation_history
 
@@ -43,6 +55,31 @@ async def test_history_filters_are_applied():
 
     assert result["total"] == 0
     assert result["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_request_external_validation_blocks_unknown_non_mock_provider_when_mock_configured():
+    from routers.external_validation import ExternalValidationRequestIn, request_external_validation
+
+    db = AsyncMock()
+    user = _make_user()
+    player = _make_player(player_id="p1", tenant_id="t1")
+
+    db.get = AsyncMock(return_value=player)
+    db.execute = AsyncMock(return_value=MagicMock())
+
+    body = ExternalValidationRequestIn(provider="serasa", validation_type="CPF_IDENTITY", payload={})
+
+    with pytest.raises(HTTPException) as exc:
+        await request_external_validation(
+            player_id="p1",
+            background_tasks=BackgroundTasks(),
+            body=body,
+            current_user=user,
+            db=db,
+        )
+
+    assert exc.value.status_code == 400
 
 
 def _make_user(user_id: str = "u1", tenant_id: str = "t1", role: str = "AML_ANALYST"):
