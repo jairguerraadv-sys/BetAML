@@ -1,0 +1,25 @@
+== Contexto ==
+workflow_name=Release Readiness
+remote_run_id=25696032708
+remote_run_url=https://github.com/jairguerraadv-sys/BetAML/actions/runs/25696032708
+remote_status=completed
+remote_conclusion=success
+remote_head_branch=main
+remote_head_sha=74c9e14ece1ed48e83af5fda75fe1744dea26f37
+remote_created_at=2026-05-11T20:40:47Z
+remote_updated_at=2026-05-11T20:56:49Z
+
+== Fixes publicados ==
+compose_auto_seed_fix=2218016
+e2e_lockfile_fix=74c9e14
+
+== Etapas criticas ==
+[PASS] Run external validation integration smoke
+[PASS] Install Playwright deps
+[PASS] Run readiness smoke tests
+[PASS] Run readiness extended tests
+[PASS] Run readiness security tests
+[PASS] Evaluate go/no-go decision
+
+== Resumo ==
+release_readiness_remote=PASS

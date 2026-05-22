@@ -180,9 +180,16 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_access_token(data: dict[str, Any], expires_delta: timedelta | None = None) -> str:
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=settings.access_token_expire_min))
+    issued_at = datetime.now(timezone.utc)
+    expire = issued_at + (expires_delta or timedelta(minutes=settings.access_token_expire_min))
     # jti (JWT ID) único por token – usado para revogação/blacklist
-    to_encode.update({"exp": expire, "jti": str(uuid.uuid4()), "token_type": "access"})
+    to_encode.update({
+        "exp": expire,
+        "iat": issued_at,
+        "nbf": issued_at,
+        "jti": str(uuid.uuid4()),
+        "token_type": "access",
+    })
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -197,8 +204,15 @@ def create_refresh_token(data: dict[str, Any]) -> tuple[str, str]:
     """
     to_encode = data.copy()
     jti = str(uuid.uuid4())
-    expire = datetime.now(timezone.utc) + timedelta(days=7)  # 7 days sliding window
-    to_encode.update({"exp": expire, "jti": jti, "token_type": "refresh"})
+    issued_at = datetime.now(timezone.utc)
+    expire = issued_at + timedelta(days=7)  # 7 days sliding window
+    to_encode.update({
+        "exp": expire,
+        "iat": issued_at,
+        "nbf": issued_at,
+        "jti": jti,
+        "token_type": "refresh",
+    })
     token = jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
     return token, jti
 
@@ -215,10 +229,11 @@ async def get_current_user(
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
         token_type = payload.get("token_type")
-        if token_type and token_type != "access":
+        if token_type != "access":
             raise credentials_exception
         user_id: str = payload.get("sub")
-        if not user_id:
+        token_tenant_id: str = str(payload.get("tenant_id") or "").strip()
+        if not user_id or not token_tenant_id:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
@@ -242,6 +257,16 @@ async def get_current_user(
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user or not user.active:
+        raise credentials_exception
+    if str(user.tenant_id) != token_tenant_id:
+        logger.warning(
+            "jwt_tenant_mismatch",
+            extra={
+                "token_tenant_id": token_tenant_id,
+                "user_tenant_id": str(user.tenant_id),
+                "user_id": str(user.id),
+            },
+        )
         raise credentials_exception
     return user
 

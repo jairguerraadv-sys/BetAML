@@ -1,0 +1,61 @@
+
+== Contexto ==
+timestamp_utc=2026-04-07T05:58:35Z
+backup_reference=betaml-backups/postgres/postgres_20260407T053348Z.sql.gz
+rollback_target=74c9e14
+oncall_owner=Jair Arantes Guerra Neto
+capacity_evidence=/workspaces/BetAML/artifacts/readiness/capacity/betaml_load_slo.txt
+
+== Metadados obrigatorios ==
+[PASS] backup_reference informado
+[PASS] rollback_target informado
+[PASS] oncall_owner informado
+[PASS] preflight_evidence informado
+[PASS] restore_evidence informado
+[PASS] capacity_evidence informado
+[PASS] junit_dir informado
+
+== Evidencias locais ==
+[PASS] artifact-readiness-preflight presente
+[PASS] artifact-readiness-restore-drill presente
+[PASS] artifact-readiness-capacity-smoke presente
+[PASS] preflight operacional aprovado
+[PASS] restore drill aprovado
+[PASS] capacity smoke aprovado
+
+== E2E critico ==
+[PASS] smoke suite (readiness-smoke-tests-admin-settings.spec.ts.xml) sem falhas
+[PASS] smoke suite (readiness-smoke-tests-auth.spec.ts.xml) sem falhas
+[PASS] smoke suite (readiness-smoke-tests-global-search.spec.ts.xml) sem falhas
+[PASS] smoke suite (readiness-smoke-tests-model-registry.spec.ts.xml) sem falhas
+[PASS] smoke suite aprovado com 4 arquivo(s) JUnit
+[PASS] extended suite (readiness-extended-tests-fictibet-dataset-pack.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-ingest-connectors.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-ingest-operations.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-ingest-rate-limit.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-ingest-tenant-isolation.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-maintenance-mode.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-mappings-versioning.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-onboarding.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-report-audit.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-report-exports.spec.ts.xml) sem falhas
+[PASS] extended suite aprovado com 10 arquivo(s) JUnit
+[PASS] security suite (readiness-security-analyst-tests-security-rbac.spec.ts.xml) sem falhas
+[PASS] security suite (readiness-security-audit-tests-security-rbac.spec.ts.xml) sem falhas
+[PASS] security suite (readiness-security-labels-tests-security-rbac.spec.ts.xml) sem falhas
+[PASS] security suite aprovado com 3 arquivo(s) JUnit
+
+== Fechamento remoto ==
+[PASS] workflow Release Readiness concluido remotamente no GitHub Actions
+[PASS] external validation smoke aprovado remotamente
+[PASS] Install Playwright deps aprovado remotamente
+remote_run_id=25696032708
+remote_run_url=https://github.com/jairguerraadv-sys/BetAML/actions/runs/25696032708
+remote_head_branch=main
+remote_head_sha=74c9e14ece1ed48e83af5fda75fe1744dea26f37
+remote_created_at=2026-05-11T20:40:47Z
+remote_updated_at=2026-05-11T20:56:49Z
+remote_conclusion=success
+
+== Resumo ==
+release_go_no_go=GO

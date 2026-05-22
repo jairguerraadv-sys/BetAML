@@ -203,6 +203,7 @@ services:
       # Use betaml_app by default so RLS/FORCE RLS is effective in dev.
       # Override via DATABASE_URL in .env if needed.
       DATABASE_URL:            ${DATABASE_URL:-postgresql://betaml_app:app_devpass_change_me@postgres:5432/betaml_dev}
+      MIGRATION_DATABASE_URL:  ${MIGRATION_DATABASE_URL:-postgresql://betaml:devpass@postgres:5432/betaml_dev}
       REDIS_URL:               ${REDIS_URL:-redis://:devpass@redis:6379/0}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-redpanda:29092}
       JWT_SECRET:              ${JWT_SECRET:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
@@ -235,17 +236,24 @@ services:
     volumes:
       - ../services/api:/app
       - ../libs:/app/libs
-      - ./migration_v35.sql:/app/migration_v35.sql:ro
       - ../datasets/sanctions_sample.csv:/data/sanctions.csv:ro
     command: >
       bash -c "set -euo pipefail; \
       APP_DATABASE_URL=\"$$DATABASE_URL\"; \
-      SEED_DATABASE_URL=\"postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@postgres:5432/$$POSTGRES_DB\"; \
+      ALEMBIC_DATABASE_URL=\"$${MIGRATION_DATABASE_URL:-$$APP_DATABASE_URL}\"; \
       AUTO_SEED=\"$${API_AUTO_SEED:-false}\"; \
-      DATABASE_URL=\"$$SEED_DATABASE_URL\" python apply_sql_migration.py /app/migration_v35.sql; \
+      if DATABASE_URL=\"$$ALEMBIC_DATABASE_URL\" alembic -c alembic.ini upgrade head; then \
+        echo 'Alembic upgrade applied'; \
+      elif [ \"$${ENVIRONMENT:-development}\" = \"development\" ]; then \
+        echo 'Alembic upgrade failed on legacy dev schema; stamping head'; \
+        DATABASE_URL=\"$$ALEMBIC_DATABASE_URL\" alembic -c alembic.ini stamp head; \
+      else \
+        echo 'Alembic upgrade failed'; \
+        exit 1; \
+      fi; \
       if [ \"$$AUTO_SEED\" = \"true\" ]; then \
         echo 'Running API seed bootstrap'; \
-        DATABASE_URL=\"$$SEED_DATABASE_URL\" ALLOW_SYNTHETIC_SEED=true python seeds.py; \
+        DATABASE_URL=\"$$APP_DATABASE_URL\" ALLOW_SYNTHETIC_SEED=true python seeds.py; \
       else \
         echo 'Skipping API seed bootstrap'; \
       fi; \
@@ -253,9 +261,9 @@ services:
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=2).read()"]
       interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     networks: [betaml-net]
 
   stream-processor:
@@ -289,6 +297,12 @@ services:
       - ../libs:/app/libs
     command: python main.py
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8013/health/ready', timeout=2).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks: [betaml-net]
 
   rules-engine:
@@ -317,6 +331,12 @@ services:
       - ../services/rules_engine:/app
       - ../libs:/app/libs
     command: python main.py
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8012/health/ready', timeout=2).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks: [betaml-net]
 
   ml-service:
@@ -349,6 +369,12 @@ services:
       - ../services/ml_service:/app
       - ../libs:/app/libs
     command: uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=2).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks: [betaml-net]
 
   ml-trainer:
@@ -388,6 +414,12 @@ services:
       - ../services/frontend:/app
       - /app/node_modules
       - /app/.next
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', (res) => process.exit(res.statusCode >= 200 && res.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1));"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks: [betaml-net]
 
   prometheus:

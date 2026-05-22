@@ -58,6 +58,14 @@ _AUTH_RATE_LIMIT_REFRESH = (
 )
 
 
+async def _set_auth_flow_context(db: AsyncSession, flow: str) -> None:
+    """Define contexto de auth para políticas RLS específicas de login/refresh."""
+    await db.execute(
+        text("SELECT set_config('app.auth_flow', :flow, false)"),
+        {"flow": flow},
+    )
+
+
 @router.post("/auth/login", response_model=TokenResponse)
 @limiter.limit(_AUTH_RATE_LIMIT_LOGIN)
 async def login(
@@ -73,6 +81,14 @@ async def login(
     - Returns tokens in body for mobile apps
     - Audit logs LOGIN/LOGIN_FAILED events
     """
+    await _set_auth_flow_context(db, "login")
+
+    if settings.environment not in ("development", "test") and not body.tenant_slug:
+        raise HTTPException(
+            status_code=400,
+            detail="tenant_slug é obrigatório neste ambiente",
+        )
+
     if body.tenant_slug:
         tenant_result = await db.execute(
             select(Tenant).where(Tenant.slug == body.tenant_slug, Tenant.active.is_(True))
@@ -183,6 +199,8 @@ async def refresh(
     refresh_token = request.cookies.get("betaml_refresh_token")
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Refresh token ausente")
+
+    await _set_auth_flow_context(db, "refresh")
 
     try:
         payload = jwt.decode(refresh_token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])

@@ -47,4 +47,7 @@ async def get_db() -> AsyncSession:  # type: ignore[return]
             text("SELECT set_config('app.current_tenant', :tid, true)"),
             {"tid": tid or ""},
         )
+        await session.execute(
+            text("SELECT set_config('app.auth_flow', '', true)"),
+        )
         yield session

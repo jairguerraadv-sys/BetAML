@@ -36,6 +36,19 @@ _AUDIT_REDACTED_KEYS = {
     "token",
 }
 
+_SENSITIVE_PAYLOAD_KEYS = {
+    "cpf",
+    "cpf_encrypted",
+    "document",
+    "document_number",
+    "email",
+    "full_name",
+    "name",
+    "phone",
+    "raw_payload",
+    "token",
+}
+
 
 def _sanitize_audit_payload(value: Any, *, depth: int = 0) -> Any:
     if value is None:
@@ -56,6 +69,37 @@ def _sanitize_audit_payload(value: Any, *, depth: int = 0) -> Any:
         return tuple(_sanitize_audit_payload(item, depth=depth + 1) for item in value[:20])
     if isinstance(value, str) and len(value) > 1000:
         return value[:1000] + "...[TRUNCATED]"
+    return value
+
+
+def sanitize_sensitive_payload(value: Any, *, depth: int = 0) -> Any:
+    """Sanitiza payloads potencialmente sensíveis para retorno em API/logs.
+
+    Regras:
+    - mascara chaves conhecidas de PII/token;
+    - limita profundidade e cardinalidade para evitar vazamento massivo;
+    - trunca strings longas.
+    """
+    if value is None:
+        return None
+    if depth >= 4:
+        return "[TRUNCATED]"
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        for key, item in value.items():
+            if str(key).lower() in _SENSITIVE_PAYLOAD_KEYS:
+                out[key] = "[REDACTED]"
+            else:
+                out[key] = sanitize_sensitive_payload(item, depth=depth + 1)
+        return out
+    if isinstance(value, list):
+        return [sanitize_sensitive_payload(item, depth=depth + 1) for item in value[:20]]
+    if isinstance(value, tuple):
+        return tuple(sanitize_sensitive_payload(item, depth=depth + 1) for item in value[:20])
+    if isinstance(value, str):
+        if len(value) > 256:
+            return value[:256] + "...[TRUNCATED]"
+        return value
     return value
 
 # ─── Kafka producer (lazy singleton) ──────────────────────────────────────────

@@ -487,6 +487,13 @@ async def _startup():
             "Defina a variável de ambiente EPSILON_WEBHOOK_SECRET com um segredo aleatório de ≥ 32 bytes."
         )
 
+    if settings.environment not in ("development", "test"):
+        ml_internal_api_key = os.getenv("ML_INTERNAL_API_KEY", "").strip()
+        if not ml_internal_api_key:
+            raise RuntimeError(
+                "⚠️  CRÍTICO: ML_INTERNAL_API_KEY é obrigatório em staging/produção para autenticação interna com ml_service."
+            )
+
     auto_create_schema = os.getenv("API_AUTO_CREATE_SCHEMA", "").strip().lower() in {
         "1", "true", "yes", "on"
     }
@@ -496,6 +503,17 @@ async def _startup():
         logger.warning("schema_auto_create_enabled")
     else:
         logger.info("schema_auto_create_disabled")
+
+    if settings.environment not in ("development", "test"):
+        async with AsyncSessionLocal() as db:
+            has_alembic_version = bool(
+                await db.scalar(text("SELECT to_regclass('public.alembic_version') IS NOT NULL"))
+            )
+            if not has_alembic_version:
+                raise RuntimeError(
+                    "⚠️  CRÍTICO: alembic_version ausente em staging/produção. "
+                    "Use estratégia única de migração via Alembic antes de subir a API."
+                )
     await get_producer()
     await _setup_minio_lifecycle()
     await _warm_feature_store_cache()
@@ -504,6 +522,11 @@ async def _startup():
     alert_processor_enabled = os.getenv("ALERT_PROCESSOR_ENABLED", "").strip().lower() in {
         "1", "true", "yes", "on"
     }
+    if alert_processor_enabled and settings.environment not in {"development", "test"}:
+        raise RuntimeError(
+            "⚠️  CRÍTICO: ALERT_PROCESSOR_ENABLED não é permitido em staging/produção. "
+            "O rules_engine é o materializador oficial de alertas/casos."
+        )
     if alert_processor_enabled:
         try:
             from alert_processor import start_alert_consumer

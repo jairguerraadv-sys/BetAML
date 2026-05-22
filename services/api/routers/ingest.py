@@ -38,7 +38,7 @@ from libs.connectors import (
 )
 from libs.mapping import MappingEngine, get_default_mapping, validate_canonical_ingest_payload
 from models import IngestError, IngestJob, MappingConfig, ScoringConfig, SystemFlag, User
-from utils import get_producer, redis_rate_limit
+from utils import get_producer, redis_rate_limit, sanitize_sensitive_payload
 
 try:
     from minio import Minio
@@ -1127,7 +1127,7 @@ async def get_ingest_job(
                 "id": e.id,
                 "line_number": e.line_number,
                 "error_reason": e.error_reason,
-                "raw_payload": e.raw_payload,
+                "raw_payload": sanitize_sensitive_payload(e.raw_payload),
                 "created_at": e.created_at,
             }
             for e in err_sample
@@ -1140,7 +1140,7 @@ async def get_ingest_job(
         "mapping_version_id": j.mapping_version_id,
         "file_path": j.file_path,
         "error_message": j.error_message,
-        "error_sample_preview": j.error_sample or [],
+        "error_sample_preview": sanitize_sensitive_payload(j.error_sample or []),
         "created_at": j.created_at,
         "updated_at": j.updated_at,
     }
@@ -1182,7 +1182,7 @@ async def list_ingest_errors(
             "line_number": e.line_number,
             "error_reason": e.error_reason,
             "error_detail": e.error_detail,
-            "raw_payload": e.raw_payload,
+            "raw_payload": sanitize_sensitive_payload(e.raw_payload),
             "resolved": e.resolved,
             "resolved_by": e.resolved_by,
             "resolved_at": e.resolved_at,

@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
+from unittest.mock import AsyncMock, MagicMock
 
 # ── Patch de dependências externas antes do import do app ────────────────────
 import os
@@ -95,6 +96,16 @@ class TestJWT:
         payload = jwt.decode(tok, os.environ["JWT_SECRET"], algorithms=["HS256"])
         assert payload["exp"] > time.time()
 
+    def test_token_has_iat_and_nbf(self):
+        from auth import create_access_token
+        from jose import jwt
+        import os
+
+        tok = create_access_token({"sub": "u1", "tenant_id": "t1", "role": "ADMIN"})
+        payload = jwt.decode(tok, os.environ["JWT_SECRET"], algorithms=["HS256"])
+        assert "iat" in payload
+        assert "nbf" in payload
+
     def test_different_tokens_have_different_jti(self):
         from auth import create_access_token
         from jose import jwt
@@ -104,6 +115,27 @@ class TestJWT:
         p1 = jwt.decode(t1, os.environ["JWT_SECRET"], algorithms=["HS256"])
         p2 = jwt.decode(t2, os.environ["JWT_SECRET"], algorithms=["HS256"])
         assert p1["jti"] != p2["jti"], "jti deve ser único por token"
+
+    @pytest.mark.asyncio
+    async def test_get_current_user_rejects_tenant_mismatch(self):
+        from auth import get_current_user
+        from fastapi import HTTPException
+
+        bad_token = _make_token(user_id="u-1", tenant_id="tenant-a", role="ADMIN")
+
+        user = MagicMock()
+        user.id = "u-1"
+        user.active = True
+        user.tenant_id = "tenant-b"
+
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = user
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=result)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(token=bad_token, db=db)
+        assert exc_info.value.status_code == 401
 
 
 # ────────────────────────────────────────────────────────────────────────────
