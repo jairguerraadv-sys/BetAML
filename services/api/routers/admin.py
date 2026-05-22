@@ -10,6 +10,7 @@ routers/admin.py — Endpoints administrativos do tenant:
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import secrets
 import string
@@ -238,7 +239,14 @@ class OpsSummaryOut(BaseModel):
     ws_last_backpressure_at: datetime | None = None
     stale_models: int
     oldest_model_age_days: int | None = None
-    alerts: list[OperationalAlertOut]
+
+
+class AutoCasePolicyOut(BaseModel):
+    auto_case_threshold: float
+    severity_gates: dict[str, float]
+    materializer: str
+    legacy_alert_processor_enabled: bool
+    legacy_alert_processor_allowed: bool
 
 
 def _system_flag_payload(flag) -> dict:
@@ -919,6 +927,34 @@ async def preview_scoring_config(
             prop.low += 1
 
     return ScoringPreviewOut(current=cur, proposed=prop, total_alerts_30d=total)
+
+
+@router.get("/auto-case-policy", response_model=AutoCasePolicyOut, tags=["admin"])
+async def get_auto_case_policy(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
+    """Expõe o contrato operacional da política de auto-case."""
+    row = (await db.execute(
+        select(ScoringConfig).where(ScoringConfig.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "ScoringConfig não encontrada. Execute seeds.")
+
+    legacy_enabled = os.getenv("ALERT_PROCESSOR_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    legacy_allowed = settings.environment in {"development", "test"}
+    return AutoCasePolicyOut(
+        auto_case_threshold=float(row.auto_case_threshold),
+        severity_gates={
+            "CRITICAL": float(row.critical_threshold),
+            "HIGH": float(row.high_threshold),
+            "MEDIUM": float(row.medium_threshold),
+            "LOW": float(row.low_threshold),
+        },
+        materializer="rules_engine",
+        legacy_alert_processor_enabled=legacy_enabled,
+        legacy_alert_processor_allowed=legacy_allowed,
+    )
 
 
 # ── Tenant Onboarding ──────────────────────────────────────────────────────────

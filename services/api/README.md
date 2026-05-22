@@ -100,6 +100,7 @@ In Docker Compose, automatic seeding is disabled by default in all environments.
 | `GET` | `/cases/{id}/report-packages` | AML_ANALYST+ | Case report-package history |
 | `GET` | `/cases/{id}/report-package/json` | AML_ANALYST+ | Export a specific report package as JSON |
 | `GET` | `/cases/{id}/report-package/pdf` | AML_ANALYST+ | Export a specific report package as PDF |
+| `GET` | `/cases/{id}/report-packages/{rp_id}/chain-of-custody` | AML_ANALYST+ | Verify report-package chain-of-custody hash integrity |
 | `POST` | `/cases/{id}/report-package/submit` | ADMIN | Submit latest FILE_SAR package with maker-checker control |
 | `GET` | `/report-packages` | AML_ANALYST+ | Tenant-wide report-package history |
 | `GET` | `/players` | AML_ANALYST+ | List players with risk scores |
@@ -145,6 +146,7 @@ In Docker Compose, automatic seeding is disabled by default in all environments.
 | `GET` | `/model-registry/{id}/ab-metrics` | AML_ANALYST+ | Champion vs challenger metrics and timeline |
 | `POST` | `/model-registry/{id}/challenger` | ADMIN | Mark a staging model as challenger |
 | `POST` | `/model-registry/{id}/promote` | ADMIN | Promote challenger to champion |
+| `GET` | `/admin/auto-case-policy` | ADMIN | Contract for auto-case thresholds, official materializer and legacy alert_processor status |
 | `GET` | `/notifications` | Authenticated | In-app notifications |
 | `GET` | `/feature-store/players/{player_id}/current` | AML_ANALYST+ | Current feature snapshot |
 | `GET` | `/feature-store/players/{player_id}/history` | AML_ANALYST+ | Historical feature snapshots |

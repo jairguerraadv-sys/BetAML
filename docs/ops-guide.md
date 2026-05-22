@@ -254,6 +254,13 @@ docker compose up -d --build
 - Documento canônico: `docs/ingest-contract.md`
 - Modo oficial atual: `canonical-first`
 - Endpoint operacional: `GET /ingest/contract`
+
+### Política de auto-case
+
+- O materializador oficial de auto-case é o `rules_engine`.
+- O endpoint `GET /admin/auto-case-policy` expõe `auto_case_threshold`, gatilhos por severidade e o status do `alert_processor` legado.
+- O `alert_processor` legado permanece opt-in apenas para migração controlada em `development` e `test`.
+- Em operação normal, evitar criação automática de cases fora do `rules_engine` para não duplicar materialização.
 - Metrica de monitoramento: `betaml_ingest_contract`
 
 Antes de qualquer go-live, valide que o contrato retornado pelo endpoint coincide com o contrato documentado.
@@ -414,6 +421,18 @@ curl -X POST -H "Authorization: Bearer <token>" \
 Regras aplicadas:
 - o último pacote precisa ter `decisionLegacy=FILE_SAR`
 - o mesmo usuário que gerou o pacote não pode submetê-lo
+
+### Validar cadeia de custódia do ReportPackage
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/cases/<case-id>/report-packages/<report-package-id>/chain-of-custody"
+```
+
+- O campo `chain_of_custody.integrity_ok=true` confirma que o hash armazenado
+  (`report_payload_sha256`) coincide com o hash recalculado do payload.
+- Em caso de divergência (`integrity_ok=false`), o pacote deve ser tratado como
+  incidente de integridade e revalidado antes de qualquer filing regulatório.
 
 ### Corrigir item em Quarentena
 

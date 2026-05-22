@@ -1522,6 +1522,82 @@ class _ProtocolNumberIn(BaseModel):
     coaf_protocol_number: str
 
 
+@router.get("/cases/{case_id}/report-packages/{rp_id}/chain-of-custody", tags=["cases"])
+async def get_report_package_chain_of_custody(
+    case_id: str,
+    rp_id: str,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retorna cadeia de custódia do ReportPackage com verificação de integridade."""
+    c = await db.get(Case, case_id)
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Caso não encontrado")
+
+    rp = await db.get(ReportPackage, rp_id)
+    if not rp or str(rp.tenant_id) != str(current_user.tenant_id) or str(rp.case_id) != str(case_id):
+        raise HTTPException(404, "ReportPackage não encontrado")
+
+    payload = rp.payload if isinstance(rp.payload, dict) else {}
+    coc = payload.get("chain_of_custody") if isinstance(payload, dict) else None
+    coc = coc if isinstance(coc, dict) else {}
+
+    payload_without_coc = {
+        key: value
+        for key, value in payload.items()
+        if key != "chain_of_custody"
+    }
+    recomputed_payload_sha256 = _sha256_json(payload_without_coc) if payload_without_coc else None
+    stored_payload_sha256 = coc.get("report_payload_sha256")
+    integrity_ok = bool(
+        stored_payload_sha256
+        and recomputed_payload_sha256
+        and str(stored_payload_sha256) == str(recomputed_payload_sha256)
+    )
+
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "VIEW_REPORT_CUSTODY",
+        "ReportPackage",
+        rp_id,
+        after={
+            "case_id": case_id,
+            "integrity_ok": integrity_ok,
+            "stored_payload_sha256": stored_payload_sha256,
+            "recomputed_payload_sha256": recomputed_payload_sha256,
+        },
+    )
+    await db.commit()
+
+    return {
+        "report_package_id": rp.id,
+        "case_id": rp.case_id,
+        "status": rp.status,
+        "schema_version": payload.get("schema_version"),
+        "decision": payload.get("decisionLegacy") or payload.get("decision") or rp.decision,
+        "chain_of_custody": {
+            "report_payload_sha256": stored_payload_sha256,
+            "recomputed_payload_sha256": recomputed_payload_sha256,
+            "integrity_ok": integrity_ok,
+            "hash_scope": coc.get("hash_scope"),
+            "generated_at": coc.get("generated_at"),
+            "generated_by": coc.get("generated_by"),
+            "attachments_count": coc.get("attachments_count", 0),
+            "attachments_sha256": coc.get("attachments_sha256") or [],
+            "pdf_sha256": coc.get("pdf_sha256"),
+            "pdf_path": coc.get("pdf_path") or rp.pdf_path,
+            "xml_sha256": coc.get("xml_sha256") or rp.xml_sha256,
+            "xml_path": coc.get("xml_path") or rp.xml_path,
+            "coaf_protocol_number": coc.get("coaf_protocol_number") or rp.coaf_protocol_number,
+            "coaf_protocol_registered_at": coc.get("coaf_protocol_registered_at"),
+            "xml_stored_at": coc.get("xml_stored_at"),
+        },
+        "filed_at": rp.filed_at,
+    }
+
+
 @router.patch("/cases/{case_id}/report-packages/{rp_id}/protocol-number", status_code=200)
 async def register_coaf_protocol_number(
     case_id: str,

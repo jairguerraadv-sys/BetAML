@@ -269,6 +269,121 @@ async def test_generate_report_package_maps_decision_to_persisted_db_value():
 
 
 @pytest.mark.asyncio
+async def test_get_report_package_chain_of_custody_integrity_ok():
+    from routers.cases import get_report_package_chain_of_custody, _sha256_json
+    from models import Case, ReportPackage
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+    case_obj = _make_case(case_id="c1", tenant_id="t1")
+
+    payload_core = {
+        "reportId": "rp-1",
+        "schema_version": "2.0",
+        "decision": "REPORT",
+    }
+    payload_hash = _sha256_json(payload_core)
+    report_payload = {
+        **payload_core,
+        "chain_of_custody": {
+            "report_payload_sha256": payload_hash,
+            "hash_scope": "payload_excluding_chain_of_custody",
+            "attachments_count": 0,
+        },
+    }
+
+    rp = MagicMock()
+    rp.id = "rp-1"
+    rp.tenant_id = "t1"
+    rp.case_id = "c1"
+    rp.status = "FINAL"
+    rp.payload = report_payload
+    rp.decision = "REPORT"
+    rp.pdf_path = None
+    rp.xml_path = None
+    rp.xml_sha256 = None
+    rp.coaf_protocol_number = None
+    rp.filed_at = None
+
+    async def _db_get(model, pk):
+        if model is Case:
+            return case_obj
+        if model is ReportPackage:
+            return rp
+        return None
+
+    db.get = AsyncMock(side_effect=_db_get)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        result = await get_report_package_chain_of_custody(
+            case_id="c1",
+            rp_id="rp-1",
+            current_user=user,
+            db=db,
+        )
+
+    assert result["report_package_id"] == "rp-1"
+    assert result["chain_of_custody"]["integrity_ok"] is True
+    assert result["chain_of_custody"]["report_payload_sha256"] == payload_hash
+    assert result["chain_of_custody"]["recomputed_payload_sha256"] == payload_hash
+
+
+@pytest.mark.asyncio
+async def test_get_report_package_chain_of_custody_detects_hash_mismatch():
+    from routers.cases import get_report_package_chain_of_custody
+    from models import Case, ReportPackage
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+    case_obj = _make_case(case_id="c1", tenant_id="t1")
+
+    report_payload = {
+        "reportId": "rp-2",
+        "schema_version": "2.0",
+        "decision": "REPORT",
+        "chain_of_custody": {
+            "report_payload_sha256": "deadbeef",
+            "hash_scope": "payload_excluding_chain_of_custody",
+        },
+    }
+
+    rp = MagicMock()
+    rp.id = "rp-2"
+    rp.tenant_id = "t1"
+    rp.case_id = "c1"
+    rp.status = "FILED"
+    rp.payload = report_payload
+    rp.decision = "REPORT"
+    rp.pdf_path = None
+    rp.xml_path = None
+    rp.xml_sha256 = None
+    rp.coaf_protocol_number = None
+    rp.filed_at = None
+
+    async def _db_get(model, pk):
+        if model is Case:
+            return case_obj
+        if model is ReportPackage:
+            return rp
+        return None
+
+    db.get = AsyncMock(side_effect=_db_get)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        result = await get_report_package_chain_of_custody(
+            case_id="c1",
+            rp_id="rp-2",
+            current_user=user,
+            db=db,
+        )
+
+    assert result["report_package_id"] == "rp-2"
+    assert result["chain_of_custody"]["integrity_ok"] is False
+    assert result["chain_of_custody"]["report_payload_sha256"] == "deadbeef"
+    assert result["chain_of_custody"]["recomputed_payload_sha256"] is not None
+
+
+@pytest.mark.asyncio
 async def test_add_case_comment_with_mentions_dispatches_notifications():
     """@mentions in a comment must each produce a CASE_MENTION Notification."""
     from routers.cases import add_case_comment

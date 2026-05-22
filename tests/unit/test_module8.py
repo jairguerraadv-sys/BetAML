@@ -302,6 +302,31 @@ def test_scoring_config_out_has_auto_case_threshold_field():
     assert fields["auto_case_threshold"].default == 0.75
 
 
+@pytest.mark.asyncio
+async def test_get_auto_case_policy_exposes_single_materializer_contract():
+    from routers.admin import get_auto_case_policy
+
+    cfg = MagicMock()
+    cfg.auto_case_threshold = 0.75
+    cfg.critical_threshold = 95.0
+    cfg.high_threshold = 80.0
+    cfg.medium_threshold = 60.0
+    cfg.low_threshold = 30.0
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = cfg
+    db = _make_db_mock([None])
+    db.execute = AsyncMock(return_value=result)
+
+    current_user = _make_user()
+
+    result = await get_auto_case_policy(db=db, current_user=current_user)
+
+    assert result.auto_case_threshold == 0.75
+    assert result.materializer == "rules_engine"
+    assert result.severity_gates["CRITICAL"] == 95.0
+    assert result.severity_gates["HIGH"] == 80.0
+
+
 def test_scoring_config_update_accepts_ingest_rate_limit_tpm():
     """ScoringConfigUpdate must accept ingest_rate_limit_tpm (Optional[int], default None)."""
     from libs.schemas import ScoringConfigUpdate
