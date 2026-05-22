@@ -41,8 +41,18 @@ export async function POST(req: NextRequest) {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
       path: '/',
-      maxAge: 60 * 60, // 1 hora (sincronizado com ACCESS_TOKEN_EXPIRE_MIN=60)
+      maxAge: 15 * 60,
     });
+
+    if (data.refresh_token) {
+      response.cookies.set('betaml_refresh_token', data.refresh_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/',
+        maxAge: 7 * 24 * 60 * 60,
+      });
+    }
 
     // Lista de papéis em cookie separado para uso no Edge Middleware
     // (NÃO é prova de adulteração; o backend valida o JWT em toda requisição)
@@ -51,7 +61,7 @@ export async function POST(req: NextRequest) {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
       path: '/',
-      maxAge: 60 * 60,
+      maxAge: 15 * 60,
     });
 
     return response;

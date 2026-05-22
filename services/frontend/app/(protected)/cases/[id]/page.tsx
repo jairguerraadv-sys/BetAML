@@ -1433,37 +1433,6 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
               </div>
             </div>
           ))}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <a
-                  href={`/api-proxy/cases/${caseId}/report-package/json?rp_id=${rp.id}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded border border-gray-300 px-2 py-1 font-semibold text-gray-700 hover:bg-gray-50"
-                >
-                  JSON
-                </a>
-                {rp.pdf_available && (
-                  <a
-                    href={`/api-proxy/cases/${caseId}/report-package/pdf?rp_id=${rp.id}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded border border-gray-300 px-2 py-1 font-semibold text-gray-700 hover:bg-gray-50"
-                  >
-                    PDF
-                  </a>
-                )}
-                <a
-                  href={`/api-proxy/cases/${caseId}/report-package/coaf-xml?rp_id=${rp.id}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded border border-gray-300 px-2 py-1 font-semibold text-gray-700 hover:bg-gray-50"
-                >
-                  XML
-                </a>
-              </div>
-            </div>
-          ))}
           {!reportPackages.length && (
             <p className="text-xs text-gray-400">Nenhum report package gerado ainda.</p>
           )}

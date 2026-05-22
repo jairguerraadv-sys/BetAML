@@ -40,5 +40,12 @@ export async function POST(req: NextRequest) {
     path: '/',
     maxAge: 0,
   });
+  response.cookies.set('betaml_refresh_token', '', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    path: '/',
+    maxAge: 0,
+  });
   return response;
 }

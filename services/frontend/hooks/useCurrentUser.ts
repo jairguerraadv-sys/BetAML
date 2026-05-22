@@ -24,8 +24,10 @@ export interface UseCurrentUserReturn {
 export function useCurrentUser(): UseCurrentUserReturn {
   const { user, loading } = useUser();
 
-  const effectiveRoles: string[] =
-    user?.roles ?? (user?.role ? [user.role] : []);
+  const effectiveRoles: string[] = [
+    ...(user?.roles ?? []),
+    ...(user?.role ? [user.role] : []),
+  ];
 
   return {
     user: user as CurrentUser | null,

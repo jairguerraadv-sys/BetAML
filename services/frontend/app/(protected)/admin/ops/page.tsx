@@ -9,6 +9,7 @@ import {
   toggleMaintenanceMode,
   HealthStatus,
 } from '@/lib/api';
+import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { clsx } from 'clsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -49,6 +50,8 @@ function ServiceCard({ name, status }: { name: string; status: string }) {
 
 export default function OpsPage() {
   const qc = useQueryClient();
+  const { hasAnyRole, loading: userLoading } = useCurrentUser();
+  const canManageMaintenance = hasAnyRole(['Operador_AdminTecnico', 'BetAML_SuperAdmin']);
   const [maintenanceEnabled, setMaintenanceEnabled] = useState<boolean | null>(null);
 
   const { data: health, isLoading: healthLoading } = useQuery<HealthStatus>({
@@ -74,6 +77,8 @@ export default function OpsPage() {
     queryKey: ['system-flags'],
     queryFn: fetchSystemFlags,
     refetchInterval: 30_000,
+    enabled: !userLoading && canManageMaintenance,
+    retry: false,
   });
 
   useEffect(() => {
@@ -284,23 +289,25 @@ export default function OpsPage() {
                 </p>
               )}
             </div>
-            <button
-              disabled={toggleMutation.isPending}
-              onClick={() => toggleMutation.mutate(!maintenanceEnabled)}
-              className={clsx(
-                'min-w-[120px] rounded-lg px-4 py-2 text-sm font-semibold text-white transition-colors',
-                maintenanceEnabled
-                  ? 'bg-green-600 hover:bg-green-700'
-                  : 'bg-amber-500 hover:bg-amber-600',
-                toggleMutation.isPending && 'cursor-not-allowed opacity-50',
-              )}
-            >
-              {toggleMutation.isPending
-                ? 'Aguarde…'
-                : maintenanceEnabled
-                  ? 'Desativar manutenção'
-                  : 'Ativar manutenção'}
-            </button>
+            {canManageMaintenance && (
+              <button
+                disabled={toggleMutation.isPending}
+                onClick={() => toggleMutation.mutate(!maintenanceEnabled)}
+                className={clsx(
+                  'min-w-[120px] rounded-lg px-4 py-2 text-sm font-semibold text-white transition-colors',
+                  maintenanceEnabled
+                    ? 'bg-green-600 hover:bg-green-700'
+                    : 'bg-amber-500 hover:bg-amber-600',
+                  toggleMutation.isPending && 'cursor-not-allowed opacity-50',
+                )}
+              >
+                {toggleMutation.isPending
+                  ? 'Aguarde...'
+                  : maintenanceEnabled
+                    ? 'Desativar manutenção'
+                    : 'Ativar manutenção'}
+              </button>
+            )}
           </div>
         </div>
 

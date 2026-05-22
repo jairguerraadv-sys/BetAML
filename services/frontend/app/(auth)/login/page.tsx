@@ -7,6 +7,7 @@ import { useUser } from '@/contexts/UserContext';
 export default function LoginPage() {
   const router = useRouter();
   const { refresh } = useUser();
+  const [tenantSlug, setTenantSlug] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError]       = useState('');
@@ -19,7 +20,7 @@ export default function LoginPage() {
     try {
       // login() chama /api/auth/login (Next.js API route) que seta cookie httpOnly.
       // O token NUNCA toca o localStorage — imune a XSS.
-      await login(username, password);
+      await login(username, password, tenantSlug);
 
       // Atualiza o contexto de usuário (sem persistir em localStorage).
       await refresh();
@@ -39,6 +40,14 @@ export default function LoginPage() {
         <p className="mb-6 text-sm text-gray-500">PLD/FT Intelligence — Brazilian Betting Operators</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          <input
+            type="text"
+            aria-label="Tenant"
+            placeholder="Tenant"
+            value={tenantSlug}
+            onChange={(e) => setTenantSlug(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+          />
           <input
             required
             type="text"

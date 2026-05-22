@@ -35,11 +35,11 @@ export interface LoginResponse {
  * Login via Next.js API route que seta cookie httpOnly.
  * NÃO chama o backend diretamente — usa /api/auth/login como proxy server-side.
  */
-export async function login(username: string, password: string): Promise<LoginResponse> {
+export async function login(username: string, password: string, tenantSlug?: string): Promise<LoginResponse> {
   const res = await fetch('/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, tenant_slug: tenantSlug?.trim() || undefined }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
