@@ -28,10 +28,10 @@ Fonte:
 
 ## 3. Operacao e rollback
 
-- [ ] backup_reference confirmado (<24h)
+- [x] backup_reference confirmado (<24h)
 - [x] rollback_target confirmado e testavel
 - [x] oncall_owner confirmado para janela de 60 minutos
-- [ ] comunicacao de janela de deploy enviada
+- [x] comunicacao de janela de deploy enviada
 
 Fonte de referencia:
 - docs/go-live-checklist.md
@@ -43,9 +43,9 @@ Fonte de referencia:
 - [x] NO-GO
 
 Observacoes da decisao:
-- Ultimo backup referenciado no bundle e de 2026-04-07, fora da janela obrigatoria de 24h.
-- Comunicacao formal da janela de deploy nao consta como evidencia neste bundle.
-- Go-live deve ser reavaliado apos refresh de backup, comunicacao da janela e nova assinatura final.
+- Backup atualizado: `artifacts/readiness/postgres_20260522T194524Z.sql.gz`.
+- Comunicacao de janela anexada: `artifacts/readiness/deploy-window-communication-2026-05-22.txt`.
+- Decisao permanece NO-GO ate contrassinaturas de Backend, Frontend e Seguranca/Compliance e vinculacao de Change ID.
 
 
 

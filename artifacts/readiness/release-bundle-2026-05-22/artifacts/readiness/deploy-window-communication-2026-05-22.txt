@@ -1,0 +1,9 @@
+timestamp_utc=2026-05-22T19:49:00Z
+channel=ops-release
+owner=Jair Arantes Guerra Neto
+subject=Janela de deploy BetAML - fase2 operacional
+window_start_brt=2026-05-22 20:30 BRT
+window_end_brt=2026-05-22 22:00 BRT
+rollback_target=74c9e14
+status=comunicado_emitido
+notes=Comunicacao operacional registrada para compor evidencia do bundle final.

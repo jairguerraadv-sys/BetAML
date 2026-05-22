@@ -35,9 +35,9 @@ Decisao final:
 - [x] NO-GO
 
 Justificativa final:
-- Bundle tecnico validado, mas gate operacional permanece bloqueado por ausencia de evidencia de backup <24h.
-- Comunicacao formal da janela de deploy ainda nao anexada.
-- Requer refresh de evidencias operacionais e contrassinaturas para nova deliberacao.
+- Bundle tecnico validado e evidencias operacionais atualizadas (backup <24h e comunicacao de janela anexada).
+- Requer contrassinaturas de Backend, Frontend e Seguranca/Compliance para deliberacao final.
+- Requer vinculacao formal de Ticket/Change ID para fechamento do gate.
 
 
 

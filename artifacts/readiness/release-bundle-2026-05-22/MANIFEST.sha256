@@ -1,8 +1,11 @@
-476885826419dad7463b748b1a102c7e55a1d1330f02e5582f480a37cfbf7c0d  ./ASSINATURA-OPERACIONAL.md
-7625601073a05d8824ec0b47e75d365c5471e6cf6ea84494bfde1e19dc261642  ./CHECKLIST-GO-NO-GO-CONSOLIDADO.md
+d76e9f321569418cfa21c4d065ccb2ac3b6d5b884ff6f90da5fff6e670b47297  ./ASSINATURA-OPERACIONAL.md
+fb202aaec48a3c1ec021af4f1d23838d61291a32120911620f4b7e51f73e09b2  ./CHECKLIST-GO-NO-GO-CONSOLIDADO.md
 c4858da00f7aa9ff484db8612673cc5abba598e862a601a08d02d6c18127b83c  ./README.md
+2b5aef6c5cff4420186c19469de3b8a8714c255c0433dd7cf17be17cfaf7e982  ./artifacts/readiness/deploy-window-communication-2026-05-22.txt
 864ee8b207d21891e2a788d352b155a3da4b766c54ebd3fdde99ad5723035b4c  ./artifacts/readiness/fase1-api-regressao-2026-05-22.md
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ./artifacts/readiness/fase2-operacional-iteracao-2026-05-22.md
 ce6acb1e25d94100a4e4119c513bdd2d0d0564d0a16cf67d40f94f40e6b13268  ./artifacts/readiness/junit/fase1-api-regressao-2026-05-22.xml
+57073ddbdfded405a4b4526630b3210deaf63f1294d2ec4495f40db8644de7d7  ./artifacts/readiness/postgres_20260522T194524Z.sql.gz
 81193d599a2555af5bc7daefc9a61b1ac76dd5bc85e48f883e14b563d71860be  ./artifacts/readiness/release-go-no-go.txt
 a65b1fce0e811f853dc179f0f3932d38888049da893fa2da990c7f0c03f219af  ./artifacts/readiness/release-readiness-remote.txt
 2a8f9e4599694465e44723cfd1e750e5765b3f70c35ecb803d3d5d37f67a5344  ./docs/go-live-checklist.md
