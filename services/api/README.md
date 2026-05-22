@@ -113,6 +113,7 @@ In Docker Compose, automatic seeding is disabled by default in all environments.
 | `PATCH` | `/player-lists/{list_id}` | AML_ANALYST+ | Update metadata/source/status of a player list |
 | `GET` | `/player-lists/{list_id}/entries` | AML_ANALYST+ | List player list entries |
 | `POST` | `/player-lists/{list_id}/entries` | AML_ANALYST+ | Bulk-add entries manually |
+| `POST` | `/player-lists/{list_id}/upload-csv` | AML_ANALYST+ | Bulk-upload entries from CSV/text file |
 | `DELETE` | `/player-lists/{list_id}/entries/{entry_id}` | AML_ANALYST+ | Remove a specific entry |
 | `GET` | `/audit-logs` | ADMIN / AUDITOR | Immutable audit trail with filters `action`, `entity_type`, `entity_id`, `user_id`, `date_from`, `date_to`, `q`, `pii_only` |
 | `GET` | `/reports/monthly-summary` | AML_ANALYST+ / AUDITOR | Monthly regulatory summary with alerts, cases, communications and TP/FP quality metrics |

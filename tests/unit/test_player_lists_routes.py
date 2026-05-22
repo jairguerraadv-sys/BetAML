@@ -72,3 +72,36 @@ async def test_delete_player_list_entry_deletes_row():
 
     db.delete.assert_awaited_once_with(row)
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_upload_list_csv_adds_entries_and_audits():
+    from routers.player_lists import upload_list_csv
+
+    db = _db()
+    uploaded = MagicMock()
+    uploaded.read = AsyncMock(return_value=b"12345678901\n\"98765432100\"\n\n")
+
+    class _List:
+        id = "l1"
+
+    async def execute(stmt):
+        res = MagicMock()
+        res.scalar_one_or_none.return_value = _List()
+        return res
+
+    db.execute = execute
+    db.add = MagicMock()
+
+    with patch("routers.player_lists.UploadFile", return_value=uploaded), patch("routers.player_lists.write_audit", AsyncMock()) as audit_mock:
+        result = await upload_list_csv(
+            list_id="l1",
+            file=uploaded,
+            value_type="CPF",
+            db=db,
+            current_user=_user(),
+        )
+
+    assert result["added"] == 2
+    assert db.add.call_count == 2
+    audit_mock.assert_awaited_once()
