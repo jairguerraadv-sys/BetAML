@@ -432,6 +432,16 @@ curl -H "Authorization: Bearer <token>" \
 - Expõe canal atual (`MANUAL_PORTAL`), requisitos de maker-checker e campos mínimos de cadeia de custódia.
 - Útil para runbook e auditoria quando houver mudança de processo (manual -> integração automática).
 
+### Consultar status operacional de filing
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/cases/<case-id>/report-filing-status"
+```
+
+- Retorna `deadline_state` (`OK`, `WARNING`, `BREACH` ou `NO_REPORT`) para o pacote mais recente do caso.
+- Expõe `requires_submission`, `protocol_registered` e `warnings[]` para triagem rápida de pendências regulatórias.
+
 ### Validar cadeia de custódia do ReportPackage
 
 ```bash

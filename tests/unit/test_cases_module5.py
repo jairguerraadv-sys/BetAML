@@ -515,6 +515,90 @@ async def test_get_report_filing_contract_exposes_manual_portal_contract():
 
 
 @pytest.mark.asyncio
+async def test_get_report_filing_status_breach_when_file_sar_not_submitted():
+    from routers.cases import get_report_filing_status
+    from models import Case, ReportPackage
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+    case_obj = _make_case(case_id="c4", tenant_id="t1")
+
+    rp = SimpleNamespace(
+        id="rp-breach",
+        tenant_id="t1",
+        case_id="c4",
+        status="FINAL",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=datetime.now(UTC) - timedelta(days=31),
+        filed_at=None,
+        coaf_protocol_number=None,
+    )
+
+    async def _db_get(model, pk):
+        if model is Case:
+            return case_obj
+        return None
+
+    db.get = AsyncMock(side_effect=_db_get)
+
+    result_obj = MagicMock()
+    result_obj.scalars.return_value.first.return_value = rp
+    db.execute = AsyncMock(return_value=result_obj)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        result = await get_report_filing_status(case_id="c4", current_user=user, db=db)
+
+    assert result.report_package_id == "rp-breach"
+    assert result.requires_submission is True
+    assert result.deadline_state == "BREACH"
+    assert result.protocol_registered is False
+    assert len(result.warnings) >= 1
+
+
+@pytest.mark.asyncio
+async def test_get_report_filing_status_warns_when_filed_without_protocol():
+    from routers.cases import get_report_filing_status
+    from models import Case
+
+    db = _make_db()
+    user = _make_user(role="GESTOR")
+    case_obj = _make_case(case_id="c5", tenant_id="t1")
+
+    rp = SimpleNamespace(
+        id="rp-filed",
+        tenant_id="t1",
+        case_id="c5",
+        status="FILED",
+        decision="REPORT",
+        payload={"decisionLegacy": "FILE_SAR"},
+        created_at=datetime.now(UTC) - timedelta(days=3),
+        filed_at=datetime.now(UTC) - timedelta(days=2),
+        coaf_protocol_number=None,
+    )
+
+    async def _db_get(model, pk):
+        if model is Case:
+            return case_obj
+        return None
+
+    db.get = AsyncMock(side_effect=_db_get)
+
+    result_obj = MagicMock()
+    result_obj.scalars.return_value.first.return_value = rp
+    db.execute = AsyncMock(return_value=result_obj)
+
+    with patch("routers.cases.write_audit", AsyncMock()):
+        result = await get_report_filing_status(case_id="c5", current_user=user, db=db)
+
+    assert result.report_package_id == "rp-filed"
+    assert result.requires_submission is False
+    assert result.deadline_state == "OK"
+    assert result.protocol_registered is False
+    assert any("coaf_protocol_number" in msg for msg in result.warnings)
+
+
+@pytest.mark.asyncio
 async def test_add_case_comment_with_mentions_dispatches_notifications():
     """@mentions in a comment must each produce a CASE_MENTION Notification."""
     from routers.cases import add_case_comment

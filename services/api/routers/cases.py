@@ -1536,6 +1536,21 @@ class ReportFilingContractOut(BaseModel):
     notes: list[str]
 
 
+class ReportFilingStatusOut(BaseModel):
+    case_id: str
+    report_package_id: str | None
+    report_status: str | None
+    report_decision: str | None
+    requires_submission: bool
+    protocol_registered: bool
+    coaf_protocol_number: str | None
+    filing_channel: str
+    days_since_report_created: int | None
+    days_since_filed: int | None
+    deadline_state: str
+    warnings: list[str]
+
+
 @router.get("/cases/{case_id}/report-packages/{rp_id}/chain-of-custody", tags=["cases"])
 async def get_report_package_chain_of_custody(
     case_id: str,
@@ -1655,6 +1670,97 @@ async def get_report_filing_contract(
             "Após submissão no portal Siscoaf, registrar coaf_protocol_number para fechar a trilha.",
             "Quando API oficial COAF existir, o canal poderá mudar para integração automática.",
         ],
+    )
+
+
+@router.get("/cases/{case_id}/report-filing-status", response_model=ReportFilingStatusOut, tags=["cases"])
+async def get_report_filing_status(
+    case_id: str,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retorna status operacional do filing COAF para o caso (prazo e protocolo)."""
+    c = await db.get(Case, case_id)
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Caso não encontrado")
+
+    rp = (await db.execute(
+        select(ReportPackage)
+        .where(
+            ReportPackage.tenant_id == current_user.tenant_id,
+            ReportPackage.case_id == case_id,
+        )
+        .order_by(ReportPackage.created_at.desc())
+    )).scalars().first()
+
+    if rp and isinstance(rp.payload, dict):
+        report_decision = rp.payload.get("decisionLegacy") or rp.payload.get("decision") or rp.decision
+    else:
+        report_decision = rp.decision if rp else None
+
+    report_status = str(rp.status) if rp else None
+    requires_submission = bool(rp and str(report_decision) in {"FILE_SAR", "REPORT"} and report_status != "FILED")
+    protocol_number = str(rp.coaf_protocol_number).strip() if rp and rp.coaf_protocol_number else None
+    protocol_registered = bool(protocol_number)
+
+    now = datetime.now(UTC)
+    days_since_report_created: int | None = None
+    if rp and rp.created_at:
+        created_at = rp.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        days_since_report_created = max(0, (now - created_at).days)
+
+    days_since_filed: int | None = None
+    if rp and rp.filed_at:
+        filed_at = rp.filed_at
+        if filed_at.tzinfo is None:
+            filed_at = filed_at.replace(tzinfo=UTC)
+        days_since_filed = max(0, (now - filed_at).days)
+
+    deadline_state = "NO_REPORT"
+    warnings: list[str] = []
+    if rp is not None:
+        deadline_state = "OK"
+        if requires_submission and days_since_report_created is not None:
+            if days_since_report_created >= 30:
+                deadline_state = "BREACH"
+                warnings.append("Prazo regulatório excedido para submissão do report package FILE_SAR.")
+            elif days_since_report_created >= 23:
+                deadline_state = "WARNING"
+                warnings.append("Prazo regulatório próximo do vencimento para submissão do report package FILE_SAR.")
+        if report_status == "FILED" and not protocol_registered:
+            warnings.append("Report package FILED sem coaf_protocol_number registrado.")
+
+    await write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "VIEW_REPORT_FILING_STATUS",
+        "Case",
+        case_id,
+        after={
+            "report_package_id": str(rp.id) if rp else None,
+            "deadline_state": deadline_state,
+            "requires_submission": requires_submission,
+            "protocol_registered": protocol_registered,
+        },
+    )
+    await db.commit()
+
+    return ReportFilingStatusOut(
+        case_id=case_id,
+        report_package_id=str(rp.id) if rp else None,
+        report_status=report_status,
+        report_decision=str(report_decision) if report_decision is not None else None,
+        requires_submission=requires_submission,
+        protocol_registered=protocol_registered,
+        coaf_protocol_number=protocol_number,
+        filing_channel="MANUAL_PORTAL",
+        days_since_report_created=days_since_report_created,
+        days_since_filed=days_since_filed,
+        deadline_state=deadline_state,
+        warnings=warnings,
     )
 
 
