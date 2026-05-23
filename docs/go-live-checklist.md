@@ -78,7 +78,7 @@ Fechamento readiness local desta rodada (2026-05-23):
 ## 5.2 Criterios explicitos de go/no-go
 
 Go-live so pode seguir quando todos os itens abaixo estiverem verdes e anexados ao ticket/canal operacional:
-- `artifact-readiness-preflight` do workflow manual ou saida equivalente de `scripts/readiness_preflight.sh`.
+- `artifact-readiness-preflight` do workflow manual ou saida equivalente de `scripts/readiness_preflight.sh --require-real-provider --expected-provider <provider_real>`.
 - `artifact-readiness-go-no-go` com decisao final `release_go_no_go=GO`.
 - `artifact-readiness-capacity-smoke` do mesmo readiness com `load_slo=PASS` para o endpoint `POST /ingest/batch`.
 - Evidencia do ultimo backup valido com idade inferior a 24h.

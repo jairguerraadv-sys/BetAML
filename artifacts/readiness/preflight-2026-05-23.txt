@@ -1,6 +1,6 @@
 
 == Contexto ==
-timestamp_utc=2026-05-23T05:59:46Z
+timestamp_utc=2026-05-23T06:12:37Z
 root_dir=/Users/jairarantes/Desktop/BetAML
 compose_file=/Users/jairarantes/Desktop/BetAML/infra/docker-compose.yml
 api_url=http://localhost:8000
@@ -31,10 +31,3 @@ frontend_url=http://localhost:3000
 
 == Migracoes SQL ==
 NOTICE:  relation "schema_migrations" already exists, skipping
-[PASS] dry-run das migracoes legadas validado
-
-== Backup ==
-[PASS] configuracao de backup Helm presente e habilitada
-
-== Resumo ==
-readiness_preflight=PASS

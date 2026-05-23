@@ -60,6 +60,9 @@ Observacao operacional:
 - Override controlado: `--max-backup-age-hours N` ou `--skip-backup-age-check`.
 - O gate final exige `--external-provider` com provider real ativo no corte.
 - `mock`/`mock_identity` resultam em `NO_GO` (exceto override explícito `--allow-mock-provider`, apenas para ambiente controlado).
+- Em corte formal, rode o preflight com validação de provider real:
+  - `bash scripts/readiness_preflight.sh --require-real-provider --expected-provider <provider_real>`
+  - o preflight valida `EXTERNAL_VALIDATION_PROVIDER` (nao-mock), `EXTERNAL_VALIDATION_PROVIDER_URL` e `EXTERNAL_VALIDATION_PROVIDER_TOKEN`.
 
 Requer configuracao no repositorio GitHub:
 - variable `E2E_USERNAME`
