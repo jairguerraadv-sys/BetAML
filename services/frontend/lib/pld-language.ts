@@ -96,7 +96,7 @@ function formatPercent(value: unknown) {
 
 export function formatIndicatorValue(key: string, value: unknown): string {
   if (value === null || value === undefined || value === '') return 'sem dado';
-  if (key.includes('sum') || key.includes('income') || key.includes('amount') || key.includes('deposit')) {
+  if (key.includes('sum') || key.includes('income') || key.includes('amount') || key.includes('value')) {
     const money = formatMoney(value);
     if (money) return money;
   }

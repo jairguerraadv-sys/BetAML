@@ -71,6 +71,7 @@ const STATUS_PT: Record<string, string> = {
   INVESTIGATING:  'Investigando',
   PENDING_REVIEW: 'Aguarda Revisão',
   IN_REVIEW:      'Em revisão',
+  UNDER_REVIEW:   'Em revisão',
   CLOSED:         'Encerrado',
   REPORTED:       'Reportado ao COAF',
 };
@@ -206,11 +207,63 @@ type Tab = 'overview' | 'profile' | 'movements' | 'network' | 'decision';
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: 'overview',   label: 'Visão Geral',       icon: Activity },
-  { id: 'profile',    label: 'Perfil do Cliente', icon: User },
+  { id: 'profile',    label: 'Perfil do Apostador', icon: User },
   { id: 'movements',  label: 'Movimentações',     icon: TrendingDown },
   { id: 'network',    label: 'Rede e Vínculos',   icon: Network },
   { id: 'decision',   label: 'Decisão e Relatório', icon: FileText },
 ];
+
+function nextActionForCase(c: CaseDetail) {
+  if (c.status === 'OPEN') {
+    return {
+      title: 'Iniciar investigação',
+      body: 'Atribua o caso a um analista, revise os alertas vinculados e mova o status para Investigando.',
+    };
+  }
+  if (c.status === 'INVESTIGATING') {
+    return {
+      title: 'Completar análise',
+      body: 'Verifique perfil, movimentações, vínculos e registre a narrativa antes de enviar para revisão.',
+    };
+  }
+  if (c.status === 'PENDING_REVIEW' || c.status === 'IN_REVIEW' || c.status === 'UNDER_REVIEW') {
+    return {
+      title: 'Revisar decisão',
+      body: 'Confirme se a narrativa, evidências e decisão de reporte estão consistentes antes do encerramento.',
+    };
+  }
+  if (c.status === 'CLOSED') {
+    return {
+      title: 'Gerar ou arquivar dossiê',
+      body: 'Gere o dossiê final quando houver comunicação ao COAF ou mantenha o registro arquivado com justificativa.',
+    };
+  }
+  if (c.status === 'REPORTED') {
+    return {
+      title: 'Registrar protocolo COAF',
+      body: 'Confirme se o protocolo de envio foi registrado no histórico do dossiê.',
+    };
+  }
+  return {
+    title: 'Revisar caso',
+    body: 'Siga as abas do dossiê e registre a próxima decisão operacional.',
+  };
+}
+
+function timelineEventSummary(content: Record<string, unknown> | null | undefined) {
+  if (!content || Object.keys(content).length === 0) return null;
+  if (typeof content.comment === 'string') return `"${content.comment}"`;
+  if (typeof content.from_status === 'string' || typeof content.to_status === 'string') {
+    const from = STATUS_PT[String(content.from_status)] ?? String(content.from_status ?? 'anterior');
+    const to = STATUS_PT[String(content.to_status)] ?? String(content.to_status ?? 'novo');
+    return `Status alterado de ${from} para ${to}.`;
+  }
+  if (typeof content.alert_id === 'string') return `Alerta ${content.alert_id.slice(0, 8)} vinculado ao caso.`;
+  if (typeof content.file_name === 'string') return `Evidência anexada: ${content.file_name}.`;
+  if (typeof content.report_package_id === 'string') return `Dossiê ${content.report_package_id.slice(0, 8)} gerado.`;
+  if (typeof content.assigned_to === 'string') return `Caso atribuído para análise.`;
+  return 'Evento registrado no histórico do caso.';
+}
 
 // ── Tab: Visão Geral ──────────────────────────────────────────────────────────
 function TabOverview({ c }: { c: CaseDetail }) {
@@ -249,9 +302,18 @@ function TabOverview({ c }: { c: CaseDetail }) {
       await qc.invalidateQueries({ queryKey: ['case', c.id] });
     },
   });
+  const nextAction = nextActionForCase(c);
 
   return (
     <div className="space-y-5">
+      <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-5">
+        <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-emerald-800">
+          <ChevronRight size={15} /> Próxima ação sugerida
+        </h3>
+        <p className="text-sm font-semibold text-emerald-900">{nextAction.title}</p>
+        <p className="mt-1 text-sm text-emerald-800">{nextAction.body}</p>
+      </div>
+
       {/* Resumo da suspeita */}
       <div className="rounded-xl border border-blue-100 bg-blue-50 p-5">
         <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-blue-800">
@@ -274,7 +336,7 @@ function TabOverview({ c }: { c: CaseDetail }) {
           {c.player_id && (
             <li className="flex items-start gap-2">
               <span className="mt-1 h-1.5 w-1.5 rounded-full bg-blue-500 shrink-0" />
-              Cliente vinculado ao caso — veja a aba "Perfil do Cliente".
+              Apostador vinculado ao caso — veja a aba "Perfil do Apostador".
             </li>
           )}
         </ul>
@@ -314,13 +376,8 @@ function TabOverview({ c }: { c: CaseDetail }) {
                   <p className="text-xs font-semibold text-gray-800">
                     {EVT_PT[ev.event_type] ?? ev.event_type}
                   </p>
-                  {!!ev.content?.comment && (
-                    <p className="mt-0.5 text-xs text-gray-600 italic">"{String(ev.content.comment)}"</p>
-                  )}
-                  {ev.content && Object.keys(ev.content).length > 0 && !ev.content.comment && (
-                    <p className="mt-0.5 text-[10px] text-gray-400 font-mono">
-                      {JSON.stringify(ev.content).slice(0, 60)}
-                    </p>
+                  {timelineEventSummary(ev.content) && (
+                    <p className="mt-0.5 text-xs text-gray-600">{timelineEventSummary(ev.content)}</p>
                   )}
                   <p className="mt-1 text-[10px] text-gray-400">
                     {new Date(ev.created_at).toLocaleString('pt-BR')}
@@ -473,7 +530,7 @@ function TabOverview({ c }: { c: CaseDetail }) {
   );
 }
 
-// ── Tab: Perfil do Cliente ────────────────────────────────────────────────────
+// ── Tab: Perfil do Apostador ──────────────────────────────────────────────────
 function TabProfile({ playerId }: { playerId: string | undefined }) {
   const { data: player, isLoading: loadingP } = useQuery({
     queryKey: ['player', playerId],
@@ -543,7 +600,7 @@ function TabProfile({ playerId }: { playerId: string | undefined }) {
             <dd className="font-mono font-medium">{player.cpf ?? '***.***.***-**'}</dd>
           </div>
           <div>
-            <dt className="text-xs text-gray-400">Pontuação de risco</dt>
+            <dt className="text-xs text-gray-400">Risco consolidado</dt>
             <dd className="font-semibold">{(player.risk_score * 100).toFixed(0)}%</dd>
           </div>
           <div>
@@ -682,7 +739,7 @@ function TabProfile({ playerId }: { playerId: string | undefined }) {
       {network.length > 0 && (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">
-            <Network size={14} className="text-gray-400" /> Rede de Relacionamentos
+            <Network size={14} className="text-gray-400" /> Rede de Vínculos
             <span className="ml-auto rounded bg-orange-100 px-2 py-0.5 text-[10px] font-bold text-orange-700">
               {network.length} vínculo{network.length !== 1 ? 's' : ''}
             </span>
@@ -708,7 +765,7 @@ function TabProfile({ playerId }: { playerId: string | undefined }) {
       {caseHistory && (caseHistory.cases.length > 0 || caseHistory.alerts.length > 0) && (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">
-            <History size={14} className="text-gray-400" /> Histórico do Cliente
+            <History size={14} className="text-gray-400" /> Histórico do Apostador
           </h3>
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -958,7 +1015,7 @@ function TabNetwork({ playerId }: { playerId: string | undefined }) {
                               ? 'bg-orange-100 text-orange-700'
                               : 'bg-blue-100 text-blue-700'
                           }`}>
-                            {link.type === 'device' ? '📱 Dispositivo' : '🏦 Conta/PIX'}
+                            {link.type === 'device' ? 'Dispositivo' : 'Conta/PIX'}
                           </span>
                         </td>
                         <td className="py-2 font-mono text-gray-500">
@@ -1147,7 +1204,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                 rel="noopener noreferrer"
                 className="mt-3 inline-flex items-center gap-1 rounded-lg bg-green-700 px-4 py-2 text-xs font-semibold text-white hover:bg-green-800"
               >
-                ⬇ Baixar PDF (COAF)
+                Baixar PDF (COAF)
               </a>
             )}
             {(c.status === 'CLOSED' || c.status === 'REPORTED') && (
@@ -1157,7 +1214,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                 rel="noopener noreferrer"
                 className="mt-3 inline-flex items-center gap-1 rounded-lg border border-green-600 px-4 py-2 text-xs font-semibold text-green-700 hover:bg-green-50"
               >
-                ⬇ Baixar XML (COAF Res. 36)
+                Baixar arquivo COAF
               </a>
             )}
             {submitResult?.xml_sha256 && (
@@ -1414,7 +1471,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
 
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold text-gray-700">Histórico de ReportPackages</h3>
+          <h3 className="text-sm font-semibold text-gray-700">Histórico de dossiês</h3>
           {reportPackages.length > 0 && (
             <button
               onClick={() => submitMut.mutate()}
@@ -1508,7 +1565,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
             </div>
           ))}
           {!reportPackages.length && (
-            <p className="text-xs text-gray-400">Nenhum report package gerado ainda.</p>
+            <p className="text-xs text-gray-400">Nenhum dossiê gerado ainda.</p>
           )}
         </div>
       </div>

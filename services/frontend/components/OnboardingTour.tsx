@@ -2,7 +2,7 @@
 /**
  * OnboardingTour — tour guiado exibido na 1ª vez que um analista acessa o sistema.
  *
- * Persiste em localStorage por chave `betaml_tour_done_v1`.
+ * Persiste em localStorage por chave `betaml_tour_done_v2`.
  * Cada passo aponta para uma tela e descreve, em linguagem simples, o que o
  * analista encontra lá.
  */
@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
-const STORAGE_KEY = 'betaml_tour_done_v1';
+const STORAGE_KEY = 'betaml_tour_done_v2';
 
 interface TourStep {
   id: number;
@@ -69,9 +69,9 @@ const STEPS: TourStep[] = [
     icon: FileBarChart2,
     title: 'Relatórios Reguladores',
     description:
-      'Gere dossiês e XMLs para envio ao COAF com um clique, diretamente de dentro do caso. ' +
-      'O sistema preenche os campos Siscoaf automaticamente com base na sua narrativa.',
-    hint: 'O relatório XML só pode ser gerado para casos com status "Encerrado" ou "Reportado".',
+      'Gere dossiês e arquivos de comunicação ao COAF diretamente de dentro do caso. ' +
+      'O sistema organiza os campos Siscoaf com base na sua narrativa e decisão.',
+    hint: 'O arquivo de comunicação só pode ser gerado para casos com status "Encerrado" ou "Reportado".',
     href: '/reports',
     linkLabel: 'Ver Relatórios',
     color: 'text-emerald-600',
@@ -79,14 +79,14 @@ const STEPS: TourStep[] = [
   {
     id: 5,
     icon: Wand2,
-    title: 'Construtor de Regras',
+    title: 'Construtor Visual de Condições',
     description:
       'Crie condições de risco sem escrever código: escolha campo, operador e valor. ' +
       'Tem modelos prontos para Estruturação, PEP, Layering e mais. ' +
       'Disponível apenas para perfis sênior/administrador.',
     hint: 'Use "Simular antes de publicar" para ver quantos alertas a regra geraria nos últimos 30 dias.',
     href: '/rules/builder',
-    linkLabel: 'Construtor de Regras',
+    linkLabel: 'Abrir Construtor Visual',
     color: 'text-purple-600',
   },
   {
@@ -207,7 +207,7 @@ export default function OnboardingTour({ forceOpen = false, onClose }: Onboardin
           {/* Dica */}
           <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
             <p className="text-xs text-blue-800">
-              <span className="mr-1 font-bold">💡 Dica:</span>
+              <span className="mr-1 font-bold">Dica:</span>
               {current.hint}
             </p>
           </div>

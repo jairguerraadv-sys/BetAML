@@ -3,7 +3,7 @@ import { useState, useCallback } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { api, validateDsl, createRule, simulateRule, previewDsl, SimulateRuleResult } from '@/lib/api';
 import {
-  Plus, Trash2, Play, Save, Copy, ChevronDown, ChevronRight,
+  Plus, Play, Save, Copy, ChevronDown, ChevronRight,
   AlertTriangle, Info, CheckCircle2, X, ToggleLeft, ToggleRight,
   Search, TrendingUp, Users, Target,
 } from 'lucide-react';
@@ -36,14 +36,13 @@ interface RuleTemplate {
   id: string;
   name: string;
   description: string;
-  icon: string;
   tag: string;
   conditions: Omit<Condition, 'id'>[];
   severity: Severity;
   scope: Scope;
 }
 
-// ── Campos disponíveis (chave = caminho DSL real) ───────────────────────────
+// ── Campos disponíveis ──────────────────────────────────────────────────────
 
 const FIELDS: FieldDef[] = [
   { key: 'features.deposit_sum_30d',               label: 'Volume depósitos (30d)',         type: 'number', unit: 'R$',         hint: 'Soma dos depósitos nos últimos 30 dias' },
@@ -55,7 +54,7 @@ const FIELDS: FieldDef[] = [
   { key: 'features.unique_instruments_7d',         label: 'Instrumentos únicos (7d)',        type: 'number', unit: 'N' },
   { key: 'features.cashout_ratio_7d',              label: '% do saldo sacado (7d)',          type: 'number', unit: '0–1' },
   { key: 'features.cluster_size',                  label: 'Apostadores no mesmo grupo',     type: 'number', unit: 'N' },
-  { key: 'player.risk_score',                      label: 'Score de risco',                 type: 'number', unit: '0–100' },
+  { key: 'player.risk_score',                      label: 'Risco consolidado',              type: 'number', unit: '0–1' },
   { key: 'player.pep_flag',                        label: 'É PEP',                          type: 'select', options: ['true', 'false'] },
   { key: 'transaction.amount',                     label: 'Valor da transação',             type: 'number', unit: 'R$' },
   { key: 'features.bonus_to_real_ratio_30d',       label: 'Bônus vs depósitos reais (30d)', type: 'number', unit: '0–1',        hint: 'Proporção de créditos de bônus sobre depósitos reais' },
@@ -79,7 +78,7 @@ const TEMPLATES: RuleTemplate[] = [
     id: 'structuring',
     name: 'Estruturação (Smurfing)',
     description: 'Vários depósitos em 24h combinados com volume elevado em 30 dias',
-    icon: '🏦', tag: 'COAF art. 11', severity: 'HIGH', scope: 'TRANSACTION',
+    tag: 'COAF art. 11', severity: 'HIGH', scope: 'TRANSACTION',
     conditions: [
       { field: 'features.deposit_count_24h', operator: 'gte', value: '5' },
       { field: 'features.deposit_sum_30d',   operator: 'gte', value: '50000' },
@@ -89,7 +88,7 @@ const TEMPLATES: RuleTemplate[] = [
     id: 'layering_speed',
     name: 'Layering — Saques rápidos',
     description: 'Retirada acelerada após depósito: menos de 2 horas',
-    icon: '⚡', tag: 'Ciclo rápido', severity: 'CRITICAL', scope: 'TRANSACTION',
+    tag: 'Ciclo rápido', severity: 'CRITICAL', scope: 'TRANSACTION',
     conditions: [
       { field: 'features.avg_deposit_to_withdrawal_hours', operator: 'lte', value: '2' },
       { field: 'features.deposit_sum_30d',                 operator: 'gte', value: '100000' },
@@ -99,7 +98,7 @@ const TEMPLATES: RuleTemplate[] = [
     id: 'pep_volume',
     name: 'PEP — Volume elevado',
     description: 'Pessoa politicamente exposta com movimentação incompatível',
-    icon: '🏛️', tag: 'PEP / Res. 30', severity: 'HIGH', scope: 'PLAYER',
+    tag: 'PEP / Res. 30', severity: 'HIGH', scope: 'PLAYER',
     conditions: [
       { field: 'player.pep_flag',          operator: 'eq',  value: 'true' },
       { field: 'features.deposit_sum_30d', operator: 'gte', value: '30000' },
@@ -109,7 +108,7 @@ const TEMPLATES: RuleTemplate[] = [
     id: 'multi_device',
     name: 'Múltiplos dispositivos',
     description: 'Uso de muitos dispositivos compartilhados para fragmentar operações',
-    icon: '📱', tag: 'Fragmentação', severity: 'MEDIUM', scope: 'TRANSACTION',
+    tag: 'Fragmentação', severity: 'MEDIUM', scope: 'TRANSACTION',
     conditions: [
       { field: 'features.shared_device_count',   operator: 'gte', value: '5' },
       { field: 'features.unique_instruments_7d', operator: 'gte', value: '3' },
@@ -119,7 +118,7 @@ const TEMPLATES: RuleTemplate[] = [
     id: 'fast_cashout',
     name: 'Saque após depósito (ratio)',
     description: 'Saque quase total do valor depositado — ratio alto em 7 dias',
-    icon: '💸', tag: 'Round-trip', severity: 'HIGH', scope: 'TRANSACTION',
+    tag: 'Saque rápido', severity: 'HIGH', scope: 'TRANSACTION',
     conditions: [
       { field: 'features.cashout_ratio_7d',  operator: 'gte', value: '0.9' },
       { field: 'features.deposit_sum_30d',   operator: 'gte', value: '10000' },
@@ -129,7 +128,7 @@ const TEMPLATES: RuleTemplate[] = [
     id: 'bonus_abuse',
     name: 'Abuso de Bônus / Free Bets',
     description: 'Uso intensivo de bônus e free bets para movimentar saldo sem risco real — possível evasão via apostas',
-    icon: '🎁', tag: 'Bônus Abuse', severity: 'MEDIUM', scope: 'PLAYER',
+    tag: 'Bônus', severity: 'MEDIUM', scope: 'PLAYER',
     conditions: [
       { field: 'features.bonus_to_real_ratio_30d', operator: 'gte', value: '0.7' },
       { field: 'features.cashout_ratio_7d',        operator: 'gte', value: '0.8' },
@@ -139,7 +138,7 @@ const TEMPLATES: RuleTemplate[] = [
     id: 'self_exclusion_active',
     name: 'Aposta com Autoexclusão Ativa',
     description: 'Jogador com autoexclusão registrada realizando apostas — violação Portaria 1.231/2024 (jogo responsável)',
-    icon: '🚫', tag: 'Jogo Responsável', severity: 'CRITICAL', scope: 'PLAYER',
+    tag: 'Jogo Responsável', severity: 'CRITICAL', scope: 'PLAYER',
     conditions: [
       { field: 'player.self_exclusion_flag', operator: 'eq',  value: 'true' },
       { field: 'player.risk_score',          operator: 'gte', value: '0' },
@@ -149,7 +148,7 @@ const TEMPLATES: RuleTemplate[] = [
     id: 'slot_high_frequency',
     name: 'Alta Frequência em Slots (24h)',
     description: 'Volume anômalo de rodadas de slots em 24h — possível automação ou lavagem via jogos de baixo RTP',
-    icon: '🎰', tag: 'Casino/Slots', severity: 'MEDIUM', scope: 'BET',
+    tag: 'Casino/Slots', severity: 'MEDIUM', scope: 'BET',
     conditions: [
       { field: 'bet.productType', operator: 'eq',  value: 'SLOT' },
       { field: 'features.slot_session_count_24h', operator: 'gte', value: '200' },
@@ -159,7 +158,7 @@ const TEMPLATES: RuleTemplate[] = [
     id: 'casino_chip_washing',
     name: 'Casino Chip Washing',
     description: 'Padrão de lavagem em casino ao vivo: muitas sessões com stakes mínimos + saque alto',
-    icon: '🃏', tag: 'Casino/LD', severity: 'HIGH', scope: 'BET',
+    tag: 'Casino ao vivo', severity: 'HIGH', scope: 'BET',
     conditions: [
       { field: 'bet.productType', operator: 'eq',  value: 'CASINO_LIVE' },
       { field: 'features.casino_session_count_24h', operator: 'gte', value: '50' },
@@ -170,7 +169,7 @@ const TEMPLATES: RuleTemplate[] = [
     id: 'product_diversity',
     name: 'Diversificação de Produto Suspeita',
     description: 'Jogador usando muitas modalidades distintas em 7d — possível dispersão para dificultar rastreamento',
-    icon: '🔀', tag: 'Multi-Produto', severity: 'MEDIUM', scope: 'BET',
+    tag: 'Multi-produto', severity: 'MEDIUM', scope: 'BET',
     conditions: [
       { field: 'features.bet_product_diversity_7d', operator: 'gte', value: '4' },
     ],
@@ -184,7 +183,15 @@ const SEVERITY_COLORS: Record<Severity, string> = {
   CRITICAL: 'bg-red-100 text-red-700',
 };
 
+const SEVERITY_LABELS: Record<Severity, string> = {
+  LOW: 'Baixo',
+  MEDIUM: 'Médio',
+  HIGH: 'Alto',
+  CRITICAL: 'Crítico',
+};
+
 function uid() { return Math.random().toString(36).slice(2, 9); }
+function severityLabel(severity: Severity) { return SEVERITY_LABELS[severity] ?? severity; }
 
 function buildDsl(conditions: Condition[], joinOp: JoinOp): string {
   const parts = conditions
@@ -358,9 +365,9 @@ export default function RuleBuilderPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Construtor de Regras</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Construtor Visual de Condições</h1>
         <p className="mt-1 text-gray-500">
-          Defina condições em português e publique com um clique. A DSL gerada é avaliada em tempo real pelo Rules Engine.
+          Defina situações de risco em português, simule o impacto e publique somente quando o volume fizer sentido para a operação.
         </p>
       </div>
 
@@ -401,9 +408,11 @@ export default function RuleBuilderPage() {
                 className="group rounded-lg border border-gray-200 p-4 text-left transition-all hover:border-brand hover:bg-brand/5 dark:border-gray-700"
               >
                 <div className="mb-2 flex items-start justify-between">
-                  <span className="text-2xl">{tmpl.icon}</span>
+                  <span className="rounded-full bg-brand/10 px-2 py-1 text-xs font-bold text-brand">
+                    Modelo
+                  </span>
                   <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${SEVERITY_COLORS[tmpl.severity]}`}>
-                    {tmpl.severity}
+                    {severityLabel(tmpl.severity)}
                   </span>
                 </div>
                 <p className="text-sm font-semibold text-gray-800 group-hover:text-brand dark:text-white">{tmpl.name}</p>
@@ -421,10 +430,10 @@ export default function RuleBuilderPage() {
 
         {/* Identificação */}
         <div className="space-y-4 p-6">
-          <h2 className="font-semibold text-gray-800 dark:text-white">Identificação da regra</h2>
+          <h2 className="font-semibold text-gray-800 dark:text-white">Identificação da condição</h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Nome da regra *</label>
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Nome da condição *</label>
               <input
                 type="text"
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:ring-2 focus:ring-brand dark:border-gray-700 dark:bg-gray-800 dark:text-white"
@@ -440,10 +449,10 @@ export default function RuleBuilderPage() {
                 value={severity}
                 onChange={(e) => setSeverity(e.target.value as Severity)}
               >
-                <option value="LOW">🔵 BAIXO — informativo</option>
-                <option value="MEDIUM">🟡 MÉDIO — requer análise</option>
-                <option value="HIGH">🟠 ALTO — prioritário</option>
-                <option value="CRITICAL">🔴 CRÍTICO — ação imediata</option>
+                <option value="LOW">Baixo — informativo</option>
+                <option value="MEDIUM">Médio — requer análise</option>
+                <option value="HIGH">Alto — prioritário</option>
+                <option value="CRITICAL">Crítico — ação imediata</option>
               </select>
             </div>
             <div>
@@ -453,9 +462,9 @@ export default function RuleBuilderPage() {
                 value={scope}
                 onChange={(e) => setScope(e.target.value as Scope)}
               >
-                <option value="TRANSACTION">TRANSACTION — avaliada em cada transação</option>
-                <option value="BET">BET — avaliada em cada aposta</option>
-                <option value="PLAYER">PLAYER — avaliada no perfil do jogador</option>
+                <option value="TRANSACTION">Transação — avaliada em cada depósito, saque ou ajuste</option>
+                <option value="BET">Aposta — avaliada em cada aposta registrada</option>
+                <option value="PLAYER">Apostador — avaliada no perfil consolidado</option>
               </select>
             </div>
             <div>
@@ -463,7 +472,7 @@ export default function RuleBuilderPage() {
               <textarea
                 rows={2}
                 className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:ring-2 focus:ring-brand dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                placeholder="Padrão suspeito que esta regra detecta..."
+                placeholder="Padrão suspeito que esta condição deve detectar..."
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
@@ -511,13 +520,14 @@ export default function RuleBuilderPage() {
           </button>
         </div>
 
-        {/* Prévia DSL */}
-        <div className="bg-gray-50 px-6 py-4 dark:bg-gray-800">
-          <p className="break-all font-mono text-xs leading-relaxed text-gray-500">
-            <span className="mr-2 text-gray-400">DSL gerada:</span>
+        <details className="bg-gray-50 px-6 py-4 dark:bg-gray-800">
+          <summary className="cursor-pointer text-xs font-semibold text-gray-500">
+            Ver detalhes técnicos gerados
+          </summary>
+          <p className="mt-3 break-all font-mono text-xs leading-relaxed text-gray-500">
             {dsl || <span className="italic text-gray-400">Nenhuma condição definida</span>}
           </p>
-        </div>
+        </details>
 
         {/* Resultado de validação */}
         {validateResult && (
@@ -529,7 +539,7 @@ export default function RuleBuilderPage() {
               : <AlertTriangle size={16} className="mt-0.5 flex-shrink-0 text-red-600" />}
             <p className={`text-sm ${validateResult.valid ? 'text-green-800' : 'text-red-800'}`}>
               {validateResult.valid
-                ? 'DSL válida — a regra pode ser publicada.'
+                ? 'Condição validada — pode ser publicada.'
                 : `Erro de sintaxe: ${validateResult.error}`}
             </p>
           </div>
@@ -544,7 +554,7 @@ export default function RuleBuilderPage() {
               className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-600 dark:text-gray-300"
             >
               <Play size={15} />
-              {validateMutation.isPending ? 'Validando...' : 'Validar DSL'}
+              {validateMutation.isPending ? 'Validando...' : 'Validar condição'}
             </button>
             <button
               onClick={async () => {
@@ -574,7 +584,7 @@ export default function RuleBuilderPage() {
           <div className="flex items-center gap-3">
             {saved && (
               <span className="flex items-center gap-1.5 text-sm font-medium text-green-700">
-                <CheckCircle2 size={15} /> Regra publicada!
+                <CheckCircle2 size={15} /> Condição publicada!
               </span>
             )}
             {saveMutation.isError && (
@@ -588,7 +598,7 @@ export default function RuleBuilderPage() {
               className="flex items-center gap-2 rounded-lg bg-brand px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand/90 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Save size={15} />
-              {saveMutation.isPending ? 'Publicando...' : 'Publicar Regra'}
+              {saveMutation.isPending ? 'Publicando...' : 'Publicar condição'}
             </button>
           </div>
         </div>
@@ -616,7 +626,7 @@ export default function RuleBuilderPage() {
             <div className="grid grid-cols-2 gap-4 p-5 md:grid-cols-4">
               <div className="rounded-lg bg-white p-3 shadow-sm dark:bg-indigo-900/30">
                 <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                  <Target size={12} /> Matches estimados
+                  <Target size={12} /> Alertas estimados
                 </div>
                 <div className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">
                   {previewResult.total_alerts ?? previewResult.matches}
@@ -652,7 +662,7 @@ export default function RuleBuilderPage() {
             <div className="flex items-start gap-2 border-t border-indigo-100 bg-amber-50 px-5 py-3 text-xs text-amber-800">
               <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-600" />
               <span>
-                Esta regra geraria muitos alertas. Considere adicionar condições para aumentar a precisão antes de publicar.
+                Esta condição geraria muitos alertas. Considere adicionar filtros para aumentar a precisão antes de publicar.
               </span>
             </div>
           )}
@@ -720,12 +730,9 @@ export default function RuleBuilderPage() {
         <div>
           <p className="mb-0.5 font-semibold">Como funciona?</p>
           <p className="leading-relaxed text-blue-700">
-            Cada evento processado pelo BetAML é avaliado contra todas as regras ativas.
-            A DSL gerada usa caminhos reais do contexto de avaliação — clique em{' '}
-            <strong>Validar DSL</strong> antes de publicar para confirmar que a sintaxe está correta.
-            O motor suporta operadores aritméticos: <code className="font-mono">+</code>,{' '}
-            <code className="font-mono">-</code>, <code className="font-mono">*</code>,{' '}
-            <code className="font-mono">/</code>.
+            Cada transação, aposta ou perfil processado pelo BetAML é avaliado contra as condições ativas.
+            Use a simulação para estimar volume de alertas e clientes envolvidos antes de publicar.
+            Os detalhes técnicos ficam disponíveis para revisão de administradores quando necessário.
           </p>
         </div>
       </div>
