@@ -648,6 +648,14 @@ class SystemFlag(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    @property
+    def key(self) -> str:
+        return f"{self.tenant_id}:{self.flag_name}"
+
+    @property
+    def value(self):
+        return self.flag_value
+
 
 # ── Eventos de Negócio (OLTP) ─────────────────────────────────────────────────
 

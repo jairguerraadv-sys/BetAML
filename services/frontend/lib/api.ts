@@ -28,6 +28,7 @@ api.interceptors.response.use(
 /** Resposta da API route Next.js /api/auth/login (sem o token — fica no cookie). */
 export interface LoginResponse {
   role: string;
+  roles: string[];
   tenant_id: string;
 }
 
@@ -1139,6 +1140,7 @@ export interface AdminUser {
   username: string;
   email: string;
   role: string;
+  roles?: string[];
   active: boolean;
   created_at: string;
 }

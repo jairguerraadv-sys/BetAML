@@ -156,7 +156,15 @@ function AssignCaseSelect({
     onSuccess: () => qc.invalidateQueries({ queryKey: ['case', caseId] }),
   });
 
-  const assignees = users.filter((u) => u.active && ['ADMIN', 'AML_ANALYST'].includes(u.role));
+  const assignees = users.filter((u) => {
+    const roles = new Set([u.role, ...(u.roles ?? [])]);
+    return u.active && (
+      roles.has('Operador_Analista') ||
+      roles.has('Operador_Gestor') ||
+      roles.has('AML_ANALYST') ||
+      roles.has('ADMIN')
+    );
+  });
 
   return (
     <select

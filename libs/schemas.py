@@ -887,6 +887,7 @@ class UserOut(BaseModel):
     username: str
     email: str
     role: str
+    roles: list[str] | None = None
     active: bool
     created_at: datetime
 
@@ -896,7 +897,7 @@ class UserOut(BaseModel):
 class UserCreateIn(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     email: str = Field(..., min_length=3, max_length=254)
-    role: str = Field(..., description="One of: ADMIN, AML_ANALYST, AUDITOR")
+    role: str = Field(..., description="One of: Operador_Analista, Operador_Gestor, Operador_AdminTecnico")
     password: str = Field(..., min_length=8)
 
 
@@ -907,7 +908,7 @@ class UserUpdateIn(BaseModel):
 
 class InviteIn(BaseModel):
     email: str = Field(..., min_length=3, max_length=254)
-    role: str = Field(..., description="Role for the invited user: ADMIN, AML_ANALYST, AUDITOR")
+    role: str = Field(..., description="Role for the invited user")
 
 
 class ReprocessJobIn(BaseModel):

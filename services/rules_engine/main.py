@@ -442,6 +442,10 @@ def _normalize_ml_features(features: dict[str, Any]) -> dict[str, float | bool |
 
 
 def _score_ml_sync(tenant_id: str, player_id: str, features: dict[str, Any]) -> dict[str, Any]:
+    if not str(player_id or "").strip():
+        logger.warning("ml_score_skipped_missing_player_id", tenant_id=tenant_id)
+        ML_SCORING_FAILURES.labels(tenant_id=tenant_id, reason="missing_player_id").inc()
+        return {"anomaly_score": 0.0, "is_anomaly": False, "model_id": None, "top_drivers": []}
     ctx = structlog.contextvars.get_contextvars()
     headers = {"Content-Type": "application/json"}
     # T10: autenticação interna — propagar API key se configurada

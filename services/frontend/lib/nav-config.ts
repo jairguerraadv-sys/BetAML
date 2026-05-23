@@ -61,6 +61,7 @@ const SECTION_GESTAO: NavSection = {
     { path: '/rules/builder',    label: 'Construtor de Regras',     icon: 'Wand2',              tooltip: 'Editor visual de condições de risco' },
     { path: '/rules/compound',   label: 'Regras Compostas',         icon: 'GitBranch',          tooltip: 'Combinações de regras e macros' },
     { path: '/player-lists',     label: 'Listas de Monitoramento',  icon: 'List',               tooltip: 'Listas PEP, sanções e monitoramento especial' },
+    { path: '/feature-store',     label: 'Feature Store',            icon: 'Database',           tooltip: 'Features, qualidade e drift dos sinais de risco' },
   ],
 };
 

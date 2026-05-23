@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import statistics
 import sys
 import time
@@ -43,6 +44,53 @@ structlog.configure(
 )
 
 logger = structlog.get_logger()
+
+_SENSITIVE_PAYLOAD_KEYS = {
+    "cpf",
+    "cpf_encrypted",
+    "document",
+    "document_number",
+    "email",
+    "full_name",
+    "name",
+    "phone",
+    "raw_payload",
+    "token",
+}
+_CPF_RE = re.compile(r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b")
+_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+
+
+def _sanitize_sensitive_payload(value, *, depth: int = 0):
+    if value is None:
+        return None
+    if depth >= 4:
+        return "[TRUNCATED]"
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if str(key).lower() in _SENSITIVE_PAYLOAD_KEYS
+            else _sanitize_sensitive_payload(item, depth=depth + 1)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_sensitive_payload(item, depth=depth + 1) for item in value[:20]]
+    if isinstance(value, str):
+        value = _CPF_RE.sub("[REDACTED_CPF]", value)
+        value = _EMAIL_RE.sub("[REDACTED_EMAIL]", value)
+        if len(value) > 256:
+            return value[:256] + "...[TRUNCATED]"
+    return value
+
+
+def _stored_error_payload(value) -> str:
+    sanitized = _sanitize_sensitive_payload(value)
+    if isinstance(sanitized, str):
+        return sanitized
+    return json.dumps(sanitized, ensure_ascii=False, default=str)
+
+
+def _error_sample_row(line, reason: str, raw):
+    return {"line": line, "reason": reason, "raw": _sanitize_sensitive_payload(raw)}
 
 KAFKA_SERVERS  = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 REDIS_URL      = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -1722,7 +1770,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                     "ingest_job_id": job_id,
                     "source_system": source_system,
                     "entity_type": entity_type,
-                    "raw_payload": json.dumps(raw_payload, ensure_ascii=False),
+                    "raw_payload": _stored_error_payload(raw_payload),
                     "error_reason": reason,
                     "error_detail": json.dumps({"line_number": line_number}, ensure_ascii=False),
                     "line_number": line_number,
@@ -1861,7 +1909,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                     validation_errors = payload_validation.get("validation_errors") or ["payload incompatível com schema canônico"]
                     reason = f"validation_failed: {'; '.join(str(error) for error in validation_errors)}"
                     if len(error_sample) < 10:
-                        error_sample.append({"line": idx, "reason": reason, "raw": rec})
+                        error_sample.append(_error_sample_row(idx, reason, rec))
                     await asyncio.to_thread(
                         _insert_ingest_error,
                         raw_payload=rec,
@@ -1911,7 +1959,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                 else:
                     failed += 1
                     if len(error_sample) < 10:
-                        error_sample.append({"line": idx, "reason": "publish_failed_after_retries", "raw": rec})
+                        error_sample.append(_error_sample_row(idx, "publish_failed_after_retries", rec))
                     await asyncio.to_thread(
                         _insert_ingest_error,
                         raw_payload=rec,
@@ -1922,7 +1970,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                 failed += 1
                 reason = str(exc)
                 if len(error_sample) < 10:
-                    error_sample.append({"line": idx, "reason": reason, "raw": rec})
+                    error_sample.append(_error_sample_row(idx, reason, rec))
                 await asyncio.to_thread(
                     _insert_ingest_error,
                     raw_payload=rec,
@@ -1936,7 +1984,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
             raw_payload = err.get("raw", "") if isinstance(err, dict) else ""
             line_number = err.get("line") if isinstance(err, dict) else None
             if len(error_sample) < 10:
-                error_sample.append({"line": line_number, "reason": reason, "raw": raw_payload})
+                error_sample.append(_error_sample_row(line_number, reason, raw_payload))
             await asyncio.to_thread(
                 _insert_ingest_error,
                 raw_payload=raw_payload,
@@ -2042,7 +2090,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                         or (mapping_cfg.get("entity_type", "transaction") if mapping_cfg else "transaction")
                     ).upper()
                     if len(error_sample) < 10:
-                        error_sample.append({"line": idx, "reason": "publish_failed_after_retries", "raw": row_data})
+                        error_sample.append(_error_sample_row(idx, "publish_failed_after_retries", row_data))
                     await asyncio.to_thread(
                         _insert_ingest_error,
                         raw_payload=row_data,
@@ -2060,7 +2108,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
                 ).upper()
                 target_topic = f"canonical.{error_entity_type.lower()}s"
                 if len(error_sample) < 10:
-                    error_sample.append({"line": idx, "reason": reason, "raw": row_data})
+                    error_sample.append(_error_sample_row(idx, reason, row_data))
 
                 await asyncio.to_thread(
                     _insert_ingest_error,
@@ -2094,7 +2142,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
         reason = f"stream_parse_error: {stream_exc}"
         logger.warning("ingest_stream_failed", job_id=job_id, error=str(stream_exc))
         if len(error_sample) < 10:
-            error_sample.append({"line": total + 1, "reason": reason, "raw": {}})
+            error_sample.append(_error_sample_row(total + 1, reason, {}))
     finally:
         if stream is not None:
             stream.close()
