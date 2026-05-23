@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import {
   SlidersHorizontal, Save, RefreshCw, HelpCircle, ChevronRight,
-  AlertTriangle, Shield, Clock,
+  Shield, Clock,
 } from 'lucide-react';
 import ContextualHelp from '@/components/ContextualHelp';
 
@@ -19,6 +19,10 @@ interface ScoringConfig {
   medium_threshold: number;
   high_threshold: number;
   critical_threshold: number;
+  auto_case_threshold: number;
+  risk_band_low_threshold: number;
+  risk_band_high_threshold: number;
+  income_volume_ratio_threshold: number;
   sla_low_hours: number;
   sla_medium_hours: number;
   sla_high_hours: number;
@@ -301,6 +305,70 @@ export default function SensitivityPage() {
             onChange={update('critical_threshold')}
             colorClass="bg-red-100 text-red-700"
           />
+        </div>
+      </section>
+
+      {/* Política operacional */}
+      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <h2 className="mb-1 flex items-center gap-2 text-base font-bold text-gray-800">
+          <Shield size={16} /> Política de PLD
+        </h2>
+        <p className="mb-4 text-xs text-gray-500">
+          Defina quando o sistema abre casos automaticamente e como consolida a banda de risco do apostador.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="rounded-lg border border-gray-200 p-3">
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500">Auto-case acima de</label>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={form.auto_case_threshold ?? 0.75}
+              onChange={(e) => update('auto_case_threshold')(Number(e.target.value))}
+              className="mt-1 w-full rounded border border-gray-200 px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand"
+            />
+            <span className="text-[10px] text-gray-400">score composto de 0 a 1</span>
+          </div>
+          <div className="rounded-lg border border-gray-200 p-3">
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500">Renda x volume</label>
+            <input
+              type="number"
+              min={0.1}
+              max={20}
+              step={0.1}
+              value={form.income_volume_ratio_threshold ?? 1.5}
+              onChange={(e) => update('income_volume_ratio_threshold')(Number(e.target.value))}
+              className="mt-1 w-full rounded border border-gray-200 px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand"
+            />
+            <span className="text-[10px] text-gray-400">múltiplo da renda mensal declarada</span>
+          </div>
+          <div className="rounded-lg border border-gray-200 p-3">
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500">Banda média a partir de</label>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={form.risk_band_low_threshold ?? 0.35}
+              onChange={(e) => update('risk_band_low_threshold')(Number(e.target.value))}
+              className="mt-1 w-full rounded border border-gray-200 px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand"
+            />
+            <span className="text-[10px] text-gray-400">score persistido no cadastro</span>
+          </div>
+          <div className="rounded-lg border border-gray-200 p-3">
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500">Banda alta a partir de</label>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={form.risk_band_high_threshold ?? 0.7}
+              onChange={(e) => update('risk_band_high_threshold')(Number(e.target.value))}
+              className="mt-1 w-full rounded border border-gray-200 px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand"
+            />
+            <span className="text-[10px] text-gray-400">score persistido no cadastro</span>
+          </div>
         </div>
       </section>
 

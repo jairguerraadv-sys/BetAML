@@ -18,7 +18,7 @@ import time
 import uuid
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 from typing import Any
@@ -102,6 +102,7 @@ FEATURE_EVIDENCE_KEYS = [
     "deposit_sum_24h",
     "deposit_sum_7d",
     "deposit_sum_30d",
+    "declared_income_monthly",
     "deposit_count_24h",
     "zscore_current_deposit_vs_baseline",
     "new_payment_instrument_flag",
@@ -129,6 +130,14 @@ DEFAULT_SCORING_CONFIG = {
     "medium_threshold": 60.0,
     "high_threshold": 80.0,
     "critical_threshold": 95.0,
+    "auto_case_threshold": 0.75,
+    "risk_band_low_threshold": 0.35,
+    "risk_band_high_threshold": 0.70,
+    "income_volume_ratio_threshold": 1.50,
+    "sla_low_hours": 168,
+    "sla_medium_hours": 72,
+    "sla_high_hours": 24,
+    "sla_critical_hours": 4,
 }
 
 def _metric_aliases(name: str) -> list[str]:
@@ -344,13 +353,21 @@ async def load_scoring_config(tenant_id: str) -> dict[str, Any]:
             row = conn.execute(
                 sa.text(
                     "SELECT rule_weight, ml_weight, network_weight, low_threshold, medium_threshold, "
-                    "high_threshold, critical_threshold "
+                    "high_threshold, critical_threshold, auto_case_threshold, "
+                    "risk_band_low_threshold, risk_band_high_threshold, income_volume_ratio_threshold, "
+                    "sla_low_hours, sla_medium_hours, sla_high_hours, sla_critical_hours "
                     "FROM scoring_configs WHERE tenant_id = :tid LIMIT 1"
                 ),
                 {"tid": tenant_id},
             ).fetchone()
             if row:
-                cfg.update({k: float(v) if v is not None else cfg[k] for k, v in dict(row._mapping).items()})
+                for k, v in dict(row._mapping).items():
+                    if v is None:
+                        continue
+                    if k.startswith("sla_"):
+                        cfg[k] = int(v)
+                    else:
+                        cfg[k] = float(v)
         _rule_cache[cache_key] = cfg
         _rule_cache_ts[cache_key] = now
         return cfg
@@ -418,6 +435,65 @@ def _severity_from_scoring_config(score_100: float, cfg: dict[str, Any]) -> str:
     if score_100 >= float(cfg.get("medium_threshold", 60.0)):
         return "MEDIUM"
     return "LOW"
+
+
+def _risk_band_from_score(score: float, cfg: dict[str, Any]) -> str:
+    high = float(cfg.get("risk_band_high_threshold", 0.70))
+    low = float(cfg.get("risk_band_low_threshold", 0.35))
+    if score >= high:
+        return "HIGH"
+    if score >= low:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _priority_from_severity(severity: str) -> str:
+    normalized = str(severity or "MEDIUM").upper()
+    if normalized in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+        return normalized
+    return "MEDIUM"
+
+
+def _sla_due_at(created_at: datetime, severity: str, cfg: dict[str, Any]) -> datetime:
+    key = f"sla_{str(severity or 'medium').lower()}_hours"
+    hours = int(cfg.get(key, cfg.get("sla_medium_hours", 72)) or 72)
+    return created_at + timedelta(hours=hours)
+
+
+def _income_volume_signal(features: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+    income = _try_float(features.get("declared_income_monthly"))
+    deposits = _try_float(features.get("deposit_sum_30d"))
+    try:
+        income_f = float(income or 0)
+        deposits_f = float(deposits or 0)
+    except (TypeError, ValueError):
+        return {"tier": "UNKNOWN", "reason": "invalid_feature_value"}
+
+    threshold = float(cfg.get("income_volume_ratio_threshold", 1.50))
+    if income_f <= 0:
+        return {
+            "tier": "UNKNOWN",
+            "declared_income_monthly": income_f,
+            "deposit_sum_30d": deposits_f,
+            "ratio": None,
+            "threshold": threshold,
+            "reason": "missing_declared_income",
+        }
+
+    ratio = deposits_f / income_f
+    if ratio >= threshold:
+        tier = "RED"
+    elif ratio >= max(threshold * 0.75, 1.0):
+        tier = "YELLOW"
+    else:
+        tier = "GREEN"
+    return {
+        "tier": tier,
+        "declared_income_monthly": round(income_f, 2),
+        "deposit_sum_30d": round(deposits_f, 2),
+        "ratio": round(ratio, 4),
+        "threshold": threshold,
+    }
 
 
 def _normalize_ml_features(features: dict[str, Any]) -> dict[str, float | bool | str]:
@@ -663,6 +739,7 @@ async def publish_alert(
         or match.get("features_snapshot", {}).get("shared_device_score")
         or 0.0
     )
+    income_volume = _income_volume_signal(match.get("features_snapshot", {}), scoring_cfg)
     composite_score = max(
         0.0,
         min(
@@ -710,6 +787,9 @@ async def publish_alert(
             "ml_contribution": round(anomaly_score * ml_weight * 100.0, 2),
             "network_contribution": round(network_score * network_component_weight * 100.0, 2),
             "risk_score": round(risk_score_100, 2),
+            "risk_band": _risk_band_from_score(composite_score, scoring_cfg),
+            "income_volume": income_volume,
+            "auto_case_threshold": float(scoring_cfg.get("auto_case_threshold", 0.75)),
         },
         "rule_weight":    rule_component_weight,
         "ml_weight":      ml_weight,
@@ -720,6 +800,17 @@ async def publish_alert(
             "triggered_condition": rule["condition_dsl"],
             "feature_snapshot":    match.get("features_snapshot", {}),
             "threshold_values":    rule.get("params", {}),
+            "scoring_policy": {
+                "low_threshold": scoring_cfg.get("low_threshold"),
+                "medium_threshold": scoring_cfg.get("medium_threshold"),
+                "high_threshold": scoring_cfg.get("high_threshold"),
+                "critical_threshold": scoring_cfg.get("critical_threshold"),
+                "auto_case_threshold": scoring_cfg.get("auto_case_threshold"),
+                "risk_band_low_threshold": scoring_cfg.get("risk_band_low_threshold"),
+                "risk_band_high_threshold": scoring_cfg.get("risk_band_high_threshold"),
+                "income_volume_ratio_threshold": scoring_cfg.get("income_volume_ratio_threshold"),
+            },
+            "income_volume":        income_volume,
             "model_id":            ml_signal.get("model_id"),
             "top_drivers":         ml_signal.get("top_drivers") or [],
         },
@@ -738,6 +829,7 @@ async def publish_alert(
         "eval_ms": match["eval_ms"],
         "context_snapshot": match.get("context_snapshot"),
         "matched": True,
+        "scoring_cfg": scoring_cfg,
     })
 
     logger.info(
@@ -767,9 +859,14 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
 
     def _write(item: dict):
         alert = item["alert"]
+        scoring_cfg = item.get("scoring_cfg") or dict(DEFAULT_SCORING_CONFIG)
         ingest_mode    = alert.get("ingest_mode", "incremental")
         backfill_job_id = alert.get("backfill_job_id")
         created_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        priority = _priority_from_severity(alert.get("severity"))
+        sla_due_at = _sla_due_at(created_at, alert.get("severity"), scoring_cfg)
+        auto_case_threshold = float(scoring_cfg.get("auto_case_threshold", 0.75))
+        composite_score = float(alert.get("composite_score") or 0.0)
         with engine.begin() as conn:
             # Define contexto do tenant para respeitar FORCE ROW LEVEL SECURITY
             conn.execute(
@@ -785,12 +882,12 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
             conn.execute(sa.text("""
                 INSERT INTO alerts
                     (id, tenant_id, player_id, rule_id, compound_rule_id, alert_type, severity, status,
-                     title, description, evidence, source_event_id, anomaly_score,
+                     priority, sla_due_at, title, description, evidence, source_event_id, anomaly_score,
                      composite_score, score_breakdown, rule_weight, ml_weight,
                      network_weight, ingest_mode, backfill_job_id, created_at)
                 VALUES
                     (:id, :tenant_id, :player_id, :rule_id, :compound_rule_id, :alert_type, :severity, 'OPEN',
-                     :title, :description, :evidence, :source_event_id, :anomaly_score,
+                     :priority, :sla_due_at, :title, :description, :evidence, :source_event_id, :anomaly_score,
                      :composite_score, CAST(:score_breakdown AS jsonb), :rule_weight,
                      :ml_weight, :network_weight, :ingest_mode, :backfill_job_id, :created_at)
                 ON CONFLICT (id) DO NOTHING
@@ -802,6 +899,8 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                 "compound_rule_id": alert.get("compound_rule_id") or None,
                 "alert_type":     alert["alert_type"],
                 "severity":       alert["severity"],
+                "priority":       priority,
+                "sla_due_at":     sla_due_at,
                 "title":          alert["title"],
                 "description":    alert.get("description", ""),
                 "evidence":       json.dumps(alert.get("evidence", {})),
@@ -817,9 +916,14 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                 "created_at":     created_at,
             })
 
-            # Auto-case: alertas CRITICAL geram (ou reaproveitam) caso OPEN/IN_REVIEW do player.
+            # Auto-case: política por tenant via scoring_configs, com CRITICAL sempre elegível.
             # GAP-C2: skip em backfill + enriquecer caso existente em vez de criar duplicata
-            if alert.get("severity") == "CRITICAL" and alert.get("player_id") and not skip_auto_case:
+            auto_case_reason = None
+            if alert.get("severity") == "CRITICAL":
+                auto_case_reason = "severity=CRITICAL"
+            elif composite_score >= auto_case_threshold:
+                auto_case_reason = f"composite_score={composite_score:.4f}>=auto_case_threshold={auto_case_threshold:.4f}"
+            if auto_case_reason and alert.get("player_id") and not skip_auto_case:
                 existing_case = conn.execute(sa.text("""
                     SELECT id
                     FROM cases
@@ -838,11 +942,11 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                     conn.execute(sa.text("""
                         INSERT INTO cases (
                             id, tenant_id, player_id, title, description, status,
-                            severity, priority, auto_created, auto_created_reason,
+                            severity, priority, sla_due_at, auto_created, auto_created_reason,
                             source_alert_id, ingest_mode, backfill_job_id, created_at, updated_at
                         ) VALUES (
                             :id, :tenant_id, :player_id, :title, :description, 'OPEN',
-                            :severity, 'HIGH', true, :reason,
+                            :severity, :priority, :sla_due_at, true, :reason,
                             :source_alert_id, :ingest_mode, :backfill_job_id, :created_at, :created_at
                         )
                     """), {
@@ -850,9 +954,16 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                         "tenant_id": alert["tenant_id"],
                         "player_id": alert["player_id"],
                         "title": f"Auto-case: {alert.get('title', 'Alerta crítico')}",
-                        "description": "Caso criado automaticamente a partir de alerta CRITICAL.",
+                        "description": "Caso criado automaticamente conforme política de scoring do tenant.",
                         "severity": alert["severity"],
-                        "reason": f"rules_engine:auto_case alert_id={alert['alert_id']} severity={alert['severity']}",
+                        "priority": priority,
+                        "sla_due_at": sla_due_at,
+                        "reason": (
+                            "rules_engine:auto_case "
+                            f"alert_id={alert['alert_id']} severity={alert['severity']} "
+                            f"composite_score={composite_score:.4f} threshold={auto_case_threshold:.4f} "
+                            f"reason={auto_case_reason}"
+                        ),
                         "source_alert_id": alert["alert_id"],
                         "ingest_mode": ingest_mode,
                         "backfill_job_id": backfill_job_id or None,
@@ -873,6 +984,10 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                             "alert_id": alert["alert_id"],
                             "severity": alert["severity"],
                             "rule_id": alert.get("rule_id"),
+                            "composite_score": composite_score,
+                            "auto_case_threshold": auto_case_threshold,
+                            "auto_case_reason": auto_case_reason,
+                            "sla_due_at": sla_due_at.isoformat(),
                         }),
                         "created_at": created_at,
                     })
@@ -893,7 +1008,9 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                             "alert_id": alert["alert_id"],
                             "severity": alert["severity"],
                             "rule_id": alert.get("rule_id"),
-                            "composite_score": alert.get("composite_score"),
+                            "composite_score": composite_score,
+                            "auto_case_threshold": auto_case_threshold,
+                            "auto_case_reason": auto_case_reason,
                         }),
                         "created_at": created_at,
                     })
@@ -940,14 +1057,16 @@ async def db_writer(queue: asyncio.Queue, db_url: str):
                     UPDATE players
                     SET risk_score = GREATEST(risk_score, :score),
                         risk_band  = CASE
-                            WHEN GREATEST(risk_score, :score) >= 0.70 THEN 'HIGH'
-                            WHEN GREATEST(risk_score, :score) >= 0.35 THEN 'MEDIUM'
+                            WHEN GREATEST(risk_score, :score) >= :high_threshold THEN 'HIGH'
+                            WHEN GREATEST(risk_score, :score) >= :low_threshold THEN 'MEDIUM'
                             ELSE 'LOW'
                         END,
                         last_scored_at = NOW()
                     WHERE id = :player_id AND tenant_id = :tenant_id
                 """), {
                     "score":     new_score,
+                    "high_threshold": float(scoring_cfg.get("risk_band_high_threshold", 0.70)),
+                    "low_threshold": float(scoring_cfg.get("risk_band_low_threshold", 0.35)),
                     "player_id": alert["player_id"],
                     "tenant_id": alert["tenant_id"],
                 })

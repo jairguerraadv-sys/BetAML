@@ -547,6 +547,21 @@ export interface ReportPackageMeta {
   filed_at?: string | null;
 }
 
+export interface ReportFilingStatus {
+  case_id: string;
+  report_package_id: string | null;
+  report_status: string | null;
+  report_decision: string | null;
+  requires_submission: boolean;
+  protocol_registered: boolean;
+  coaf_protocol_number: string | null;
+  filing_channel: string;
+  days_since_report_created: number | null;
+  days_since_filed: number | null;
+  deadline_state: 'NO_REPORT' | 'OK' | 'WARNING' | 'BREACH' | string;
+  warnings: string[];
+}
+
 export interface SubmitReportResult {
   status: string;
   report_package_id: string;
@@ -561,6 +576,9 @@ export interface SubmitReportResult {
 
 export const fetchCaseReportPackages = (caseId: string) =>
   api.get<ReportPackageMeta[]>(`/cases/${caseId}/report-packages`).then((r) => r.data);
+
+export const fetchReportFilingStatus = (caseId: string) =>
+  api.get<ReportFilingStatus>(`/cases/${caseId}/report-filing-status`).then((r) => r.data);
 
 export const submitReportPackage = (caseId: string) =>
   api.post<SubmitReportResult>(`/cases/${caseId}/report-package/submit`).then((r) => r.data);
@@ -598,6 +616,9 @@ export interface ScoringConfig {
   data_retention_silver_years: number;
   data_retention_gold_years: number;
   auto_case_threshold: number;
+  risk_band_low_threshold: number;
+  risk_band_high_threshold: number;
+  income_volume_ratio_threshold: number;
   ingest_rate_limit_tpm: number;
   ml_challenger_pct?: number;
   updated_at: string | null;

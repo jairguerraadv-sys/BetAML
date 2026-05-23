@@ -836,7 +836,7 @@ async def get_scoring_config(
 async def update_scoring_config(
     body: ScoringConfigUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
+    current_user = Depends(require_role_any([AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     row = (await db.execute(
         select(ScoringConfig).where(ScoringConfig.tenant_id == current_user.tenant_id)
@@ -846,6 +846,18 @@ async def update_scoring_config(
 
     if body.ml_challenger_pct is not None and not (0 <= body.ml_challenger_pct <= 100):
         raise HTTPException(422, "ml_challenger_pct deve estar entre 0 e 100")
+    if body.auto_case_threshold is not None and not (0 <= body.auto_case_threshold <= 1):
+        raise HTTPException(422, "auto_case_threshold deve estar entre 0 e 1")
+    if body.risk_band_low_threshold is not None and not (0 <= body.risk_band_low_threshold <= 1):
+        raise HTTPException(422, "risk_band_low_threshold deve estar entre 0 e 1")
+    if body.risk_band_high_threshold is not None and not (0 <= body.risk_band_high_threshold <= 1):
+        raise HTTPException(422, "risk_band_high_threshold deve estar entre 0 e 1")
+    low_band = body.risk_band_low_threshold if body.risk_band_low_threshold is not None else row.risk_band_low_threshold
+    high_band = body.risk_band_high_threshold if body.risk_band_high_threshold is not None else row.risk_band_high_threshold
+    if float(low_band) >= float(high_band):
+        raise HTTPException(422, "risk_band_low_threshold deve ser menor que risk_band_high_threshold")
+    if body.income_volume_ratio_threshold is not None and body.income_volume_ratio_threshold <= 0:
+        raise HTTPException(422, "income_volume_ratio_threshold deve ser maior que zero")
 
     for field, val in body.model_dump(exclude_none=True).items():
         setattr(row, field, val)
@@ -861,7 +873,7 @@ async def update_scoring_config(
 async def preview_scoring_config(
     body: ScoringPreviewIn,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
+    current_user = Depends(require_role_any([AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """Simula quantos alertas teriam sido gerados nos últimos 30d com a config proposta."""
     from datetime import timedelta

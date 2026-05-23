@@ -10,6 +10,7 @@ import {
   fetchCase,
   fetchCaseNarrativeSuggestion,
   fetchCaseReportPackages,
+  fetchReportFilingStatus,
   fetchPlayer,
   fetchPlayerBetsChart,
   fetchPlayerCaseAlertHistory,
@@ -37,7 +38,7 @@ import {
   ArrowLeft, AlertTriangle, Clock, User, TrendingDown,
   FileText, CheckCircle2, MessageSquare, Send, ChevronRight,
   Activity, HelpCircle, X, Network, CreditCard, History, ArrowRightLeft,
-  Search,
+  Search, ShieldCheck,
 } from 'lucide-react';
 import PlayerNetworkGraph from '@/components/PlayerNetworkGraph';
 
@@ -78,6 +79,12 @@ const ECON_CLS: Record<string, string> = {
   YELLOW:  'bg-yellow-100 text-yellow-700',
   RED:     'bg-red-100 text-red-700',
   UNKNOWN: 'bg-gray-100 text-gray-500',
+};
+const FILING_CLS: Record<string, string> = {
+  NO_REPORT: 'bg-gray-100 text-gray-600 border-gray-200',
+  OK:        'bg-green-50 text-green-700 border-green-200',
+  WARNING:   'bg-yellow-50 text-yellow-700 border-yellow-200',
+  BREACH:    'bg-red-50 text-red-700 border-red-200',
 };
 const EVT_PT: Record<string, string> = {
   CREATED:            'Caso criado',
@@ -998,6 +1005,10 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
     queryKey: ['case-report-packages', caseId],
     queryFn: () => fetchCaseReportPackages(caseId),
   });
+  const { data: filingStatus } = useQuery({
+    queryKey: ['case-report-filing-status', caseId],
+    queryFn: () => fetchReportFilingStatus(caseId),
+  });
 
   const reportMut = useMutation({
     mutationFn: () => generateReportPackage(caseId, {
@@ -1013,6 +1024,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
       setRpResult({ report_package_id: res.report_package_id, pdf_path: res.pdf_path });
       qc.invalidateQueries({ queryKey: ['case', caseId] });
       qc.invalidateQueries({ queryKey: ['case-report-packages', caseId] });
+      qc.invalidateQueries({ queryKey: ['case-report-filing-status', caseId] });
     },
   });
   const submitMut = useMutation({
@@ -1021,6 +1033,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
       setSubmitResult({ xml_sha256: res.xml_sha256 ?? null, xml_path: res.xml_path ?? null });
       qc.invalidateQueries({ queryKey: ['case', caseId] });
       qc.invalidateQueries({ queryKey: ['case-report-packages', caseId] });
+      qc.invalidateQueries({ queryKey: ['case-report-filing-status', caseId] });
     },
   });
 
@@ -1031,6 +1044,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
       setProtocolInput('');
       setProtocolRpId(null);
       qc.invalidateQueries({ queryKey: ['case-report-packages', caseId] });
+      qc.invalidateQueries({ queryKey: ['case-report-filing-status', caseId] });
     },
   });
 
@@ -1047,6 +1061,58 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
 
   return (
     <div className="space-y-5">
+      {filingStatus && (
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+                <ShieldCheck size={15} className="text-gray-400" /> Status de Filing COAF
+              </h3>
+              <p className="mt-1 text-xs text-gray-500">
+                Canal {filingStatus.filing_channel} · pacote {filingStatus.report_package_id ? `${filingStatus.report_package_id.slice(0, 8)}...` : 'não gerado'}
+              </p>
+            </div>
+            <span className={`rounded border px-2 py-1 text-xs font-bold ${FILING_CLS[filingStatus.deadline_state] ?? FILING_CLS.OK}`}>
+              {filingStatus.deadline_state === 'NO_REPORT'
+                ? 'Sem pacote'
+                : filingStatus.deadline_state === 'BREACH'
+                  ? 'Prazo excedido'
+                  : filingStatus.deadline_state === 'WARNING'
+                    ? 'Prazo próximo'
+                    : 'Em dia'}
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 text-xs sm:grid-cols-3">
+            <div className="rounded-lg bg-gray-50 px-3 py-2">
+              <p className="text-gray-400">Decisão</p>
+              <p className="mt-0.5 font-semibold text-gray-700">{filingStatus.report_decision ?? '—'}</p>
+            </div>
+            <div className="rounded-lg bg-gray-50 px-3 py-2">
+              <p className="text-gray-400">Submissão</p>
+              <p className="mt-0.5 font-semibold text-gray-700">
+                {filingStatus.requires_submission ? 'Pendente' : filingStatus.report_status === 'FILED' ? 'Submetido' : 'Não exigida'}
+              </p>
+            </div>
+            <div className="rounded-lg bg-gray-50 px-3 py-2">
+              <p className="text-gray-400">Protocolo</p>
+              <p className="mt-0.5 font-semibold text-gray-700">
+                {filingStatus.protocol_registered ? filingStatus.coaf_protocol_number : 'Pendente'}
+              </p>
+            </div>
+          </div>
+          {filingStatus.warnings.length > 0 && (
+            <ul className="mt-3 space-y-1 text-xs text-red-700">
+              {filingStatus.warnings.map((warning) => (
+                <li key={warning} className="flex gap-2">
+                  <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                  <span>{warning}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {/* Checklist de investigação */}
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h3 className="mb-3 text-sm font-semibold text-gray-700">Checklist de Investigação</h3>

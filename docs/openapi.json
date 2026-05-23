@@ -13770,12 +13770,12 @@
                     "sla_low_hours": {
                         "type": "integer",
                         "title": "Sla Low Hours",
-                        "default": 72
+                        "default": 168
                     },
                     "sla_medium_hours": {
                         "type": "integer",
                         "title": "Sla Medium Hours",
-                        "default": 48
+                        "default": 72
                     },
                     "sla_high_hours": {
                         "type": "integer",
@@ -13811,6 +13811,21 @@
                         "type": "number",
                         "title": "Auto Case Threshold",
                         "default": 0.75
+                    },
+                    "risk_band_low_threshold": {
+                        "type": "number",
+                        "title": "Risk Band Low Threshold",
+                        "default": 0.35
+                    },
+                    "risk_band_high_threshold": {
+                        "type": "number",
+                        "title": "Risk Band High Threshold",
+                        "default": 0.7
+                    },
+                    "income_volume_ratio_threshold": {
+                        "type": "number",
+                        "title": "Income Volume Ratio Threshold",
+                        "default": 1.5
                     },
                     "ingest_rate_limit_tpm": {
                         "type": "integer",
@@ -14019,6 +14034,39 @@
                             }
                         ],
                         "title": "Auto Case Threshold"
+                    },
+                    "risk_band_low_threshold": {
+                        "anyOf": [
+                            {
+                                "type": "number"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Risk Band Low Threshold"
+                    },
+                    "risk_band_high_threshold": {
+                        "anyOf": [
+                            {
+                                "type": "number"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Risk Band High Threshold"
+                    },
+                    "income_volume_ratio_threshold": {
+                        "anyOf": [
+                            {
+                                "type": "number"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Income Volume Ratio Threshold"
                     },
                     "ingest_rate_limit_tpm": {
                         "anyOf": [
