@@ -84,6 +84,7 @@ Go-live so pode seguir quando todos os itens abaixo estiverem verdes e anexados 
 - Evidencia do ultimo backup valido com idade inferior a 24h.
 - Evidencia de restore drill em banco isolado, sem restore in-place em producao.
 - Revisao alvo de rollback definida (Helm revision ou tag de imagem) e responsavel on-call nomeado.
+- Provider externo/KYC real definido para o corte (mock não permitido em go/no-go formal).
 - Smoke funcional pos-deploy concluido sem 5xx persistente, backlog anormal ou falha de tenant isolation.
 
 No-go automatico:

@@ -1,9 +1,10 @@
 
 == Contexto ==
-timestamp_utc=2026-05-23T06:08:01Z
+timestamp_utc=2026-05-23T06:10:54Z
 backup_reference=postgres_20260523T055719Z@betaml-backups/postgres
-rollback_target=b3f0365
+rollback_target=a3f55ad
 oncall_owner=jairarantes
+external_provider=idwall
 capacity_evidence=artifacts/readiness/capacity/betaml_load_slo.txt
 
 == Metadados obrigatorios ==
@@ -14,7 +15,9 @@ capacity_evidence=artifacts/readiness/capacity/betaml_load_slo.txt
 [PASS] restore_evidence informado
 [PASS] capacity_evidence informado
 [PASS] junit_dir informado
+[PASS] external_provider informado
 [PASS] backup_reference com idade valida (0h <= 24h)
+[PASS] external_provider real informado: idwall
 
 == Evidencias locais ==
 [PASS] artifact-readiness-preflight presente

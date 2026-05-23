@@ -11,6 +11,8 @@ ONCALL_OWNER=""
 EVIDENCE_OUT=""
 MAX_BACKUP_AGE_HOURS=24
 SKIP_BACKUP_AGE_CHECK=0
+EXTERNAL_PROVIDER="${EXTERNAL_VALIDATION_PROVIDER:-}"
+ALLOW_MOCK_PROVIDER=0
 
 usage() {
   cat <<'EOF'
@@ -25,6 +27,8 @@ Opcoes:
   --backup-reference TEXT        Referencia do ultimo backup valido
   --rollback-target TEXT         Revisao alvo de rollback
   --oncall-owner TEXT            Responsavel on-call pela janela
+  --external-provider NAME       Provider externo/KYC ativo no corte (ex.: idwall)
+  --allow-mock-provider          Permite mock provider (somente para ambiente controlado)
   --max-backup-age-hours N       Idade maxima permitida do backup em horas (default: 24)
   --skip-backup-age-check        Nao valida idade do backup_reference
   --evidence-out PATH            Salva a decisao completa em arquivo
@@ -61,6 +65,14 @@ while [[ $# -gt 0 ]]; do
     --oncall-owner)
       ONCALL_OWNER="$2"
       shift 2
+      ;;
+    --external-provider)
+      EXTERNAL_PROVIDER="$2"
+      shift 2
+      ;;
+    --allow-mock-provider)
+      ALLOW_MOCK_PROVIDER=1
+      shift
       ;;
     --max-backup-age-hours)
       MAX_BACKUP_AGE_HOURS="$2"
@@ -184,6 +196,29 @@ PY
   pass "backup_reference com idade valida (${age_hours}h <= ${max_age_hours}h)"
 }
 
+validate_external_provider() {
+  local provider_raw="$1"
+  local allow_mock="$2"
+  local provider
+
+  provider="$(printf '%s' "$provider_raw" | tr '[:upper:]' '[:lower:]' | xargs)"
+  if [[ -z "$provider" ]]; then
+    fail "external_provider vazio"
+    return
+  fi
+
+  if [[ "$provider" == "mock" || "$provider" == "mock_identity" ]]; then
+    if [[ "$allow_mock" -eq 1 ]]; then
+      pass "external_provider mock permitido por override (--allow-mock-provider)"
+    else
+      fail "external_provider mock nao permitido para go/no-go formal"
+    fi
+    return
+  fi
+
+  pass "external_provider real informado: $provider"
+}
+
 validate_junit_file() {
   local xml_path="$1"
   local label="$2"
@@ -242,6 +277,7 @@ echo "timestamp_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "backup_reference=$BACKUP_REFERENCE"
 echo "rollback_target=$ROLLBACK_TARGET"
 echo "oncall_owner=$ONCALL_OWNER"
+echo "external_provider=$EXTERNAL_PROVIDER"
 echo "capacity_evidence=$CAPACITY_EVIDENCE"
 
 section "Metadados obrigatorios"
@@ -252,12 +288,15 @@ require_non_empty "$PREFLIGHT_EVIDENCE" "preflight_evidence"
 require_non_empty "$RESTORE_EVIDENCE" "restore_evidence"
 require_non_empty "$CAPACITY_EVIDENCE" "capacity_evidence"
 require_non_empty "$JUNIT_DIR" "junit_dir"
+require_non_empty "$EXTERNAL_PROVIDER" "external_provider"
 
 if [[ "$SKIP_BACKUP_AGE_CHECK" -eq 0 ]]; then
   validate_backup_reference_age "$BACKUP_REFERENCE" "$MAX_BACKUP_AGE_HOURS"
 else
   pass "validacao de idade do backup_reference ignorada (--skip-backup-age-check)"
 fi
+
+validate_external_provider "$EXTERNAL_PROVIDER" "$ALLOW_MOCK_PROVIDER"
 
 section "Evidencias locais"
 if [[ -n "${PREFLIGHT_EVIDENCE// }" ]]; then

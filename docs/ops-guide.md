@@ -58,6 +58,8 @@ Observacao operacional:
 - O gate final valida automaticamente o timestamp do `backup_reference` no formato `YYYYMMDDTHHMMSSZ`.
 - Por default, backups com idade maior que 24h resultam em `NO_GO`.
 - Override controlado: `--max-backup-age-hours N` ou `--skip-backup-age-check`.
+- O gate final exige `--external-provider` com provider real ativo no corte.
+- `mock`/`mock_identity` resultam em `NO_GO` (exceto override explícito `--allow-mock-provider`, apenas para ambiente controlado).
 
 Requer configuracao no repositorio GitHub:
 - variable `E2E_USERNAME`
