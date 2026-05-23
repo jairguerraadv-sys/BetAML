@@ -562,6 +562,54 @@ export interface ReportFilingStatus {
   warnings: string[];
 }
 
+export interface ReportFilingOverview {
+  total_cases_with_reports: number;
+  requires_submission_count: number;
+  missing_protocol_count: number;
+  deadline_state_counts: Record<string, number>;
+  oldest_pending_submission_days: number | null;
+  top_breach_case_ids: string[];
+  truncated: boolean;
+}
+
+export interface ReportFilingHotlistItem {
+  case_id: string;
+  report_package_id: string;
+  report_status: string;
+  deadline_state: string;
+  action_required: 'SUBMIT_REPORT' | 'REGISTER_PROTOCOL' | string;
+  priority_rank: number;
+  requires_submission: boolean;
+  protocol_registered: boolean;
+  days_since_report_created: number | null;
+  warnings: string[];
+}
+
+export interface ReportFilingHotlist {
+  total_items: number;
+  items: ReportFilingHotlistItem[];
+}
+
+export interface ReportFilingQueueItem {
+  case_id: string;
+  report_package_id: string;
+  report_status: string;
+  report_decision: string | null;
+  requires_submission: boolean;
+  protocol_registered: boolean;
+  coaf_protocol_number: string | null;
+  days_since_report_created: number | null;
+  days_since_filed: number | null;
+  deadline_state: string;
+  warnings: string[];
+}
+
+export interface ReportFilingQueue {
+  total_items: number;
+  deadline_state_counts: Record<string, number>;
+  items: ReportFilingQueueItem[];
+}
+
 export interface SubmitReportResult {
   status: string;
   report_package_id: string;
@@ -579,6 +627,15 @@ export const fetchCaseReportPackages = (caseId: string) =>
 
 export const fetchReportFilingStatus = (caseId: string) =>
   api.get<ReportFilingStatus>(`/cases/${caseId}/report-filing-status`).then((r) => r.data);
+
+export const fetchReportFilingOverview = () =>
+  api.get<ReportFilingOverview>('/report-packages/filing-overview').then((r) => r.data);
+
+export const fetchReportFilingHotlist = (limit = 20) =>
+  api.get<ReportFilingHotlist>('/report-packages/filing-hotlist', { params: { limit } }).then((r) => r.data);
+
+export const fetchReportFilingQueue = (limit = 50) =>
+  api.get<ReportFilingQueue>('/report-packages/filing-queue', { params: { limit } }).then((r) => r.data);
 
 export const submitReportPackage = (caseId: string) =>
   api.post<SubmitReportResult>(`/cases/${caseId}/report-package/submit`).then((r) => r.data);

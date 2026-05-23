@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import {
-  BarChart as BarChartIcon,
+  FileBarChart2,
   AlertTriangle,
   FolderOpen,
   Clock,
@@ -31,7 +31,7 @@ import {
   Legend,
 } from 'recharts';
 
-import { fetchDashboardStats } from '@/lib/api';
+import { fetchDashboardStats, fetchReportFilingOverview } from '@/lib/api';
 import { useUser } from '@/contexts/UserContext';
 import { fmtDate, useLocale } from '@/lib/i18n';
 
@@ -153,6 +153,12 @@ export default function DashboardPage() {
     refetchInterval: 30_000,
   });
 
+  const { data: filingOverview } = useQuery({
+    queryKey: ['report-filing-overview'],
+    queryFn: fetchReportFilingOverview,
+    refetchInterval: 60_000,
+  });
+
   const severityTimeline = useMemo(
     () =>
       (stats?.alerts_by_severity_30d ?? []).map((row) => ({
@@ -263,6 +269,33 @@ export default function DashboardPage() {
             </ul>
           )}
         </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <KpiCard
+          icon={FileBarChart2}
+          title="Comunicações pendentes"
+          value={filingOverview?.requires_submission_count ?? 0}
+          sub="FILE_SAR aguardando submissão"
+          href="/reports"
+          tone={(filingOverview?.requires_submission_count ?? 0) > 0 ? 'danger' : 'success'}
+        />
+        <KpiCard
+          icon={ShieldAlert}
+          title="Protocolos pendentes"
+          value={filingOverview?.missing_protocol_count ?? 0}
+          sub="FILED sem protocolo COAF"
+          href="/reports"
+          tone={(filingOverview?.missing_protocol_count ?? 0) > 0 ? 'warning' : 'success'}
+        />
+        <KpiCard
+          icon={Clock}
+          title="Pior pendência COAF"
+          value={filingOverview?.oldest_pending_submission_days != null ? `${filingOverview.oldest_pending_submission_days}d` : '—'}
+          sub="idade do pacote mais antigo"
+          href="/reports"
+          tone={(filingOverview?.deadline_state_counts?.BREACH ?? 0) > 0 ? 'danger' : 'default'}
+        />
       </div>
 
       {isLoading && (

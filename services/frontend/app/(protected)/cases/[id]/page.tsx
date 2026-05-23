@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   addCaseComment,
@@ -29,7 +29,7 @@ import {
   SISCOAF_OCCURRENCE_CODES,
   SISCOAF_INVOLVEMENT_TYPES,
 } from '@/lib/api';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
   LineChart, Line,
@@ -1617,9 +1617,16 @@ function StickyAnnotations({ caseId }: { caseId: string }) {
 export default function CaseDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const qc     = useQueryClient();
   const [activeTab, setActiveTab] = useState<Tab>('overview');
 
+  useEffect(() => {
+    const tab = searchParams.get('tab') as Tab | null;
+    if (tab && TABS.some((item) => item.id === tab)) {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['case', id],
