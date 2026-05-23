@@ -121,3 +121,41 @@ class TestRefreshTokenFlow:
                 await refresh(request=request, response=StarletteResponse(), db=db)
 
         assert exc.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_refresh_preserves_new_roles_in_rotated_jwt_claims(self):
+        from routers.auth import refresh
+        from auth import create_refresh_token
+        from config import settings
+        from jose import jwt
+
+        db = AsyncMock()
+        user = MagicMock()
+        user.id = "u1"
+        user.tenant_id = "t1"
+        user.role = ""
+        user.roles = ["Operador_AdminTecnico"]
+        user.active = True
+
+        current_refresh_token, current_jti = create_refresh_token(
+            {"sub": user.id, "tenant_id": user.tenant_id, "role": user.role, "roles": user.roles}
+        )
+        user.refresh_token_jti = current_jti
+
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = user
+        db.execute = AsyncMock(return_value=result)
+
+        request = _request_with_refresh_cookie(current_refresh_token)
+
+        with patch("routers.auth.store_refresh_token_jti", AsyncMock()), patch(
+            "routers.auth.write_audit", AsyncMock()
+        ), patch("slowapi.Limiter._check_request_limit", MagicMock()):
+            resp = await refresh(request=request, response=StarletteResponse(), db=db)
+
+        access_payload = jwt.decode(resp.access_token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        refresh_payload = jwt.decode(resp.refresh_token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+
+        assert access_payload.get("roles") == ["Operador_AdminTecnico"]
+        assert refresh_payload.get("roles") == ["Operador_AdminTecnico"]
+        assert resp.roles == ["Operador_AdminTecnico"]

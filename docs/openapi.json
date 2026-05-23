@@ -10695,7 +10695,7 @@
                     "provider": {
                         "type": "string",
                         "title": "Provider",
-                        "default": "mock_identity"
+                        "default": null
                     },
                     "validation_type": {
                         "type": "string",

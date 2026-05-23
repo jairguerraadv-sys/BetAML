@@ -248,11 +248,16 @@ async def refresh(
         {"tid": str(user.tenant_id)},
     )
 
+    token_roles = sorted(
+        r for r in get_effective_roles(user)
+        if r.startswith("Operador_") or r.startswith("BetAML_")
+    )
+
     new_access_token = create_access_token(
-        {"sub": user.id, "tenant_id": user.tenant_id, "role": user.role}
+        {"sub": user.id, "tenant_id": user.tenant_id, "role": user.role, "roles": token_roles}
     )
     new_refresh_token, new_refresh_jti = create_refresh_token(
-        {"sub": user.id, "tenant_id": user.tenant_id, "role": user.role}
+        {"sub": user.id, "tenant_id": user.tenant_id, "role": user.role, "roles": token_roles}
     )
     await store_refresh_token_jti(db, user.id, new_refresh_jti)
 
@@ -280,7 +285,7 @@ async def refresh(
         access_token=new_access_token,
         refresh_token=new_refresh_token,
         role=user.role,
-        roles=list(get_effective_roles(user)),
+        roles=token_roles,
         tenant_id=user.tenant_id,
     )
 

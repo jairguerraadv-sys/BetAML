@@ -290,6 +290,34 @@ class TestRBAC:
         assert legacy.issubset(ROLES), f"Papéis legados ausentes: {legacy - ROLES}"
         assert new_roles.issubset(ROLES), f"Novos papéis ausentes: {new_roles - ROLES}"
 
+    def test_get_effective_roles_accepts_string_roles_field(self):
+        """roles salvo como string não pode ser quebrado em caracteres."""
+        from auth import get_effective_roles
+
+        user = MagicMock()
+        user.role = ""
+        user.roles = "Operador_AdminTecnico"
+
+        roles = get_effective_roles(user)
+        assert "Operador_AdminTecnico" in roles
+        # Compatibilidade temporária para guards legados.
+        assert "ADMIN" in roles
+
+    @pytest.mark.asyncio
+    async def test_require_permission_denies_user_without_any_valid_role(self):
+        """Usuário sem papel válido deve ser negado (fail-closed)."""
+        from auth import require_permission
+        from fastapi import HTTPException
+
+        checker = require_permission("players:read")
+        user = MagicMock()
+        user.role = ""
+        user.roles = None
+
+        with pytest.raises(HTTPException) as exc_info:
+            await checker(current_user=user)
+        assert exc_info.value.status_code == 403
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Testes de MappingEngine

@@ -17,7 +17,7 @@ Docker + docker-compose OR Python 3.11+
 | `JWT_ALGORITHM` | `HS256` | JWT signing algorithm |
 | `ACCESS_TOKEN_EXPIRE_MIN` | `60` | JWT expiry in minutes |
 | `PII_ENCRYPTION_KEY` | `ZGV2LXNlY3...` | Fernet key for CPF/name encryption — **change in production** |
-| `EXTERNAL_VALIDATION_PROVIDER` | `mock_identity` | External identity/KYC provider name; mock is blocked outside dev/test |
+| `EXTERNAL_VALIDATION_PROVIDER` | `mock_identity` | External identity/KYC provider name used when the request body omits `provider`; mock is blocked outside dev/test |
 | `EXTERNAL_VALIDATION_PROVIDER_URL` | `` | HTTPS endpoint for the real provider integration |
 | `EXTERNAL_VALIDATION_PROVIDER_TOKEN` | `` | Bearer token or shared credential for the real provider |
 | `EXTERNAL_VALIDATION_PROVIDER_TIMEOUT_SECONDS` | `5` | Provider call timeout used by the async dispatcher |

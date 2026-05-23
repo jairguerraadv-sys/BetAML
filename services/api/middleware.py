@@ -98,9 +98,15 @@ def _is_safe_maintenance_disable_request(request: Request, payload: dict | None)
         return False
     if not payload:
         return False
-    token_roles = set(payload.get("roles") or [])
+    token_roles: set[str] = set()
+    raw_roles = payload.get("roles")
+    if isinstance(raw_roles, str):
+        token_roles.add(raw_roles)
+    elif isinstance(raw_roles, (list, tuple, set)):
+        token_roles.update(str(role) for role in raw_roles if role)
     legacy_role = str(payload.get("role") or "")
-    token_roles.add(legacy_role)
+    if legacy_role:
+        token_roles.add(legacy_role)
     return bool(token_roles.intersection({"ADMIN", "SUPER_ADMIN", "Operador_AdminTecnico", "BetAML_SuperAdmin"}))
 
 

@@ -622,7 +622,7 @@ class ExternalValidationRequest(Base):
     id                  = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
     tenant_id           = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     player_id           = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
-    provider            = Column(String(40), nullable=False, default="mock_identity")
+    provider            = Column(String(40), nullable=False)
     validation_type     = Column(String(40), nullable=False, default="CPF_IDENTITY")
     status              = Column(String(20), nullable=False, default="PENDING")  # PENDING/COMPLETED/FAILED
     request_payload     = Column(JSONB, nullable=False, default={})

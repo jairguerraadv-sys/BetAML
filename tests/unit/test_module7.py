@@ -237,6 +237,33 @@ async def test_maintenance_middleware_still_blocks_non_disable_admin_request_whe
 
 
 @pytest.mark.asyncio
+async def test_maintenance_middleware_allows_disable_when_roles_claim_is_string():
+    """Admins in legacy string-based `roles` claim must bypass maintenance on explicit disable."""
+    import middleware as mw
+    from middleware import MaintenanceModeMiddleware
+
+    from jose import jwt as _jwt
+    token = _jwt.encode(
+        {"tenant_id": "t1", "sub": "u1", "roles": "ADMIN"},
+        "dev-secret-change-me",
+        algorithm="HS256",
+    )
+    request = Request(_make_asgi_scope(
+        "/admin/maintenance-mode",
+        headers=[(b"authorization", f"Bearer {token}".encode())],
+    ) | {"query_string": b"enabled=false", "method": "PUT"})
+    call_next = AsyncMock(return_value=PlainTextResponse("disabled"))
+    mw_instance = MaintenanceModeMiddleware(app=MagicMock())
+
+    with patch.object(mw, "_is_maintenance_enabled", AsyncMock(return_value=True)):
+        resp = await mw_instance.dispatch(request, call_next)
+
+    assert resp.status_code == 200
+    assert resp.body.decode() == "disabled"
+    call_next.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_maintenance_middleware_passthrough_when_disabled():
     """MaintenanceModeMiddleware passes request when maintenance is off."""
     import middleware as mw

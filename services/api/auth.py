@@ -117,24 +117,30 @@ def get_effective_roles(user: Any) -> set[str]:
     """
     effective: set[str] = set()
 
-    # Novo estilo: coluna `roles` JSONB populada
-    user_roles: list[str] | None = getattr(user, "roles", None)
-    if user_roles:
-        effective.update(str(role) for role in user_roles if role)
+    # Novo estilo: coluna `roles` JSONB populada.
+    # Alguns ambientes legados podem persistir string em vez de lista JSON.
+    user_roles = getattr(user, "roles", None)
+    if isinstance(user_roles, str):
+        normalized = user_roles.strip()
+        if normalized:
+            effective.add(normalized)
+    elif isinstance(user_roles, (list, tuple, set)):
+        effective.update(str(role).strip() for role in user_roles if str(role).strip())
 
     # Campo legado continua existindo e precisa participar da compatibilidade:
     # alguns tokens antigos e alguns routers ainda dependem dele.
-    legacy = getattr(user, "role", "")
+    legacy = str(getattr(user, "role", "") or "").strip()
     if legacy:
-        effective.add(str(legacy))
-        effective.update(_LEGACY_ROLE_MAP.get(str(legacy), []))
+        effective.add(legacy)
+        effective.update(_LEGACY_ROLE_MAP.get(legacy, []))
 
     # Compatibilidade inversa: usuários criados apenas com roles novos não
     # devem ser negados por guards legados durante a migração.
     for role in list(effective):
         effective.update(_NEW_ROLE_LEGACY_COMPAT.get(role, []))
 
-    return effective or {AppRole.ANALISTA}
+    # Sem papel válido, negar por padrão (fail-closed).
+    return effective
 
 # ── Redis client para blacklist de JWT ────────────────────────────────────────
 _auth_redis: Any = None

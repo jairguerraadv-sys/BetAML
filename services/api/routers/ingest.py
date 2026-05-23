@@ -235,7 +235,7 @@ def _current_ingest_contract() -> IngestContractOut:
     # O runtime atual oficializa canonical-first: API valida/aplica mapping e publica em canonical.*
     # As trilhas raw.* permanecem como tópicos de entrada legada/backfill controlado.
     return IngestContractOut(
-        pipeline_mode=settings.ingest_pipeline_mode,
+        pipeline_mode="canonical-first",
         official_path="api_ingest_to_canonical_topics",
         source_topics=[
             "canonical.players",
