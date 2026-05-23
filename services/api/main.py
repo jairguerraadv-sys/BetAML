@@ -759,10 +759,8 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
 # ─── Health ───────────────────────────────────────
 @app.get("/health", tags=["infra"])
 async def health():
-    """Aggregate health alias compatible with enterprise ops checks."""
-    from routers.health import health_ready
-
-    return await health_ready()
+    """Backward-compatible liveness endpoint used by README/dev smoke checks."""
+    return {"status": "live"}
 
 
 # ═══════════════════════════════════════════════════

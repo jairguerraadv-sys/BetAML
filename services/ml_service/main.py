@@ -1265,10 +1265,15 @@ def _load_tenant_model(tenant_id: str, model_type: str = "champion") -> dict | N
                 "ORDER BY trained_at DESC LIMIT 1"
             )
         else:
+            allowed_statuses = (
+                "'champion', 'active', 'PRODUCTION'"
+                if ENVIRONMENT not in NON_PROD_ENVIRONMENTS
+                else "'champion', 'active', 'PRODUCTION', 'bootstrap'"
+            )
             query = sa.text(
                 "SELECT id, artifact_uri, algorithm, feature_columns "
                 "FROM model_registry WHERE tenant_id = :tid "
-                "AND status IN ('champion', 'active', 'PRODUCTION') "
+                f"AND status IN ({allowed_statuses}) "
                 "AND COALESCE(is_challenger, false) = false "
                 "ORDER BY trained_at DESC LIMIT 1"
             )

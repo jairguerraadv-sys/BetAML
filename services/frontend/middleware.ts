@@ -15,8 +15,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { canAccessRoute } from './lib/nav-config';
 
-// Rotas que NÃO requerem autenticação
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/_next', '/favicon.ico', '/forbidden'];
+// Rotas que NÃO requerem autenticação.
+// Inclui health técnico para monitoramento externo sem sessão de usuário.
+const PUBLIC_PATHS = [
+  '/login',
+  '/api/auth/login',
+  '/api/auth/logout',
+  '/api/auth/refresh',
+  '/api/health',
+  '/api-proxy/health',
+  '/_next',
+  '/favicon.ico',
+  '/forbidden',
+];
 
 // Deployment mode vem de variável de ambiente build-time
 const DEPLOYMENT_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE ?? 'saas';

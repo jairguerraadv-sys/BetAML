@@ -49,7 +49,9 @@ ROLES: frozenset[str] = frozenset({
 # Mapeamento legado → novos papéis (para usuários sem a coluna `roles` preenchida)
 _LEGACY_ROLE_MAP: dict[str, list[str]] = {
     "AML_ANALYST": [AppRole.ANALISTA],
-    "AUDITOR":     [AppRole.ANALISTA],                                    # auditor = acesso leitura = Analista
+    # AUDITOR is intentionally read-only and must not inherit Operador_Analista,
+    # because many analyst routes are mutating triage/case operations.
+    "AUDITOR":     [],
     "ADMIN":       [AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.ANALISTA],  # admin legacy = acumula funções
     "SUPER_ADMIN": [AppRole.SUPER_ADMIN],
 }

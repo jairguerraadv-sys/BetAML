@@ -74,7 +74,7 @@ _ASSIGNABLE_ROLES = frozenset({
 # Mapeamento de role (legado ou novo) → lista de novos papéis para coluna `roles`
 _LEGACY_TO_ROLES: dict[str, list[str]] = {
     "AML_ANALYST":      [AppRole.ANALISTA],
-    "AUDITOR":          [AppRole.ANALISTA],
+    "AUDITOR":          [],
     "ADMIN":            [AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.ANALISTA],
     AppRole.ANALISTA:   [AppRole.ANALISTA],
     AppRole.GESTOR:     [AppRole.GESTOR, AppRole.ANALISTA],
@@ -242,6 +242,7 @@ class OpsSummaryOut(BaseModel):
     ws_last_backpressure_at: datetime | None = None
     stale_models: int
     oldest_model_age_days: int | None = None
+    alerts: list[OperationalAlertOut] = Field(default_factory=list)
 
 
 class AutoCasePolicyOut(BaseModel):

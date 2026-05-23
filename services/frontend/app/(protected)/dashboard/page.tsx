@@ -172,6 +172,7 @@ export default function DashboardPage() {
   const ruleTypeData = stats?.alerts_by_rule_type ?? [];
   const heatmapPoints = stats?.alert_heatmap ?? [];
   const highFpRules = stats?.high_fp_rules ?? [];
+  const canOpenIngestJobs = Boolean(user?.roles?.includes('Operador_AdminTecnico'));
 
   return (
     <div className="space-y-6">
@@ -227,7 +228,7 @@ export default function DashboardPage() {
           title="Eventos ingeridos hoje"
           value={(stats?.events_ingested_today ?? 0).toLocaleString(locale)}
           sub="processados desde 00:00"
-          href="/ingest-jobs"
+          href={canOpenIngestJobs ? '/ingest-jobs' : undefined}
           tone="success"
         />
       </div>

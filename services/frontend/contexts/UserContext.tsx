@@ -28,7 +28,13 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api-proxy/me', { cache: 'no-store' });
+      let res = await fetch('/api-proxy/me', { cache: 'no-store' });
+      if (res.status === 401) {
+        const refreshed = await fetch('/api/auth/refresh', { method: 'POST' });
+        if (refreshed.ok) {
+          res = await fetch('/api-proxy/me', { cache: 'no-store' });
+        }
+      }
       if (!res.ok) {
         setUser(null);
         return null;

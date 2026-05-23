@@ -707,7 +707,14 @@ async def data_quality_alerting() -> None:
                 failures: list[dict[str, object]] = []
                 critical = False
 
-                invalid_statuses = ("OPEN", "IN_REVIEW", "CLOSED", "FALSE_POSITIVE")
+                invalid_statuses = (
+                    "OPEN",
+                    "IN_REVIEW",
+                    "CONFIRMED",
+                    "DISMISSED",
+                    "CLOSED",
+                    "FALSE_POSITIVE",
+                )
                 alerts_invalid_status = (
                     await db.execute(
                         select(func.count()).select_from(Alert).where(

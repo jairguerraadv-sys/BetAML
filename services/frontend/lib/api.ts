@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 
 // Sempre usa o proxy local — o servidor Next.js encaminha para a API.
 // Isso garante que localhost:8000 nunca é chamado direto do browser,
@@ -7,16 +7,26 @@ const BASE = '/api-proxy';
 
 export const api = axios.create({ baseURL: BASE });
 
+type RetriableRequestConfig = InternalAxiosRequestConfig & { _retry?: boolean };
+
 // O JWT é transportado como cookie httpOnly (setado via /api/auth/login).
 // O middleware Next.js (middleware.ts) injeta automaticamente o header
 // Authorization: Bearer <token> nas chamadas /api-proxy/*.
 // NENHUM código JS no browser tem acesso direto ao token — imune a XSS.
 
-// Redireciona para login em 401
 api.interceptors.response.use(
   (r) => r,
-  (err) => {
-    if (err?.response?.status === 401 && typeof window !== 'undefined') {
+  async (err: AxiosError) => {
+    const original = err.config as RetriableRequestConfig | undefined;
+    if (err.response?.status === 401 && original && !original._retry && typeof window !== 'undefined') {
+      original._retry = true;
+      try {
+        await refreshToken();
+        return api.request(original);
+      } catch {
+        window.location.href = '/login';
+      }
+    } else if (err.response?.status === 401 && typeof window !== 'undefined') {
       window.location.href = '/login';
     }
     return Promise.reject(err);
@@ -54,8 +64,12 @@ export async function logout(): Promise<void> {
 }
 
 export async function refreshToken() {
-  const { data } = await api.post('/auth/refresh');
-  return data as { access_token: string; token_type: string };
+  const res = await fetch('/api/auth/refresh', { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? 'Sessão expirada');
+  }
+  return res.json() as Promise<LoginResponse>;
 }
 
 export interface AuditLog {
