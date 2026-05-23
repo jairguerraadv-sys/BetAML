@@ -377,6 +377,115 @@ async def test_ingest_websocket_rejects_revoked_token():
 
 
 @pytest.mark.asyncio
+async def test_ingest_websocket_rejects_missing_bearer_header():
+    from routers.ingest import ingest_websocket
+
+    websocket = _FakeWebSocket()
+    websocket.headers["authorization"] = ""
+
+    await ingest_websocket(websocket)
+
+    assert websocket.accepted is True
+    assert websocket.sent == [{"error": "missing_bearer_token"}]
+    assert websocket.close_code == 1008
+
+
+@pytest.mark.asyncio
+async def test_ingest_websocket_rejects_invalid_token():
+    from routers.ingest import ingest_websocket, JWTError
+
+    websocket = _FakeWebSocket()
+
+    with patch("routers.ingest.jwt.decode", side_effect=JWTError("bad token")):
+        await ingest_websocket(websocket)
+
+    assert websocket.accepted is True
+    assert websocket.sent == [{"error": "invalid_token"}]
+    assert websocket.close_code == 1008
+
+
+@pytest.mark.asyncio
+async def test_ingest_websocket_rejects_tenant_mismatch():
+    from routers.ingest import ingest_websocket
+
+    websocket = _FakeWebSocket()
+
+    user = MagicMock()
+    user.active = True
+    user.role = "AML_ANALYST"
+    user.tenant_id = "t1"
+
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=user)
+
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=db)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.ingest.jwt.decode", return_value={"sub": "u1", "tenant_id": "foreign-tenant"}), \
+         patch("routers.ingest.AsyncSessionLocal", return_value=session_cm):
+        await ingest_websocket(websocket)
+
+    assert websocket.accepted is True
+    assert websocket.sent == [{"error": "tenant_mismatch"}]
+    assert websocket.close_code == 1008
+
+
+@pytest.mark.asyncio
+async def test_ingest_websocket_rejects_inactive_user():
+    from routers.ingest import ingest_websocket
+
+    websocket = _FakeWebSocket()
+
+    user = MagicMock()
+    user.active = False
+    user.role = "AML_ANALYST"
+    user.tenant_id = "t1"
+
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=user)
+
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=db)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.ingest.jwt.decode", return_value={"sub": "u1", "tenant_id": "t1"}), \
+         patch("routers.ingest.AsyncSessionLocal", return_value=session_cm):
+        await ingest_websocket(websocket)
+
+    assert websocket.accepted is True
+    assert websocket.sent == [{"error": "inactive_user"}]
+    assert websocket.close_code == 1008
+
+
+@pytest.mark.asyncio
+async def test_ingest_websocket_rejects_insufficient_role():
+    from routers.ingest import ingest_websocket
+
+    websocket = _FakeWebSocket()
+
+    user = MagicMock()
+    user.active = True
+    user.role = "AUDITOR"
+    user.tenant_id = "t1"
+
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=user)
+
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=db)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.ingest.jwt.decode", return_value={"sub": "u1", "tenant_id": "t1"}), \
+         patch("routers.ingest.AsyncSessionLocal", return_value=session_cm):
+        await ingest_websocket(websocket)
+
+    assert websocket.accepted is True
+    assert websocket.sent == [{"error": "insufficient_role"}]
+    assert websocket.close_code == 1008
+
+
+@pytest.mark.asyncio
 async def test_ingest_websocket_backpressure_updates_runtime_state():
     from routers import ingest as ingest_module
     from routers.ingest import ingest_websocket
@@ -395,6 +504,8 @@ async def test_ingest_websocket_backpressure_updates_runtime_state():
     user = MagicMock()
     user.active = True
     user.role = "AML_ANALYST"
+    user.tenant_id = "t1"
+    user.tenant_id = "t1"
 
     db = AsyncMock()
     db.get = AsyncMock(return_value=user)
@@ -442,6 +553,7 @@ async def test_ingest_websocket_applies_explicit_mapping_before_publish():
     user = MagicMock()
     user.active = True
     user.role = "AML_ANALYST"
+    user.tenant_id = "t1"
 
     auth_db = AsyncMock()
     auth_db.get = AsyncMock(return_value=user)

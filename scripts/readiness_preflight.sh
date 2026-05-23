@@ -119,6 +119,16 @@ require_cmd() {
   return 0
 }
 
+has_any_cmd() {
+  local cmd
+  for cmd in "$@"; do
+    if command -v "$cmd" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 wait_for_http() {
   local label="$1"
   local url="$2"
@@ -145,7 +155,12 @@ echo "api_url=$API_URL"
 echo "frontend_url=$FRONTEND_URL"
 
 section "Dependencias"
-require_cmd bash grep sed awk find sha256sum || true
+require_cmd bash grep sed awk find || true
+if has_any_cmd sha256sum shasum; then
+  pass "checksum tool disponivel (sha256sum ou shasum)"
+else
+  fail "dependencia ausente: sha256sum/shasum"
+fi
 if [[ "$SKIP_HTTP" -eq 0 ]]; then
   require_cmd curl || true
 fi
@@ -161,7 +176,10 @@ if [[ "$SKIP_DOCKER" -eq 0 ]]; then
   if [[ ! -f "$COMPOSE_FILE" ]]; then
     fail "compose file nao encontrado: $COMPOSE_FILE"
   else
-    mapfile -t running_services < <(docker compose -f "$COMPOSE_FILE" ps --services --status running 2>/dev/null || true)
+    running_services=()
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && running_services+=("$line")
+    done < <(docker compose -f "$COMPOSE_FILE" ps --services --status running 2>/dev/null || true)
     required_services=(postgres redis redpanda minio clickhouse api frontend stream-processor rules-engine ml-service)
     for service in "${required_services[@]}"; do
       if printf '%s\n' "${running_services[@]}" | grep -Fxq "$service"; then

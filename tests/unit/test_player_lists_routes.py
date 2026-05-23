@@ -24,6 +24,94 @@ def _db():
     return db
 
 
+def _fake_player_list_row(list_id: str, name: str):
+    row = MagicMock()
+    row.id = list_id
+    row.tenant_id = "t1"
+    row.name = name
+    row.description = None
+    row.list_type = "BLACKLIST"
+    row.source = "MANUAL"
+    row.active = True
+    row.created_at = None
+    row.updated_at = None
+
+    columns = []
+    for col_name in [
+        "id",
+        "tenant_id",
+        "name",
+        "description",
+        "list_type",
+        "source",
+        "active",
+        "created_at",
+        "updated_at",
+    ]:
+        col = MagicMock()
+        col.name = col_name
+        columns.append(col)
+    table = MagicMock()
+    table.columns = columns
+    row.__table__ = table
+    return row
+
+
+@pytest.mark.asyncio
+async def test_list_player_lists_legacy_returns_list():
+    from routers.player_lists import list_player_lists
+
+    db = _db()
+    row = _fake_player_list_row("l1", "Legacy List")
+    calls = {"i": 0}
+
+    async def execute(_stmt):
+        res = MagicMock()
+        if calls["i"] == 0:
+            res.scalars.return_value.all.return_value = [row]
+        else:
+            res.scalar_one.return_value = 1
+        calls["i"] += 1
+        return res
+
+    db.execute = execute
+    result = await list_player_lists(limit=50, offset=0, envelope=False, db=db, current_user=_user())
+
+    assert isinstance(result, list)
+    assert result[0]["id"] == "l1"
+    assert result[0]["entry_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_player_lists_supports_optional_envelope():
+    from routers.player_lists import list_player_lists
+
+    db = _db()
+    row = _fake_player_list_row("l2", "Paged List")
+    calls = {"i": 0}
+
+    async def execute(_stmt):
+        res = MagicMock()
+        if calls["i"] == 0:
+            res.scalars.return_value.all.return_value = [row]
+        elif calls["i"] == 1:
+            res.scalar_one.return_value = 2
+        else:
+            res.scalar_one.return_value = 7
+        calls["i"] += 1
+        return res
+
+    db.execute = execute
+    result = await list_player_lists(limit=10, offset=0, envelope=True, db=db, current_user=_user())
+
+    assert isinstance(result, dict)
+    assert result["total"] == 7
+    assert result["limit"] == 10
+    assert result["offset"] == 0
+    assert isinstance(result["items"], list)
+    assert result["items"][0]["id"] == "l2"
+
+
 @pytest.mark.asyncio
 async def test_list_player_list_entries_returns_rows():
     from routers.player_lists import list_player_list_entries

@@ -147,12 +147,33 @@ async def test_list_audit_logs_returns_serialized_entries():
 
     result = await list_audit_logs(
         entity_type=None, action=None, user_id=None, actor_id=None, entity_id=None, search=None, pii_only=False,
-        date_from=None, date_to=None, limit=50, offset=0, page=None, per_page=None,
+        date_from=None, date_to=None, limit=50, offset=0, page=None, per_page=None, envelope=False,
         current_user=user, db=db,
     )
 
     assert len(result) == 5
     assert all("id" in entry for entry in result)
+
+
+@pytest.mark.asyncio
+async def test_list_audit_logs_supports_optional_envelope():
+    """GET /audit-logs?envelope=true returns {total, items, limit, offset}."""
+    from routers.audit import list_audit_logs
+
+    logs = [_make_log("l1"), _make_log("l2")]
+    db = _make_db_with_logs(logs, total=2)
+    user = _make_user()
+
+    result = await list_audit_logs(
+        entity_type=None, action=None, user_id=None, actor_id=None, entity_id=None, search=None, pii_only=False,
+        date_from=None, date_to=None, limit=10, offset=0, page=None, per_page=None, envelope=True,
+        current_user=user, db=db,
+    )
+
+    assert result["total"] == 2
+    assert isinstance(result["items"], list)
+    assert result["limit"] == 10
+    assert result["offset"] == 0
 
 
 @pytest.mark.asyncio
@@ -166,7 +187,7 @@ async def test_list_audit_logs_actor_id_sets_user_id():
     # Passing actor_id without user_id — should not raise
     result = await list_audit_logs(
         entity_type=None, action=None, user_id=None, actor_id="analyst-1", entity_id=None, search=None, pii_only=False,
-        date_from=None, date_to=None, limit=50, offset=0, page=None, per_page=None,
+        date_from=None, date_to=None, limit=50, offset=0, page=None, per_page=None, envelope=False,
         current_user=user, db=db,
     )
 
@@ -185,7 +206,7 @@ async def test_list_audit_logs_per_page_overrides_limit():
     # Use per_page=10 — should return up to 10 items
     result = await list_audit_logs(
         entity_type=None, action=None, user_id=None, actor_id=None, entity_id=None, search=None, pii_only=False,
-        date_from=None, date_to=None, limit=5, offset=0, page=None, per_page=10,
+        date_from=None, date_to=None, limit=5, offset=0, page=None, per_page=10, envelope=False,
         current_user=user, db=db,
     )
 
@@ -212,7 +233,7 @@ async def test_list_audit_logs_page_sets_offset():
     # page=2, per_page=25 → offset=25
     await list_audit_logs(
         entity_type=None, action=None, user_id=None, actor_id=None, entity_id=None, search=None, pii_only=False,
-        date_from=None, date_to=None, limit=50, offset=0, page=2, per_page=25,
+        date_from=None, date_to=None, limit=50, offset=0, page=2, per_page=25, envelope=False,
         current_user=user, db=db,
     )
 

@@ -202,20 +202,16 @@ discover_latest_backup_object() {
 download_backup_object() {
   local object_path="$1"
   local target_path="$2"
-  local target_dir
-  local target_name
 
   normalize_minio_endpoint
-  target_dir="$(dirname "$target_path")"
-  target_name="$(basename "$target_path")"
 
+  # Evita bind mount de diretórios temporários não compartilhados no macOS.
   docker run --rm \
     --add-host host.docker.internal:host-gateway \
     --entrypoint /bin/sh \
-    -v "$target_dir:/target" \
     minio/mc:RELEASE.2024-10-29T15-34-59Z \
-    -c 'mc alias set backup "$1" "$2" "$3" >/dev/null && mc cp "backup/$4" "/target/$5" >/dev/null' \
-    sh "$MINIO_ENDPOINT" "$MINIO_USER" "$MINIO_PASSWORD" "$object_path" "$target_name"
+    -c 'mc alias set backup "$1" "$2" "$3" >/dev/null && mc cat "backup/$4"' \
+    sh "$MINIO_ENDPOINT" "$MINIO_USER" "$MINIO_PASSWORD" "$object_path" > "$target_path"
 }
 
 validate_backup_object_exists() {

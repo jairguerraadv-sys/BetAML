@@ -53,6 +53,19 @@ export function middleware(req: NextRequest) {
     // cookie inválido ou ausente
   }
 
+  if (pathname === '/') {
+    const target = roles.includes('Operador_Analista') || roles.includes('Operador_Gestor')
+      ? '/dashboard'
+      : roles.includes('Operador_AdminTecnico')
+        ? '/admin'
+        : roles.includes('BetAML_SuperAdmin')
+          ? '/admin/onboarding'
+          : '/dashboard';
+    const url = req.nextUrl.clone();
+    url.pathname = target;
+    return NextResponse.redirect(url);
+  }
+
   if (!canAccessRoute(pathname, roles)) {
     const url = req.nextUrl.clone();
     url.pathname = '/forbidden';

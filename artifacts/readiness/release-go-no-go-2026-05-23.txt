@@ -1,0 +1,49 @@
+
+== Contexto ==
+timestamp_utc=2026-05-23T06:02:28Z
+backup_reference=postgres_20260523T055719Z@betaml-backups/postgres
+rollback_target=e808a7d
+oncall_owner=jairarantes
+capacity_evidence=artifacts/readiness/capacity/betaml_load_slo.txt
+
+== Metadados obrigatorios ==
+[PASS] backup_reference informado
+[PASS] rollback_target informado
+[PASS] oncall_owner informado
+[PASS] preflight_evidence informado
+[PASS] restore_evidence informado
+[PASS] capacity_evidence informado
+[PASS] junit_dir informado
+
+== Evidencias locais ==
+[PASS] artifact-readiness-preflight presente
+[PASS] artifact-readiness-restore-drill presente
+[PASS] artifact-readiness-capacity-smoke presente
+[PASS] preflight operacional aprovado
+[PASS] restore drill aprovado
+[PASS] capacity smoke aprovado
+
+== E2E critico ==
+[PASS] smoke suite (readiness-smoke-tests-admin-settings.spec.ts.xml) sem falhas
+[PASS] smoke suite (readiness-smoke-tests-auth.spec.ts.xml) sem falhas
+[PASS] smoke suite (readiness-smoke-tests-global-search.spec.ts.xml) sem falhas
+[PASS] smoke suite (readiness-smoke-tests-model-registry.spec.ts.xml) sem falhas
+[PASS] smoke suite aprovado com 4 arquivo(s) JUnit
+[PASS] extended suite (readiness-extended-tests-fictibet-dataset-pack.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-ingest-connectors.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-ingest-operations.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-ingest-rate-limit.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-ingest-tenant-isolation.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-maintenance-mode.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-mappings-versioning.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-onboarding.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-report-audit.spec.ts.xml) sem falhas
+[PASS] extended suite (readiness-extended-tests-report-exports.spec.ts.xml) sem falhas
+[PASS] extended suite aprovado com 10 arquivo(s) JUnit
+[PASS] security suite (readiness-security-analyst-tests-security-rbac.spec.ts.xml) sem falhas
+[PASS] security suite (readiness-security-audit-tests-security-rbac.spec.ts.xml) sem falhas
+[PASS] security suite (readiness-security-labels-tests-security-rbac.spec.ts.xml) sem falhas
+[PASS] security suite aprovado com 3 arquivo(s) JUnit
+
+== Resumo ==
+release_go_no_go=GO

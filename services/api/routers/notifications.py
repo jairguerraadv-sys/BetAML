@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, select, update
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user
@@ -23,22 +23,43 @@ def _tenant_filter(model, tenant_id: str):
     return model.tenant_id == tenant_id
 
 
-@router.get("/notifications", response_model=list[NotificationOut])
+@router.get("/notifications")
 async def list_notifications(
     unread_only: bool = Query(False),
     limit: int = Query(50, le=200),
+    offset: int = Query(0, ge=0),
+    envelope: bool = Query(False, description="Quando true, retorna {items,total,limit,offset}."),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    stmt = select(Notification).where(
+    envelope_enabled = envelope if isinstance(envelope, bool) else False
+    filters = [
         _tenant_filter(Notification, current_user.tenant_id),
         Notification.user_id == current_user.id,
-    )
+    ]
     if unread_only:
-        stmt = stmt.where(Notification.is_read == False)  # noqa: E712
-    stmt = stmt.order_by(desc(Notification.created_at)).limit(limit)
+        filters.append(Notification.is_read == False)  # noqa: E712
+
+    stmt = (
+        select(Notification)
+        .where(*filters)
+        .order_by(desc(Notification.created_at))
+        .limit(limit)
+        .offset(offset)
+    )
     result = await db.execute(stmt)
-    return result.scalars().all()
+    items = result.scalars().all()
+    if not envelope_enabled:
+        return items
+
+    total_q = select(func.count()).select_from(Notification).where(*filters)
+    total = (await db.execute(total_q)).scalar_one()
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.post("/notifications/{notif_id}/read")

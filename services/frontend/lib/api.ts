@@ -1243,7 +1243,7 @@ export const deleteAdminUser = (id: string) =>
   api.delete(`/admin/users/${id}`);
 
 export const resetUserPassword = (id: string, new_password: string) =>
-  api.post(`/admin/users/${id}/reset-password`, { new_password });
+  api.post<{ user_id: string; username: string; message: string }>(`/admin/users/${id}/reset-password`, { new_password }).then((r) => r.data);
 
 export interface AdminApiKey {
   id: string;
@@ -1478,6 +1478,18 @@ export interface PlayerNetworkItem {
   shared_by: Array<{ type: string; value: string }>;
 }
 
+interface PlayerNetworkApiEdge {
+  source: string;
+  target: string;
+  edge_type: string;
+  shared_hash_prefix?: string;
+}
+
+interface PlayerNetworkApiResponse {
+  focal_player_id: string;
+  edges: PlayerNetworkApiEdge[];
+}
+
 export interface CaseAlertHistory {
   player_id: string;
   cases: Array<{ id: string; title: string; status: string; severity: string; created_at: string }>;
@@ -1502,9 +1514,34 @@ export const fetchPlayerPaymentInstruments = (playerId: string) =>
   ).then((r) => r.data);
 
 export const fetchPlayerNetwork = (playerId: string) =>
-  api.get<{ player_id: string; related_players: PlayerNetworkItem[] }>(
-    `/players/${playerId}/network`,
-  ).then((r) => r.data);
+  api.get<PlayerNetworkApiResponse>(`/players/${playerId}/network`).then((r) => {
+    const data = r.data;
+    const related = new Map<string, Array<{ type: string; value: string }>>();
+
+    for (const edge of data.edges ?? []) {
+      let peerId: string | null = null;
+      if (edge.source === playerId) peerId = edge.target;
+      else if (edge.target === playerId) peerId = edge.source;
+      if (!peerId) continue;
+
+      const link = {
+        type: edge.edge_type,
+        value: edge.shared_hash_prefix ?? 'shared',
+      };
+      const current = related.get(peerId) ?? [];
+      if (!current.some((item) => item.type === link.type && item.value === link.value)) {
+        related.set(peerId, [...current, link]);
+      }
+    }
+
+    return {
+      player_id: data.focal_player_id ?? playerId,
+      related_players: Array.from(related.entries()).map(([peer_id, shared_by]) => ({
+        player_id: peer_id,
+        shared_by,
+      })),
+    };
+  });
 
 export const fetchPlayerCaseAlertHistory = (playerId: string) =>
   api.get<CaseAlertHistory>(`/players/${playerId}/case-alert-history`).then((r) => r.data);

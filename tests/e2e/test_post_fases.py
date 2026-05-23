@@ -295,7 +295,7 @@ async def test_auto_case_for_critical_alert(client: httpx.AsyncClient, token_a: 
 @skip_unless_stack
 @pytest.mark.asyncio
 async def test_income_volume_compat_fires(client: httpx.AsyncClient, token_a: str) -> None:
-    """PASSO 4 — algum player deve ter income_compat com status!=OK ou ratio>1."""
+    """PASSO 4 — algum player deve ter compatibilidade econômica em faixa de risco relevante."""
     headers = {"Authorization": f"Bearer {token_a}"}
 
     resp = await client.get("/players?limit=50", headers=headers)
@@ -309,31 +309,27 @@ async def test_income_volume_compat_fires(client: httpx.AsyncClient, token_a: st
         if pid is None:
             continue
 
-        # tenta /financial-profile; fallback /econ-compat; fallback inline player
-        for endpoint in (
-            f"/players/{pid}/financial-profile",
-            f"/players/{pid}/econ-compat",
-            f"/players/{pid}",
-        ):
-            r = await client.get(endpoint, headers=headers)
-            if r.status_code != 200:
-                continue
-            data = r.json()
-            compat = data.get("income_compat") or data
-            status = compat.get("status")
-            ratio = compat.get("ratio")
-            if status and status != "OK":
-                mismatch_player = pid
-                break
-            if ratio and float(ratio) > 1.0:
-                mismatch_player = pid
-                break
+        r = await client.get(f"/players/{pid}/econ-compat", headers=headers)
+        if r.status_code != 200:
+            continue
+
+        compat = r.json()
+        tier = str(compat.get("tier") or "").upper()
+        ratio = compat.get("income_ratio_30d")
+        try:
+            ratio_value = float(ratio) if ratio is not None else 0.0
+        except (TypeError, ValueError):
+            ratio_value = 0.0
+
+        if tier in {"HIGH", "CRITICAL"} or ratio_value > 1.0:
+            mismatch_player = pid
+            break
         if mismatch_player:
             break
 
     if mismatch_player is None:
         pytest.skip(
-            "Nenhum player com income_compat.status != OK ou ratio > 1 — "
+            "Nenhum player com tier HIGH/CRITICAL ou income_ratio_30d > 1 — "
             "dataset de teste não contém volume incompatível"
         )
 

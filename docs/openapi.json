@@ -1159,6 +1159,18 @@
                             ],
                             "title": "Per Page"
                         }
+                    },
+                    {
+                        "name": "envelope",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "boolean",
+                            "description": "Quando true, retorna {items,total,limit,offset}.",
+                            "default": false,
+                            "title": "Envelope"
+                        },
+                        "description": "Quando true, retorna {items,total,limit,offset}."
                     }
                 ],
                 "responses": {
@@ -4669,27 +4681,68 @@
                 "summary": "List Player Lists",
                 "description": "List all player watchlists for the current tenant.",
                 "operationId": "list_player_lists_player_lists_get",
+                "security": [
+                    {
+                        "OAuth2PasswordBearer": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 500,
+                            "minimum": 1,
+                            "default": 50,
+                            "title": "Limit"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0,
+                            "title": "Offset"
+                        }
+                    },
+                    {
+                        "name": "envelope",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "boolean",
+                            "description": "Quando true, retorna {items,total,limit,offset}.",
+                            "default": false,
+                            "title": "Envelope"
+                        },
+                        "description": "Quando true, retorna {items,total,limit,offset}."
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "Successful Response",
                         "content": {
                             "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
                                 "schema": {
-                                    "items": {
-                                        "$ref": "#/components/schemas/PlayerListOut"
-                                    },
-                                    "type": "array",
-                                    "title": "Response List Player Lists Player Lists Get"
+                                    "$ref": "#/components/schemas/HTTPValidationError"
                                 }
                             }
                         }
                     }
-                },
-                "security": [
-                    {
-                        "OAuth2PasswordBearer": []
-                    }
-                ]
+                }
             },
             "post": {
                 "tags": [
@@ -4698,15 +4751,20 @@
                 "summary": "Create Player List",
                 "description": "Create a new player watchlist.",
                 "operationId": "create_player_list_player_lists_post",
+                "security": [
+                    {
+                        "OAuth2PasswordBearer": []
+                    }
+                ],
                 "requestBody": {
+                    "required": true,
                     "content": {
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/PlayerListCreate"
                             }
                         }
-                    },
-                    "required": true
+                    }
                 },
                 "responses": {
                     "201": {
@@ -4727,12 +4785,7 @@
                             }
                         }
                     }
-                },
-                "security": [
-                    {
-                        "OAuth2PasswordBearer": []
-                    }
-                ]
+                }
             }
         },
         "/player-lists/{list_id}": {
@@ -5129,6 +5182,18 @@
                             "default": 0,
                             "title": "Offset"
                         }
+                    },
+                    {
+                        "name": "envelope",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "boolean",
+                            "description": "Quando true, retorna {items,total,limit,offset}.",
+                            "default": false,
+                            "title": "Envelope"
+                        },
+                        "description": "Quando true, retorna {items,total,limit,offset}."
                     }
                 ],
                 "responses": {
@@ -6304,6 +6369,48 @@
                 ],
                 "summary": "List Rules",
                 "operationId": "list_rules_rules_get",
+                "security": [
+                    {
+                        "OAuth2PasswordBearer": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 500,
+                            "minimum": 1,
+                            "default": 50,
+                            "title": "Limit"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0,
+                            "title": "Offset"
+                        }
+                    },
+                    {
+                        "name": "envelope",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "boolean",
+                            "description": "Quando true, retorna {items,total,limit,offset}.",
+                            "default": false,
+                            "title": "Envelope"
+                        },
+                        "description": "Quando true, retorna {items,total,limit,offset}."
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "Successful Response",
@@ -6312,13 +6419,18 @@
                                 "schema": {}
                             }
                         }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
                     }
-                },
-                "security": [
-                    {
-                        "OAuth2PasswordBearer": []
-                    }
-                ]
+                }
             },
             "post": {
                 "tags": [
@@ -6326,15 +6438,20 @@
                 ],
                 "summary": "Create Rule",
                 "operationId": "create_rule_rules_post",
+                "security": [
+                    {
+                        "OAuth2PasswordBearer": []
+                    }
+                ],
                 "requestBody": {
+                    "required": true,
                     "content": {
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/RuleCreate"
                             }
                         }
-                    },
-                    "required": true
+                    }
                 },
                 "responses": {
                     "201": {
@@ -6355,12 +6472,7 @@
                             }
                         }
                     }
-                },
-                "security": [
-                    {
-                        "OAuth2PasswordBearer": []
-                    }
-                ]
+                }
             }
         },
         "/rules/preview-dsl": {
@@ -7733,7 +7845,7 @@
                     "admin"
                 ],
                 "summary": "Reset User Password",
-                "description": "Gera uma nova senha aleat\u00f3ria (16 chars) para o usu\u00e1rio e a salva como hash.\nRetorna a senha em plaintext UMA \u00daNICA VEZ \u2014 n\u00e3o \u00e9 poss\u00edvel recuper\u00e1-la depois.\nSem envio de e-mail em MVP.",
+                "description": "Redefine a senha do usu\u00e1rio com valor informado pelo operador autorizado.\nN\u00e3o retorna senha em plaintext para evitar vazamento em logs/telemetria.",
                 "operationId": "reset_user_password_admin_users__user_id__reset_password_post",
                 "security": [
                     {
@@ -7751,6 +7863,16 @@
                         }
                     }
                 ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ResetPasswordIn"
+                            }
+                        }
+                    }
+                },
                 "responses": {
                     "200": {
                         "description": "Successful Response",
@@ -8498,6 +8620,29 @@
                             "default": 50,
                             "title": "Limit"
                         }
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0,
+                            "title": "Offset"
+                        }
+                    },
+                    {
+                        "name": "envelope",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "boolean",
+                            "description": "Quando true, retorna {items,total,limit,offset}.",
+                            "default": false,
+                            "title": "Envelope"
+                        },
+                        "description": "Quando true, retorna {items,total,limit,offset}."
                     }
                 ],
                 "responses": {
@@ -8505,13 +8650,7 @@
                         "description": "Successful Response",
                         "content": {
                             "application/json": {
-                                "schema": {
-                                    "type": "array",
-                                    "items": {
-                                        "$ref": "#/components/schemas/NotificationOut"
-                                    },
-                                    "title": "Response List Notifications Notifications Get"
-                                }
+                                "schema": {}
                             }
                         }
                     },
@@ -12065,101 +12204,6 @@
                 ],
                 "title": "MonthlyReportIn"
             },
-            "NotificationOut": {
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "title": "Id"
-                    },
-                    "tenant_id": {
-                        "type": "string",
-                        "title": "Tenant Id"
-                    },
-                    "user_id": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "User Id"
-                    },
-                    "type": {
-                        "type": "string",
-                        "title": "Type"
-                    },
-                    "title": {
-                        "type": "string",
-                        "title": "Title"
-                    },
-                    "body": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Body"
-                    },
-                    "reference_type": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Reference Type"
-                    },
-                    "reference_id": {
-                        "anyOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Reference Id"
-                    },
-                    "is_read": {
-                        "type": "boolean",
-                        "title": "Is Read",
-                        "default": false
-                    },
-                    "created_at": {
-                        "type": "string",
-                        "format": "date-time",
-                        "title": "Created At"
-                    },
-                    "read_at": {
-                        "anyOf": [
-                            {
-                                "type": "string",
-                                "format": "date-time"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ],
-                        "title": "Read At"
-                    }
-                },
-                "type": "object",
-                "required": [
-                    "id",
-                    "tenant_id",
-                    "type",
-                    "title",
-                    "created_at"
-                ],
-                "title": "NotificationOut"
-            },
             "OpsSummaryOut": {
                 "properties": {
                     "generated_at": {
@@ -13311,6 +13355,21 @@
                 },
                 "type": "object",
                 "title": "ReprocessRequest"
+            },
+            "ResetPasswordIn": {
+                "properties": {
+                    "new_password": {
+                        "type": "string",
+                        "maxLength": 256,
+                        "minLength": 8,
+                        "title": "New Password"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "new_password"
+                ],
+                "title": "ResetPasswordIn"
             },
             "ResolveIngestErrorRequest": {
                 "properties": {

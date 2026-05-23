@@ -1628,6 +1628,13 @@ async def ingest_websocket(websocket: WebSocket):
             await websocket.send_json({"error": "inactive_user"})
             await websocket.close(code=1008)
             return
+
+        # Hardening multi-tenant: impede replay cross-tenant com token adulterado/antigo.
+        if str(user.tenant_id) != str(tenant_id):
+            await websocket.send_json({"error": "tenant_mismatch"})
+            await websocket.close(code=1008)
+            return
+
         if user.role not in {"ADMIN", "AML_ANALYST"}:
             await websocket.send_json({"error": "insufficient_role"})
             await websocket.close(code=1008)

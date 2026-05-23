@@ -13,7 +13,6 @@ import hashlib
 import os
 import re
 import secrets
-import string
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Optional
@@ -194,6 +193,10 @@ class AdminOnboardingImportOut(BaseModel):
     status: str
     source_system: str
     file_name: Optional[str] = None
+
+
+class ResetPasswordIn(BaseModel):
+    new_password: str = Field(..., min_length=8, max_length=256)
 
 
 class AMLKPIOut(BaseModel):
@@ -1595,13 +1598,13 @@ async def deactivate_user(
 @router.post("/admin/users/{user_id}/reset-password", tags=["admin"])
 async def reset_user_password(
     user_id: str,
+    body: ResetPasswordIn,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """
-    Gera uma nova senha aleatória (16 chars) para o usuário e a salva como hash.
-    Retorna a senha em plaintext UMA ÚNICA VEZ — não é possível recuperá-la depois.
-    Sem envio de e-mail em MVP.
+    Redefine a senha do usuário com valor informado pelo operador autorizado.
+    Não retorna senha em plaintext para evitar vazamento em logs/telemetria.
     """
     target = (await db.execute(
         select(User).where(
@@ -1612,10 +1615,7 @@ async def reset_user_password(
     if target is None:
         raise HTTPException(404, "Usuário não encontrado")
 
-    # Gera senha aleatória segura de 16 caracteres (letras + dígitos + símbolos)
-    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-    new_password = "".join(secrets.choice(alphabet) for _ in range(16))
-    target.password_hash = hash_password(new_password)
+    target.password_hash = hash_password(body.new_password)
 
     await _write_audit(
         db, current_user.tenant_id, current_user.id,
@@ -1628,8 +1628,7 @@ async def reset_user_password(
     return {
         "user_id": user_id,
         "username": target.username,
-        "new_password": new_password,
-        "message": "Senha redefinida. Guarde-a agora — não será exibida novamente.",
+        "message": "Senha redefinida com sucesso.",
     }
 
 
@@ -1667,7 +1666,8 @@ async def generate_invite(
         by=current_user.id,
     )
     return {
-        "invite_link": f"/accept-invite?token={token}",
+        # Usa fragmento para evitar expor token em logs de proxy/servidor.
+        "invite_link": f"/accept-invite#token={token}",
         "email": body.email,
         "role": body.role,
         "expires_in_hours": 48,

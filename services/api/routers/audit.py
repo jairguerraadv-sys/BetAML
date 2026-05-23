@@ -58,9 +58,11 @@ async def list_audit_logs(
     offset: int = 0,
     page: int | None = Query(None, ge=1),
     per_page: int | None = Query(None, ge=1, le=500),
-    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.ADMIN_TECNICO])),
+    envelope: bool = Query(False, description="Quando true, retorna {items,total,limit,offset}."),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
     db: AsyncSession = Depends(get_db),
 ):
+    envelope_enabled = envelope if isinstance(envelope, bool) else False
     if per_page is not None:
         limit = per_page
     if page is not None:
@@ -68,32 +70,49 @@ async def list_audit_logs(
     if actor_id and not user_id:
         user_id = actor_id
 
-    stmt = select(AuditLog).where(AuditLog.tenant_id == current_user.tenant_id)
+    filters = [AuditLog.tenant_id == current_user.tenant_id]
     if entity_type:
-        stmt = stmt.where(AuditLog.entity_type == entity_type)
+        filters.append(AuditLog.entity_type == entity_type)
     if action:
-        stmt = stmt.where(AuditLog.action == action)
+        filters.append(AuditLog.action == action)
     if user_id:
-        stmt = stmt.where(AuditLog.user_id == user_id)
+        filters.append(AuditLog.user_id == user_id)
     if entity_id:
-        stmt = stmt.where(AuditLog.entity_id == entity_id)
+        filters.append(AuditLog.entity_id == entity_id)
     if date_from:
-        stmt = stmt.where(AuditLog.created_at >= date_from)
+        filters.append(AuditLog.created_at >= date_from)
     if date_to:
-        stmt = stmt.where(AuditLog.created_at <= date_to)
+        filters.append(AuditLog.created_at <= date_to)
     if pii_only:
-        stmt = stmt.where(or_(AuditLog.pii_accessed.isnot(None), AuditLog.action.like("ACCESS_PII:%")))
+        filters.append(or_(AuditLog.pii_accessed.isnot(None), AuditLog.action.like("ACCESS_PII:%")))
     if search:
-        stmt = stmt.where(
+        filters.append(
             or_(
                 AuditLog.action.ilike(f"%{search}%"),
                 AuditLog.entity_type.ilike(f"%{search}%"),
                 AuditLog.entity_id.ilike(f"%{search}%"),
             )
         )
-    stmt = stmt.order_by(AuditLog.created_at.desc()).limit(limit).offset(offset)
-    logs = (await db.execute(stmt)).scalars().all()
-    return [_serialize_audit(lo) for lo in logs]
+    data_q = (
+        select(AuditLog)
+        .where(*filters)
+        .order_by(AuditLog.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    logs = (await db.execute(data_q)).scalars().all()
+    items = [_serialize_audit(lo) for lo in logs]
+    if not envelope_enabled:
+        return items
+
+    total_q = select(func.count()).select_from(AuditLog).where(*filters)
+    total = (await db.execute(total_q)).scalar_one()
+    return {
+        "total": total,
+        "items": items,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/audit-log")
@@ -107,7 +126,7 @@ async def list_audit_log_legacy(
     offset: int = Query(0, ge=0),
     page: int | None = Query(None, ge=1),
     per_page: int | None = Query(None, ge=1, le=500),
-    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.ADMIN_TECNICO])),
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
     db: AsyncSession = Depends(get_db),
 ):
     # Legacy compatibility endpoint expected by older integrations/tests.

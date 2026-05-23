@@ -97,7 +97,15 @@ function UserCreateForm({ onSuccess }: { onSuccess: () => void }) {
 // ── Reset Password Modal ───────────────────────────────────────────────────────
 function ResetPwModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
   const [pw, setPw] = useState('');
-  const mut = useMutation({ mutationFn: () => resetUserPassword(user.id, pw), onSuccess: onClose });
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+  const mut = useMutation({
+    mutationFn: () => resetUserPassword(user.id, pw),
+    onSuccess: (data) => {
+      setOkMsg(data.message ?? 'Senha redefinida com sucesso.');
+      setPw('');
+      setTimeout(onClose, 900);
+    },
+  });
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -112,6 +120,7 @@ function ResetPwModal({ user, onClose }: { user: AdminUser; onClose: () => void 
             {mut.isPending ? 'Salvando…' : 'Redefinir'}
           </button>
         </div>
+        {okMsg && <p className="mt-2 text-xs text-emerald-700">{okMsg}</p>}
         {mut.isError && <p className="mt-2 text-xs text-red-600">Erro ao redefinir senha.</p>}
       </div>
     </div>

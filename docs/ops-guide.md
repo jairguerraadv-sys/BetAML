@@ -842,6 +842,29 @@ DELETE /player-lists/{list_id}/entries/{entry_id}
 - Compound rules suportam `AND`, `OR` e `N_OF_M`, com `severity_mode=MAX|FIXED`.
 - O `rules_engine` aplica pesos do tenant vindos de `scoring_configs` para combinar regra, ML e rede no `score_breakdown`.
 
+### Contratos de listagem com envelope opcional
+
+Para integrações que exigem paginação estável, use `envelope=true`.
+Sem esse parâmetro, o retorno legado (lista direta) é preservado.
+
+```bash
+GET /rules?envelope=true&limit=50&offset=0
+GET /player-lists?envelope=true&limit=50&offset=0
+GET /notifications?envelope=true&limit=50&offset=0
+GET /audit-logs?envelope=true&limit=50&offset=0
+```
+
+Shape de resposta em modo envelope:
+
+```json
+{
+  "items": [],
+  "total": 0,
+  "limit": 50,
+  "offset": 0
+}
+```
+
 ## 12. Troubleshooting
 
 ### API não responde
