@@ -9,6 +9,8 @@ BACKUP_REFERENCE=""
 ROLLBACK_TARGET=""
 ONCALL_OWNER=""
 EVIDENCE_OUT=""
+MAX_BACKUP_AGE_HOURS=24
+SKIP_BACKUP_AGE_CHECK=0
 
 usage() {
   cat <<'EOF'
@@ -23,6 +25,8 @@ Opcoes:
   --backup-reference TEXT        Referencia do ultimo backup valido
   --rollback-target TEXT         Revisao alvo de rollback
   --oncall-owner TEXT            Responsavel on-call pela janela
+  --max-backup-age-hours N       Idade maxima permitida do backup em horas (default: 24)
+  --skip-backup-age-check        Nao valida idade do backup_reference
   --evidence-out PATH            Salva a decisao completa em arquivo
   -h, --help                     Exibe esta ajuda
 EOF
@@ -57,6 +61,14 @@ while [[ $# -gt 0 ]]; do
     --oncall-owner)
       ONCALL_OWNER="$2"
       shift 2
+      ;;
+    --max-backup-age-hours)
+      MAX_BACKUP_AGE_HOURS="$2"
+      shift 2
+      ;;
+    --skip-backup-age-check)
+      SKIP_BACKUP_AGE_CHECK=1
+      shift
       ;;
     --evidence-out)
       EVIDENCE_OUT="$2"
@@ -113,6 +125,63 @@ require_non_empty() {
   else
     fail "$label nao informado"
   fi
+}
+
+validate_backup_reference_age() {
+  local reference="$1"
+  local max_age_hours="$2"
+
+  if ! [[ "$max_age_hours" =~ ^[0-9]+$ ]]; then
+    fail "max_backup_age_hours invalido: $max_age_hours"
+    return
+  fi
+
+  local ts
+  ts="$(printf '%s' "$reference" | grep -Eo '[0-9]{8}T[0-9]{6}Z' | head -n1 || true)"
+  if [[ -z "$ts" ]]; then
+    fail "backup_reference sem timestamp no formato YYYYMMDDTHHMMSSZ"
+    return
+  fi
+
+  local epoch_parser=""
+  if command -v python3 >/dev/null 2>&1; then
+    epoch_parser="python3"
+  elif command -v python >/dev/null 2>&1; then
+    epoch_parser="python"
+  else
+    fail "python/python3 ausente para validar idade do backup_reference"
+    return
+  fi
+
+  local backup_epoch now_epoch age_hours
+  backup_epoch="$($epoch_parser - <<PY
+from datetime import datetime, timezone
+print(int(datetime.strptime("$ts", "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).timestamp()))
+PY
+)"
+  now_epoch="$($epoch_parser - <<'PY'
+from datetime import datetime, timezone
+print(int(datetime.now(timezone.utc).timestamp()))
+PY
+)"
+
+  if ! [[ "$backup_epoch" =~ ^[0-9]+$ ]] || ! [[ "$now_epoch" =~ ^[0-9]+$ ]]; then
+    fail "falha ao calcular epoch do backup_reference"
+    return
+  fi
+
+  if (( now_epoch < backup_epoch )); then
+    fail "backup_reference possui timestamp no futuro: $ts"
+    return
+  fi
+
+  age_hours=$(( (now_epoch - backup_epoch) / 3600 ))
+  if (( age_hours > max_age_hours )); then
+    fail "backup_reference excede idade maxima: ${age_hours}h > ${max_age_hours}h"
+    return
+  fi
+
+  pass "backup_reference com idade valida (${age_hours}h <= ${max_age_hours}h)"
 }
 
 validate_junit_file() {
@@ -183,6 +252,12 @@ require_non_empty "$PREFLIGHT_EVIDENCE" "preflight_evidence"
 require_non_empty "$RESTORE_EVIDENCE" "restore_evidence"
 require_non_empty "$CAPACITY_EVIDENCE" "capacity_evidence"
 require_non_empty "$JUNIT_DIR" "junit_dir"
+
+if [[ "$SKIP_BACKUP_AGE_CHECK" -eq 0 ]]; then
+  validate_backup_reference_age "$BACKUP_REFERENCE" "$MAX_BACKUP_AGE_HOURS"
+else
+  pass "validacao de idade do backup_reference ignorada (--skip-backup-age-check)"
+fi
 
 section "Evidencias locais"
 if [[ -n "${PREFLIGHT_EVIDENCE// }" ]]; then

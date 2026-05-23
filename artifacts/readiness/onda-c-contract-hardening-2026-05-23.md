@@ -73,3 +73,6 @@ Objetivo: validar estabilidade de contrato de listagens com envelope opcional e 
   - checksum com fallback `sha256sum`/`shasum`
 - scripts/restore_drill.sh:
   - download de backup MinIO via `mc cat` (sem bind mount de diretório temporário)
+- scripts/release_decision_gate.sh:
+  - validação automática da idade do `backup_reference` (default <= 24h)
+  - suporte a `--max-backup-age-hours` e `--skip-backup-age-check`

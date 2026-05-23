@@ -54,6 +54,11 @@ Ele valida em sequencia:
 5. Smoke E2E, extended e security
 6. Gate final de go/no-go (`scripts/release_decision_gate.sh`)
 
+Observacao operacional:
+- O gate final valida automaticamente o timestamp do `backup_reference` no formato `YYYYMMDDTHHMMSSZ`.
+- Por default, backups com idade maior que 24h resultam em `NO_GO`.
+- Override controlado: `--max-backup-age-hours N` ou `--skip-backup-age-check`.
+
 Requer configuracao no repositorio GitHub:
 - variable `E2E_USERNAME`
 - secret `E2E_PASSWORD`

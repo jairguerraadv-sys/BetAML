@@ -1,8 +1,8 @@
 
 == Contexto ==
-timestamp_utc=2026-05-23T06:02:28Z
+timestamp_utc=2026-05-23T06:08:01Z
 backup_reference=postgres_20260523T055719Z@betaml-backups/postgres
-rollback_target=e808a7d
+rollback_target=b3f0365
 oncall_owner=jairarantes
 capacity_evidence=artifacts/readiness/capacity/betaml_load_slo.txt
 
@@ -14,6 +14,7 @@ capacity_evidence=artifacts/readiness/capacity/betaml_load_slo.txt
 [PASS] restore_evidence informado
 [PASS] capacity_evidence informado
 [PASS] junit_dir informado
+[PASS] backup_reference com idade valida (0h <= 24h)
 
 == Evidencias locais ==
 [PASS] artifact-readiness-preflight presente
