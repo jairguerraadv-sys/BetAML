@@ -82,6 +82,10 @@ jobs:
           docker compose -f infra/docker-compose.yml logs api || true
           exit 1
 
+      - name: Seed database
+        run: |
+          docker compose -f infra/docker-compose.yml exec -T api python seeds.py
+
       - name: Run external validation integration tests
         env:
           TEST_STACK_UP: "1"
