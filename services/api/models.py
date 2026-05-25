@@ -432,7 +432,7 @@ class ReportPackage(Base):
     status               = Column(String(20), nullable=False, default="DRAFT")
     analyst_narrative    = Column(Text)
     decision             = Column(String(20))
-    integrity_hash       = Column(String(64))     # SHA-256 do payload JSON para cadeia de custódia
+    integrity_hash       = Column(String(64), nullable=False, server_default="")  # SHA-256 do payload JSON para cadeia de custódia
     created_by           = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     created_at           = Column(DateTime(timezone=True), server_default=func.now())
 

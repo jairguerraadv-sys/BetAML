@@ -196,8 +196,19 @@ export interface AlertExplainability {
   alert_id: string;
   model_id?: string | null;
   explanation_method: string;
+  explanation_method_actual?: string;
   anomaly_score: number;
   top_features: AlertExplainabilityFeature[];
+}
+
+export interface ScoreResponse {
+  player_id: string;
+  tenant_id: string;
+  model_id?: string | null;
+  anomaly_score: number;
+  risk_band: string;
+  model_variant?: string;
+  scored_at: string;
 }
 
 export interface Case {
@@ -272,6 +283,7 @@ export interface PlayerErasureResponse {
   player_id: string;
   message: string;
   erased_at?: string;
+  erased_from?: Record<string, number>;
 }
 
 export interface PlayerDataExport {
@@ -427,6 +439,7 @@ export interface ReportPackageResult {
   decision: string;
   pdf_path: string | null;
   payload: Record<string, unknown>;
+  integrity_hash?: string;
 }
 
 export interface CaseLookupResult {
@@ -560,6 +573,7 @@ export interface ReportPackageMeta {
   xml_sha256?: string | null;
   coaf_protocol_number?: string | null;
   filed_at?: string | null;
+  integrity_hash?: string;
 }
 
 export interface ReportFilingStatus {

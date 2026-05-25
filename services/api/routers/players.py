@@ -441,7 +441,7 @@ async def erase_player_data(
     # Count related records for LGPD completeness audit
     from sqlalchemy import text as _text
     erased_from: dict[str, int] = {}
-    for table, col in [("alerts", "player_id"), ("cases", "player_id"), ("transactions", "player_id")]:
+    for table, col in [("alerts", "player_id"), ("cases", "player_id"), ("transactions", "player_id"), ("report_packages", "player_id")]:
         try:
             row = (await db.execute(
                 _text(f"SELECT COUNT(*) FROM {table} WHERE tenant_id = :tid AND {col} = (SELECT id FROM players WHERE external_player_id = :pid AND tenant_id = :tid LIMIT 1)"),

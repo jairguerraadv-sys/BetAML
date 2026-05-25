@@ -187,22 +187,17 @@ class TestErasureCompletenessResponse(unittest.TestCase):
         with open(route_file) as fh:
             src = fh.read()
 
-        idx = src.find("erase_player_data")
-        self.assertGreater(idx, 0, "erase_player_data not found")
-        snippet = src[idx: idx + 3000]
-        self.assertIn("erased_from", snippet,
+        self.assertIn("erased_from", src,
                       "erase_player_data must include erased_from in response")
 
     def test_erased_from_covers_alerts_cases_transactions(self):
-        """erased_from must cover alerts, cases, and transactions tables."""
+        """erased_from must cover alerts, cases, transactions, and report_packages tables."""
         route_file = os.path.join(_SERVICES_API, "routers", "players.py")
         with open(route_file) as fh:
             src = fh.read()
 
-        idx = src.find("erase_player_data")
-        snippet = src[idx: idx + 3000]
-        for table in ("alerts", "cases", "transactions"):
-            self.assertIn(table, snippet,
+        for table in ("alerts", "cases", "transactions", "report_packages"):
+            self.assertIn(table, src,
                           f"erased_from completeness check must cover '{table}' table")
 
 

@@ -1171,6 +1171,7 @@ async def generate_report_package(
             payload["chain_of_custody"]["pdf_sha256"] = pdf_sha256
             payload["chain_of_custody"]["pdf_path"] = pdf_path
             rp.pdf_path = pdf_path  # type: ignore[assignment]
+            rp.pdf_sha256 = pdf_sha256  # type: ignore[assignment]
     except RuntimeError as pdf_dep_exc:
         logger.error("pdf_dependency_missing", error=str(pdf_dep_exc))
         raise HTTPException(503, "Geração de PDF indisponível — reportlab não instalado no servidor") from pdf_dep_exc
@@ -2599,7 +2600,38 @@ async def link_alert_to_case(
     return {"case_id": case_id, "alert_id": body.alert_id, "status": "linked"}
 
 
-@router.post("/cases/{case_id}/link-transaction")
+@router.post("/cases/{case_id}/unlink-alert")
+async def unlink_alert_from_case(
+    case_id: str,
+    body: CaseLinkAlertIn,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desvincula um alerta de um caso e registra evento ALERT_UNLINKED na trilha de auditoria."""
+    alert_model = getattr(importlib.import_module("models"), "Alert", Alert)
+    c = await db.get(Case, case_id)
+    if not c or str(c.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Caso não encontrado")
+    a = await _get_by_model_alias(db, alert_model, body.alert_id)
+    if not a or str(a.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "Alerta não encontrado")
+    if str(getattr(a, "case_id", None) or "") != case_id:
+        raise HTTPException(400, "Alerta não está vinculado a este caso")
+    a.case_id = None  # type: ignore[assignment]
+    db.add(CaseEvent(
+        case_id=case_id, tenant_id=current_user.tenant_id,
+        event_type="ALERT_UNLINKED",
+        content={
+            "alert_id": body.alert_id,
+            "alert_title": getattr(a, "title", None),
+            "severity": getattr(a, "severity", None),
+        },
+        created_by=current_user.id,
+    ))
+    await write_audit(db, current_user.tenant_id, current_user.id,
+                      "UNLINK_ALERT", "Case", case_id, after={"alert_id": body.alert_id})
+    await db.commit()
+    return {"case_id": case_id, "alert_id": body.alert_id, "status": "unlinked"}
 async def link_transaction_to_case(
     case_id: str,
     body: CaseLinkTransactionIn,
@@ -3022,6 +3054,15 @@ async def submit_report_package_filing(
 
     if str(rp.status) == "FILED":
         raise HTTPException(409, "ReportPackage já foi submetido")
+
+    # ── Siscoaf 97: re-validar occurrence_codes antes do filing ───────────────
+    if str(decision) == "FILE_SAR":
+        occ_codes = (rp.payload or {}).get("siscoaf", {}).get("occurrence_codes", []) if isinstance(rp.payload, dict) else []
+        invalid_codes = [c for c in occ_codes if c not in _VALID_OCCURRENCE_CODES]
+        if invalid_codes:
+            raise HTTPException(400, f"Códigos de ocorrência inválidos no payload: {invalid_codes}. Regenere o pacote.")
+        if not occ_codes:
+            raise HTTPException(400, "occurrence_codes ausentes no payload — regenere o pacote com campos Siscoaf válidos (Comunicado 97)")
 
     rp.status = "FILED"
     rp.filed_at = datetime.now(UTC)

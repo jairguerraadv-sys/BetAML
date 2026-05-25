@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncGenerator, Optional, cast
@@ -705,7 +706,13 @@ async def ingest_event(
 
     await _ensure_db_tenant_context(db, principal.tenant_id)
     max_requests = await _tenant_ingest_rate_limit(db, principal.tenant_id, default_limit=300)
-    await redis_rate_limit(principal.tenant_id, "ingest.event", max_requests=max_requests)
+    _t0 = time.monotonic()
+    try:
+        await redis_rate_limit(principal.tenant_id, "ingest.event", max_requests=max_requests)
+    except HTTPException as _rl_exc:
+        if _rl_exc.status_code == 429:
+            _INGEST_REJECTED.labels(tenant_id=principal.tenant_id, reason="rate_limit").inc()
+        raise
 
     mapped_payload = body.payload
     effective_mapping_id = body.mapping_config_id
@@ -768,6 +775,9 @@ async def ingest_event(
         )
         if not ok:
             raise HTTPException(503, "Falha ao enfileirar evento após retries; enviado para DLQ")
+    _INGEST_LATENCY.labels(tenant_id=principal.tenant_id, source_system=body.source_system).observe(time.monotonic() - _t0)
+    if body.entity_type == "TRANSACTION":
+        _ALERT_CREATED.labels(tenant_id=principal.tenant_id).inc()
     return {"event_id": envelope["event_id"], "status": "queued"}
 
 

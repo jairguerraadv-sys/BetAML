@@ -75,6 +75,12 @@ ML_SCORING_FAILURES = _counter_once(
     ["tenant_id", "reason"],
 )
 
+ML_SYNTHETIC_TRAINING_BLOCKED = _counter_once(
+    "betaml_ml_synthetic_training_blocked_total",
+    "Treinos bloqueados por dados sintéticos desabilitados em produção",
+    ["tenant_id", "endpoint"],
+)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Feature columns usados no treinamento (mesma ordem no score)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -173,6 +179,7 @@ def _handle_missing_champion_model(req: "ScoreRequest") -> "ScoreResponse":
 def _require_synthetic_training_allowed(*, tenant_id: str, endpoint: str, have_rows: int | None = None, minimum_rows: int | None = None) -> None:
     if _allow_synthetic_training():
         return
+    ML_SYNTHETIC_TRAINING_BLOCKED.labels(tenant_id=tenant_id, endpoint=endpoint).inc()
     logger.warning(
         "synthetic_training_blocked",
         tenant_id=tenant_id,
