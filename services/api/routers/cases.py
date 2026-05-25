@@ -2898,3 +2898,143 @@ async def get_case_timeline(
             for day, blk in sorted(days.items())
         ],
     }
+
+
+# ── Report Package: download, export HTML, submit filing ─────────────────────
+
+@router.get("/report-packages/{rp_id}/download", tags=["cases"])
+async def download_report_package(
+    rp_id: str,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retorna o payload JSON do ReportPackage como download."""
+    rp = await db.get(ReportPackage, rp_id)
+    if not rp or str(rp.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "ReportPackage não encontrado")
+
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "DOWNLOAD_REPORT_PACKAGE", "ReportPackage", rp_id,
+    )
+    await db.commit()
+
+    content = json.dumps(
+        {
+            "report_package_id": rp.id,
+            "case_id": rp.case_id,
+            "player_id": rp.player_id,
+            "status": rp.status,
+            "decision": rp.decision,
+            "created_at": rp.created_at.isoformat() if rp.created_at else None,
+            "filed_at": rp.filed_at.isoformat() if rp.filed_at else None,
+            "coaf_protocol_number": rp.coaf_protocol_number,
+            "payload": rp.payload,
+        },
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+
+    return FastAPIResponse(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="report_package_{rp_id}.json"'},
+    )
+
+
+@router.get("/report-packages/{rp_id}/export", tags=["cases"])
+async def export_report_package_html(
+    rp_id: str,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Exporta o ReportPackage como HTML para impressão/arquivo."""
+    rp = await db.get(ReportPackage, rp_id)
+    if not rp or str(rp.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "ReportPackage não encontrado")
+
+    payload = rp.payload if isinstance(rp.payload, dict) else {}
+    decision = payload.get("decision") or payload.get("decisionLegacy") or rp.decision or "—"
+    narrative = rp.analyst_narrative or payload.get("analyst_narrative") or ""
+    created_str = rp.created_at.strftime("%Y-%m-%d %H:%M UTC") if rp.created_at else "—"
+    filed_str = rp.filed_at.strftime("%Y-%m-%d %H:%M UTC") if rp.filed_at else "—"
+
+    html_rows = ""
+    for k, v in payload.items():
+        if k == "chain_of_custody":
+            continue
+        html_rows += f"<tr><td><strong>{k}</strong></td><td>{v}</td></tr>"
+
+    html = f"""<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<title>BetAML — ReportPackage {rp.id}</title>
+<style>body{{font-family:Arial,sans-serif;margin:2rem}}table{{border-collapse:collapse;width:100%}}
+td{{border:1px solid #ccc;padding:6px 10px;vertical-align:top}}h1{{color:#1a1a2e}}
+.badge{{padding:3px 8px;border-radius:4px;font-size:.85em;background:#e8f4fd;color:#0077b6}}</style>
+</head><body>
+<h1>BetAML — Relatório de Inteligência Financeira</h1>
+<p><strong>ID:</strong> {rp.id} &nbsp;|&nbsp;
+<strong>Caso:</strong> {rp.case_id} &nbsp;|&nbsp;
+<strong>Status:</strong> <span class="badge">{rp.status}</span> &nbsp;|&nbsp;
+<strong>Decisão:</strong> <span class="badge">{decision}</span></p>
+<p><strong>Gerado em:</strong> {created_str} &nbsp;|&nbsp;
+<strong>Submetido em:</strong> {filed_str} &nbsp;|&nbsp;
+<strong>Protocolo COAF:</strong> {rp.coaf_protocol_number or '—'}</p>
+<h2>Narrativa do Analista</h2>
+<p>{narrative or '<em>Sem narrativa registrada.</em>'}</p>
+<h2>Dados do Pacote</h2>
+<table>{html_rows}</table>
+</body></html>"""
+
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "EXPORT_REPORT_PACKAGE_HTML", "ReportPackage", rp_id,
+    )
+    await db.commit()
+
+    return FastAPIResponse(
+        content=html.encode("utf-8"),
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="report_package_{rp_id}.html"'},
+    )
+
+
+@router.post("/report-packages/{rp_id}/submit-filing", tags=["cases"])
+async def submit_report_package_filing(
+    rp_id: str,
+    current_user: User = Depends(require_role_any([AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Registra submissão manual ao portal COAF (channel=MANUAL_PORTAL)."""
+    rp = await db.get(ReportPackage, rp_id)
+    if not rp or str(rp.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "ReportPackage não encontrado")
+
+    decision = (
+        (rp.payload or {}).get("decision") or (rp.payload or {}).get("decisionLegacy") or rp.decision
+        if isinstance(rp.payload, dict) else rp.decision
+    )
+    if str(decision) not in {"FILE_SAR", "REPORT"}:
+        raise HTTPException(422, "Somente ReportPackages com decisão FILE_SAR/REPORT podem ser submetidos")
+
+    if str(rp.status) == "FILED":
+        raise HTTPException(409, "ReportPackage já foi submetido")
+
+    rp.status = "FILED"
+    rp.filed_at = datetime.now(UTC)
+    await db.flush()
+
+    await write_audit(
+        db, current_user.tenant_id, current_user.id,
+        "SUBMIT_FILING_MANUAL", "ReportPackage", rp_id,
+        after={"status": "FILED", "decision": str(decision), "channel": "MANUAL_PORTAL"},
+    )
+    await db.commit()
+
+    return {
+        "report_package_id": rp_id,
+        "status": "FILED",
+        "filed_at": rp.filed_at.isoformat(),
+        "channel": "MANUAL_PORTAL",
+        "message": "ReportPackage marcado como submetido. Registre o protocolo COAF após confirmar no portal Siscoaf.",
+    }

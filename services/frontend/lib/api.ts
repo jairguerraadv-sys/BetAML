@@ -166,6 +166,7 @@ export interface Alert {
   id: string; title: string; severity: string; status: string;
   player_id: string; alert_type: string; created_at: string; rule_id?: string;
   anomaly_score?: number; case_id?: string; case_reference_number?: string | null;
+  game_type?: string;
 }
 
 export interface AlertDetail extends Alert {
@@ -658,6 +659,17 @@ export const registerCoafProtocol = (caseId: string, rpId: string, coafProtocolN
   api.patch<{ report_package_id: string; coaf_protocol_number: string; registered_at: string }>(
     `/cases/${caseId}/report-packages/${rpId}/protocol-number`,
     { coaf_protocol_number: coafProtocolNumber },
+  ).then((r) => r.data);
+
+export const downloadReportPackage = (rpId: string) =>
+  api.get(`/report-packages/${rpId}/download`, { responseType: 'blob' }).then((r) => r.data as Blob);
+
+export const exportReportPackageHtml = (rpId: string) =>
+  api.get(`/report-packages/${rpId}/export`, { responseType: 'blob' }).then((r) => r.data as Blob);
+
+export const submitReportPackageFiling = (rpId: string) =>
+  api.post<{ report_package_id: string; status: string; filed_at: string; channel: string; message: string }>(
+    `/report-packages/${rpId}/submit-filing`,
   ).then((r) => r.data);
 
 export const assignCase = (caseId: string, userId: string) =>
@@ -1342,6 +1354,8 @@ export interface DashboardStats {
   dismissed_7d?: number;
   my_cases_near_sla?: number;
   high_fp_rules?: Array<{ rule_id: string; rule_name: string; fp_count: number }>;
+  tenant_name?: string;
+  tenant_slug?: string;
 }
 
 export const fetchDashboardStats = () =>

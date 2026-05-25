@@ -20,6 +20,7 @@ from models import Alert, Bet, Case, FinancialTransaction, Notification, User
 from repositories import AlertRepository
 from repositories.alerts import get_alert_repo
 from utils import write_audit
+from webhook_notifier import notify_operator_webhook
 
 logger = structlog.get_logger(__name__)
 
@@ -524,6 +525,12 @@ async def triage_alert(
         after={"disposition": body.disposition, "note": triage_note},
     )
     await db.commit()
+    if body.disposition == "CONFIRMED":
+        await notify_operator_webhook(
+            db, str(current_user.tenant_id), alert_id, str(a.severity),
+            event_type="alert.confirmed",
+            extra={"disposition": body.disposition, "player_id": str(a.player_id) if a.player_id else None},
+        )
     return {
         "id": alert_id,
         "status": a.status,

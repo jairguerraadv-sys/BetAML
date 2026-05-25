@@ -96,6 +96,11 @@ function AlertCard({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <SevBadge sev={alert.severity} />
+            {alert.game_type && (
+              <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${VERTICAL_BADGE[alert.game_type] ?? 'bg-gray-100 text-gray-600'}`}>
+                {VERTICAL_LABELS[alert.game_type] ?? alert.game_type}
+              </span>
+            )}
             {hasCase && (
               <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700">
                 Em caso
@@ -207,19 +212,45 @@ function PriorityTab({
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
+
+const VERTICAL_LABELS: Record<string, string> = {
+  SPORTSBOOK:    'Esportes',
+  CASINO_LIVE:   'Cassino Ao Vivo',
+  SLOT:          'Slots',
+  BINGO:         'Bingo',
+  RASPADINHA:    'Raspadinha',
+  VIRTUAL:       'Virtual',
+  INSTANT_GAME:  'Instantâneo',
+};
+
+const VERTICAL_BADGE: Record<string, string> = {
+  SPORTSBOOK:    'bg-blue-100 text-blue-700',
+  CASINO_LIVE:   'bg-purple-100 text-purple-700',
+  SLOT:          'bg-pink-100 text-pink-700',
+  BINGO:         'bg-orange-100 text-orange-700',
+  RASPADINHA:    'bg-yellow-100 text-yellow-700',
+  VIRTUAL:       'bg-teal-100 text-teal-700',
+  INSTANT_GAME:  'bg-cyan-100 text-cyan-700',
+};
+
 export default function AlertsPage() {
   const router = useRouter();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Alert | null>(null);
   const [sevFilter, setSevFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('OPEN');
+  const [gameTypeFilter, setGameTypeFilter] = useState<string>('');
   const [note, setNote]         = useState('');
   const [disposition, setDisp]  = useState<AlertTriageDisposition | ''>('');
   const [observingId, setObservingId] = useState<string | null>(null);
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['alerts', statusFilter],
-    queryFn:  () => fetchAlerts(statusFilter ? { status: statusFilter, per_page: '200' } : { per_page: '200' }),
+    queryKey: ['alerts', statusFilter, gameTypeFilter],
+    queryFn:  () => fetchAlerts({
+      ...(statusFilter ? { status: statusFilter } : {}),
+      ...(gameTypeFilter ? { game_type: gameTypeFilter } : {}),
+      per_page: '200',
+    }),
   });
   const allAlerts = data?.items ?? [];
 
@@ -298,6 +329,17 @@ export default function AlertsPage() {
             <option value="IN_REVIEW">Em revisão</option>
             <option value="">Todos os status</option>
             <option value="CLOSED">Fechados</option>
+          </select>
+          <select
+            aria-label="Filtrar por vertical"
+            value={gameTypeFilter}
+            onChange={(e) => setGameTypeFilter(e.target.value)}
+            className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-sm"
+          >
+            <option value="">Todas as Verticais</option>
+            {Object.entries(VERTICAL_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>{v}</option>
+            ))}
           </select>
           <button
             onClick={() => refetch()}

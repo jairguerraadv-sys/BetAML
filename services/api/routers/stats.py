@@ -20,7 +20,7 @@ from auth import AppRole, get_current_user, get_effective_roles, require_roles, 
 from database import get_db
 from models import (
     Alert, Case, CaseEvent, FeatureSnapshot, IngestError, IngestJob,
-    ModelInferenceLog, Player, ReportPackage, RuleDefinition, User,
+    ModelInferenceLog, Player, ReportPackage, RuleDefinition, Tenant, User,
 )
 
 router = APIRouter(prefix="/stats", tags=["stats"])
@@ -263,6 +263,11 @@ async def dashboard_stats(
     payload["dismissed_7d"] = dismissed_7d
     payload["my_cases_near_sla"] = my_cases_near_sla
     payload["high_fp_rules"] = high_fp_rules
+    tenant_row = (await db.execute(
+        select(Tenant.name, Tenant.slug).where(Tenant.id == tid)
+    )).first()
+    payload["tenant_name"] = tenant_row[0] if tenant_row else None
+    payload["tenant_slug"] = tenant_row[1] if tenant_row else None
     return payload
 
 

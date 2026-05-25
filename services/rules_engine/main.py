@@ -62,25 +62,42 @@ _healthy = False
 
 
 class _HealthHandler(BaseHTTPRequestHandler):
-    """Minimal HTTP handler para /health/live e /health/ready."""
+    """Minimal HTTP handler para /health/live, /health/ready e /rules/*."""
+
+    def _send_json(self, status: int, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self):  # noqa: N802
         if self.path == "/health/live":
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b'{"status":"live"}')
+            self._send_json(200, b'{"status":"live"}')
         elif self.path == "/health/ready":
             if _healthy:
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b'{"status":"ready"}')
+                self._send_json(200, b'{"status":"ready"}')
             else:
-                self.send_response(503)
-                self.end_headers()
-                self.wfile.write(b'{"status":"starting"}')
+                self._send_json(503, b'{"status":"starting"}')
+        elif self.path == "/rules/cache-status":
+            import json as _json
+            now = time.time()
+            oldest = min(_rule_cache_ts.values(), default=0.0)
+            self._send_json(200, _json.dumps({
+                "cached_tenants": len([k for k in _rule_cache_ts if ":" not in k]),
+                "total_cache_keys": len(_rule_cache_ts),
+                "oldest_entry_age_seconds": round(now - oldest, 1) if oldest else None,
+                "cache_ttl_seconds": RULE_CACHE_TTL,
+            }).encode())
         else:
-            self.send_response(404)
-            self.end_headers()
+            self._send_json(404, b'{"detail":"not found"}')
+
+    def do_POST(self):  # noqa: N802
+        if self.path == "/rules/reload":
+            _rule_cache.clear()
+            _rule_cache_ts.clear()
+            self._send_json(200, b'{"flushed":true,"message":"rule cache cleared; next evaluation will reload from DB"}')
+        else:
+            self._send_json(404, b'{"detail":"not found"}')
 
     def log_message(self, format, *args):  # noqa: A002
         pass

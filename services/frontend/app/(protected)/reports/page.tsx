@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import {
   api,
@@ -8,6 +8,9 @@ import {
   fetchReportFilingHotlist,
   fetchReportFilingOverview,
   fetchReportFilingQueue,
+  downloadReportPackage,
+  exportReportPackageHtml,
+  submitReportPackageFiling,
   type MonthlyReport,
 } from '@/lib/api';
 import {
@@ -60,6 +63,7 @@ function fmt(d: Date) {
 export default function ReportsPage() {
   const today = new Date();
   const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const qc = useQueryClient();
 
   const [dateFrom, setDateFrom] = useState(() => fmt(firstOfMonth));
   const [dateTo,   setDateTo]   = useState(() => fmt(today));
@@ -67,6 +71,41 @@ export default function ReportsPage() {
   const [genMonth, setGenMonth] = useState(() => String(today.getMonth() + 1));
   const [genMsg,   setGenMsg]   = useState('');
   const [filingLimit, setFilingLimit] = useState(20);
+  const [submittingId, setSubmittingId] = useState<string | null>(null);
+  const [submitMsg,    setSubmitMsg]    = useState<Record<string, string>>({});
+
+  function triggerBlobDownload(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleDownload(rpId: string) {
+    const blob = await downloadReportPackage(rpId);
+    triggerBlobDownload(blob, `report_package_${rpId}.json`);
+  }
+
+  async function handleExport(rpId: string) {
+    const blob = await exportReportPackageHtml(rpId);
+    triggerBlobDownload(blob, `report_package_${rpId}.html`);
+  }
+
+  async function handleSubmit(rpId: string) {
+    setSubmittingId(rpId);
+    try {
+      const res = await submitReportPackageFiling(rpId);
+      setSubmitMsg((prev) => ({ ...prev, [rpId]: res.message }));
+      qc.invalidateQueries({ queryKey: ['report-filing-queue'] });
+      qc.invalidateQueries({ queryKey: ['report-filing-overview'] });
+    } catch {
+      setSubmitMsg((prev) => ({ ...prev, [rpId]: 'Erro ao submeter. Verifique a decisão do pacote.' }));
+    } finally {
+      setSubmittingId(null);
+    }
+  }
 
   const {
     data: report,
@@ -233,7 +272,7 @@ export default function ReportsPage() {
                   <th className="px-3 py-2 font-semibold">Decisão</th>
                   <th className="px-3 py-2 font-semibold">Status</th>
                   <th className="px-3 py-2 font-semibold">Prazo</th>
-                  <th className="px-3 py-2 text-right font-semibold">Ação</th>
+                  <th className="px-3 py-2 text-right font-semibold">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
@@ -251,12 +290,41 @@ export default function ReportsPage() {
                       </span>
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <Link
-                        href={`/cases/${item.case_id}?tab=decision`}
-                        className="inline-flex items-center gap-1 rounded border border-gray-200 px-2 py-1 font-semibold text-gray-700 hover:bg-white"
-                      >
-                        Abrir <ExternalLink size={12} />
-                      </Link>
+                      <div className="flex items-center justify-end gap-1 flex-wrap">
+                        <button
+                          onClick={() => handleDownload(item.report_package_id)}
+                          className="inline-flex items-center gap-1 rounded border border-gray-200 px-2 py-1 text-gray-600 hover:bg-white"
+                          title="Baixar JSON"
+                        >
+                          <Download size={11} /> JSON
+                        </button>
+                        <button
+                          onClick={() => handleExport(item.report_package_id)}
+                          className="inline-flex items-center gap-1 rounded border border-gray-200 px-2 py-1 text-gray-600 hover:bg-white"
+                          title="Exportar HTML"
+                        >
+                          <Download size={11} /> HTML
+                        </button>
+                        {item.requires_submission && item.report_status !== 'FILED' && (
+                          <button
+                            onClick={() => handleSubmit(item.report_package_id)}
+                            disabled={submittingId === item.report_package_id}
+                            className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                            title="Registrar submissão COAF"
+                          >
+                            <Send size={11} /> {submittingId === item.report_package_id ? '...' : 'Submeter'}
+                          </button>
+                        )}
+                        <Link
+                          href={`/cases/${item.case_id}?tab=decision`}
+                          className="inline-flex items-center gap-1 rounded border border-gray-200 px-2 py-1 font-semibold text-gray-700 hover:bg-white"
+                        >
+                          Abrir <ExternalLink size={12} />
+                        </Link>
+                      </div>
+                      {submitMsg[item.report_package_id] && (
+                        <p className="mt-1 text-right text-[10px] text-blue-600">{submitMsg[item.report_package_id]}</p>
+                      )}
                     </td>
                   </tr>
                 ))}
