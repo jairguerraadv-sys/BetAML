@@ -22,7 +22,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from jose import JWTError, jwt
-from prometheus_client import Info
+from prometheus_client import Counter, Histogram, Info
 from pydantic import BaseModel, model_validator
 from sqlalchemy import and_, desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,6 +70,27 @@ router = APIRouter(tags=["ingest"])
 _INGEST_CONTRACT_INFO = Info(
     "betaml_ingest_contract",
     "Official ingest contract metadata for operational monitoring",
+)
+
+_INGEST_LATENCY = Histogram(
+    "betaml_ingest_latency_seconds",
+    "End-to-end ingest request latency in seconds",
+    ["tenant_id", "source_system"],
+)
+_INGEST_REJECTED = Counter(
+    "betaml_ingest_rejected_total",
+    "Total ingest requests rejected (rate limit or validation)",
+    ["tenant_id", "reason"],
+)
+_DLQ_PUBLISH = Counter(
+    "betaml_dlq_publish_total",
+    "Total DLQ publish attempts",
+    ["status"],  # success | error
+)
+_ALERT_CREATED = Counter(
+    "betaml_alert_created_total",
+    "Total alerts created by the ingest pipeline",
+    ["tenant_id"],
 )
 
 _INGEST_WS_RUNTIME: dict[str, dict[str, Any]] = {}
@@ -336,8 +357,10 @@ async def _publish_with_retries(
                             "context": context or {},
                         },
                     )
+                    _DLQ_PUBLISH.labels(status="success").inc()
                 except Exception as dlq_exc:  # noqa: BLE001
                     logger.error("ingest_dlq_publish_failed", error=str(dlq_exc), topic=topic)
+                    _DLQ_PUBLISH.labels(status="error").inc()
                 return False
             await asyncio.sleep(0.1 * attempt)
     return False
@@ -384,15 +407,38 @@ def _upload_bronze_file(*, tenant_id: str, job_id: str, file_name: str, content:
 
 
 async def _tenant_ingest_rate_limit(db: AsyncSession, tenant_id: str, default_limit: int) -> int:
+    from utils import _get_rate_redis
+
+    _rl_cache_key = f"ratelimit:tenant:{tenant_id}"
+    _rl_ttl = 300
+    try:
+        r = await _get_rate_redis()
+        if r is not None:
+            cached = await r.get(_rl_cache_key)
+            if cached is not None:
+                return int(cached)
+    except Exception:
+        pass
+
+    limit = default_limit
     try:
         scoring_stmt = select(ScoringConfig.ingest_rate_limit_tpm).where(
             ScoringConfig.tenant_id == tenant_id
         )
         scoring_limit = (await db.execute(scoring_stmt)).scalar_one_or_none()
         if scoring_limit is not None:
-            return max(1, int(cast(Any, scoring_limit)))
+            limit = max(1, int(cast(Any, scoring_limit)))
     except Exception:
         pass
+    else:
+        if limit != default_limit:
+            try:
+                r = await _get_rate_redis()
+                if r is not None:
+                    await r.set(_rl_cache_key, str(limit), ex=_rl_ttl)
+            except Exception:
+                pass
+            return limit
 
     # Compatibility: support both schemas below.
     # New schema: tenant_id + flag_name + flag_value
@@ -405,24 +451,31 @@ async def _tenant_ingest_rate_limit(db: AsyncSession, tenant_id: str, default_li
             )
             row = (await db.execute(stmt)).scalar_one_or_none()
             if not row:
-                return default_limit
-            return max(1, int(cast(Any, row.flag_value)))
+                limit = default_limit
+            else:
+                limit = max(1, int(cast(Any, row.flag_value)))
 
-        if all(hasattr(SystemFlag, attr) for attr in ("key", "value")):
+        elif all(hasattr(SystemFlag, attr) for attr in ("key", "value")):
             tenant_scoped_key = f"{tenant_id}:ingest_rate_limit_per_min"
             stmt = select(SystemFlag).where(SystemFlag.key == tenant_scoped_key)
             row = (await db.execute(stmt)).scalar_one_or_none()
             if row:
-                return max(1, int(cast(Any, row.value)))
-
-            # Backward compatibility with old global key (non-tenant scoped)
-            global_stmt = select(SystemFlag).where(SystemFlag.key == "ingest_rate_limit_per_min")
-            global_row = (await db.execute(global_stmt)).scalar_one_or_none()
-            if global_row:
-                return max(1, int(cast(Any, global_row.value)))
-            return default_limit
+                limit = max(1, int(cast(Any, row.value)))
+            else:
+                global_stmt = select(SystemFlag).where(SystemFlag.key == "ingest_rate_limit_per_min")
+                global_row = (await db.execute(global_stmt)).scalar_one_or_none()
+                if global_row:
+                    limit = max(1, int(cast(Any, global_row.value)))
     except Exception:
-        return default_limit
+        limit = default_limit
+
+    try:
+        r = await _get_rate_redis()
+        if r is not None:
+            await r.set(_rl_cache_key, str(limit), ex=_rl_ttl)
+    except Exception:
+        pass
+    return limit
 
     return default_limit
 

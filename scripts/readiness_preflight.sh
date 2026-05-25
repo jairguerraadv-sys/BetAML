@@ -300,6 +300,39 @@ if [[ "$REQUIRE_REAL_PROVIDER" -eq 1 ]]; then
   fi
 fi
 
+# ── Data Readiness ─────────────────────────────────────────────────────────────
+section "Data Readiness"
+if [[ "$SKIP_HTTP" -eq 0 ]]; then
+  DB_HOST="${DB_HOST:-localhost}"
+  DB_PORT="${DB_PORT:-5432}"
+  DB_NAME="${DB_NAME:-betaml}"
+  DB_USER="${DB_USER:-betaml}"
+  if command -v psql &>/dev/null && [[ -n "${DB_PASSWORD:-}" || -n "${PGPASSWORD:-}" ]]; then
+    export PGPASSWORD="${DB_PASSWORD:-${PGPASSWORD:-}}"
+    _psql() { psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "$1" 2>/dev/null || echo "0"; }
+    tenants_count=$(_psql "SELECT COUNT(*) FROM tenants WHERE active = true")
+    if [[ "${tenants_count:-0}" -ge 1 ]]; then
+      pass "tenants ativos: $tenants_count"
+    else
+      fail "nenhum tenant ativo encontrado no banco de dados"
+    fi
+    users_count=$(_psql "SELECT COUNT(*) FROM users WHERE active = true")
+    if [[ "${users_count:-0}" -ge 1 ]]; then
+      pass "usuários ativos: $users_count"
+    else
+      fail "nenhum usuário ativo encontrado no banco de dados"
+    fi
+    rules_count=$(_psql "SELECT COUNT(*) FROM rules WHERE active = true")
+    if [[ "${rules_count:-0}" -ge 1 ]]; then
+      pass "regras ativas: $rules_count"
+    else
+      fail "nenhuma regra ativa encontrada — pipeline de alertas pode estar inoperante"
+    fi
+  else
+    printf '[WARN] psql não disponível ou DB_PASSWORD não definido — pulando verificação de dados\n'
+  fi
+fi
+
 section "Resumo"
 if [[ "$FAILURES" -eq 0 ]]; then
   echo "readiness_preflight=PASS"

@@ -1178,6 +1178,9 @@ async def generate_report_package(
         logger.warning("pdf_generation_failed", error=str(pdf_exc))
 
     rp.payload = payload
+    rp.integrity_hash = hashlib.sha256(  # type: ignore[assignment]
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
 
     db.add(CaseEvent(
         case_id=case_id, tenant_id=current_user.tenant_id,

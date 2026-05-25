@@ -1297,6 +1297,8 @@ async def process_bet(msg_value: dict, redis_client, ch_client, producer):
     if not tenant_id or not player_id:
         return
 
+    _ingest_mode = (msg_value.get("ingest_metadata") or {}).get("ingest_mode") or msg_value.get("ingest_mode") or "incremental"
+
     try:
         placed_at = _to_naive_utc_datetime(payload.get("placed_at", _iso_now()))
     except Exception:
@@ -1314,7 +1316,10 @@ async def process_bet(msg_value: dict, redis_client, ch_client, producer):
     bet_key = redis_client.bet_window_key(tenant_id, player_id)
     await _zadd_entry(redis_client, bet_key, placed_at, entry)
 
-    await compute_features(tenant_id, player_id, redis_client, ch_client)
+    if _ingest_mode != "backfill":
+        await compute_features(tenant_id, player_id, redis_client, ch_client)
+    else:
+        logger.debug("backfill_bet_features_skipped", tenant_id=tenant_id, player_id=player_id)
 
     try:
         await asyncio.to_thread(_ch_insert_bet, ch_client, msg_value, payload)

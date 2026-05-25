@@ -598,6 +598,7 @@ class ScoreResponse(BaseModel):
     is_anomaly: bool
     top_drivers: list[str]
     model_id: str | None = None
+    model_variant: str = "champion"
     scored_at: str
 
     model_config = {"protected_namespaces": ()}
@@ -706,6 +707,7 @@ def score(req: ScoreRequest, x_request_id: str | None = Header(None, alias="X-Re
         is_anomaly=is_anomaly,
         top_drivers=top_drivers,
         model_id=entry.get("model_id"),
+        model_variant=chosen_variant,
         scored_at=_utcnow().isoformat(),
     )
 
@@ -870,6 +872,7 @@ class SHAPResponse(BaseModel):
     shap_values:  dict[str, float]
     baseline:     float
     scored_at:    str
+    explanation_method_actual: str = "permutation"
 
     model_config = {"protected_namespaces": ()}
 
@@ -895,6 +898,7 @@ def score_shap(req: SHAPRequest):
 
     base_score = _score_vec(X)
     shap_vals: dict[str, float] = {}
+    explanation_method_actual = "permutation"
 
     try:
         import shap  # type: ignore
@@ -902,8 +906,10 @@ def score_shap(req: SHAPRequest):
         shap_array  = explainer.shap_values(X)
         for i, col in enumerate(fc):
             shap_vals[col] = float(shap_array[0][i])
+        explanation_method_actual = "shap"
     except Exception:
         # Permutation-based fallback
+        logger.warning("shap_fallback", tenant_id=req.tenant_id, reason="shap_unavailable_or_failed")
         for i, col in enumerate(fc):
             x_perm = X.copy()
             x_perm[i] = 0.0          # zero-out feature
@@ -917,6 +923,7 @@ def score_shap(req: SHAPRequest):
         shap_values=shap_vals,
         baseline=round(base_score, 4),
         scored_at=_utcnow().isoformat(),
+        explanation_method_actual=explanation_method_actual,
     )
 
 

@@ -30,6 +30,7 @@ groups:
         annotations:
           summary: "SLO de disponibilidade em risco (warning)"
           description: "Disponibilidade API em 5m abaixo de 99.5% (valor atual: {{ $value | humanizePercentage }})."
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/slo-availability.md"
 
       - alert: SLOAvailabilityBurnCritical
         expr: api:availability:ratio5m < 0.99
@@ -40,6 +41,7 @@ groups:
         annotations:
           summary: "SLO de disponibilidade violado (critical)"
           description: "Disponibilidade API em 5m abaixo de 99.0% (valor atual: {{ $value | humanizePercentage }})."
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/slo-availability.md"
 
       - alert: SLOLatencyP95Violation
         expr: api:latency_p95_seconds5m > 0.5
@@ -50,6 +52,7 @@ groups:
         annotations:
           summary: "SLO de latencia p95 violado"
           description: "Latencia p95 da API acima de 500ms por 10 minutos (valor atual: {{ $value | humanizeDuration }})."
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/slo-latency.md"
 
       - alert: SLOErrorRateViolation
         expr: api:error_rate:ratio5m > 0.01
@@ -60,6 +63,7 @@ groups:
         annotations:
           summary: "SLO de erro acima do limite"
           description: "Taxa de erro 5xx acima de 1% por 10 minutos (valor atual: {{ $value | humanizePercentage }})."
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/slo-error-rate.md"
 
   - name: betaml.api
     interval: 30s
@@ -72,6 +76,7 @@ groups:
         annotations:
           summary: "API p99 latency > 1s"
           description: "API p99 latency is {{ $value | humanizeDuration }} (threshold: 1s)"
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/api-high-latency.md"
 
       - alert: APIHighErrorRate
         expr: |
@@ -83,6 +88,7 @@ groups:
         annotations:
           summary: "API error rate > 5%"
           description: "API error rate is {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/api-high-error-rate.md"
 
       - alert: APIDown
         expr: up{job="betaml-api"} == 0
@@ -92,6 +98,7 @@ groups:
         annotations:
           summary: "BetAML API is down"
           description: "The BetAML API has been unreachable for more than 1 minute"
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/api-down.md"
 
   - name: betaml.kafka
     interval: 60s
@@ -108,6 +115,7 @@ groups:
         annotations:
           summary: "Kafka consumer lag > 1000 messages"
           description: "Consumer group {{ $labels.group }} on topic {{ $labels.topic }} has lag {{ $value }}"
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/kafka-consumer-lag.md"
 
       - alert: RedpandaDown
         expr: up{job="redpanda"} == 0
@@ -117,6 +125,7 @@ groups:
         annotations:
           summary: "Redpanda (Kafka) is down"
           description: "Redpanda has been unreachable for more than 2 minutes"
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/redpanda-down.md"
 
   - name: betaml.database
     interval: 60s
@@ -130,6 +139,7 @@ groups:
         annotations:
           summary: "PostgreSQL connections > 80"
           description: "PostgreSQL has {{ $value }} active connections (threshold: 80)"
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/postgres-connections.md"
 
   - name: betaml.ml
     interval: 60s
@@ -142,6 +152,7 @@ groups:
         annotations:
           summary: "ML Service is down"
           description: "ML scoring service unavailable — falling back to rules-only mode"
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/ml-service-down.md"
 
       - alert: MLScoringLatencyHigh
         expr: histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job="betaml-ml-service",handler="/score"}[5m])) > 2.0
@@ -151,6 +162,7 @@ groups:
         annotations:
           summary: "ML scoring p99 > 2s"
           description: "ML scoring p99 latency is {{ $value | humanizeDuration }}"
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/ml-scoring-latency.md"
 
       - alert: MLScoringFailuresDetected
         expr: increase(betaml_ml_scoring_failures_total[15m]) > 0
@@ -160,6 +172,7 @@ groups:
         annotations:
           summary: "Falhas de scoring ML detectadas"
           description: "Foram observadas {{ $value }} falhas de scoring ML nos últimos 15 minutos."
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/ml-scoring-failures.md"
 
   - name: betaml.business
     interval: 120s
@@ -173,6 +186,7 @@ groups:
         annotations:
           summary: "More than 100 open alerts"
           description: "There are {{ $value }} open alerts requiring analyst attention"
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/high-alert-queue.md"
 
       - alert: IngestPipelineStalled
         expr: |
@@ -183,6 +197,7 @@ groups:
         annotations:
           summary: "No events ingested in last 15 minutes"
           description: "Ingest pipeline may be stalled. Check connectors and Kafka."
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/ingest-pipeline-stalled.md"
 
       - alert: RulesEngineDown
         expr: up{job="betaml-rules-engine"} == 0
@@ -192,6 +207,7 @@ groups:
         annotations:
           summary: "Rules engine indisponível"
           description: "O exporter do rules engine não responde há mais de 2 minutos."
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/rules-engine-down.md"
 
       - alert: StreamProcessorDown
         expr: up{job="betaml-stream-processor"} == 0
@@ -201,6 +217,7 @@ groups:
         annotations:
           summary: "Stream processor indisponível"
           description: "O exporter do stream processor não responde há mais de 2 minutos."
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/stream-processor-down.md"
 
       - alert: DLQPending
         expr: sum(betaml_ingest_errors_unresolved) > 0
@@ -210,3 +227,4 @@ groups:
         annotations:
           summary: "DLQ com eventos pendentes"
           description: "Há {{ $value }} eventos pendentes na DLQ / quarentena."
+          runbook_url: "https://github.com/betaml/runbooks/blob/main/dlq-pending.md"

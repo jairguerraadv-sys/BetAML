@@ -142,13 +142,54 @@ jobs:
             STATUS=$(curl -sk -o /dev/null -w '%{http_code}' "https://${API_URL}/api/health/ready" || true)
             if [ "$STATUS" = "200" ]; then
               echo "API healthy (attempt $i)"
-              exit 0
+              break
             fi
             echo "Attempt $i: status=$STATUS, retrying..."
             sleep 5
+            if [ "$i" = "10" ]; then
+              echo "API did not become healthy" >&2
+              exit 1
+            fi
           done
-          echo "API did not become healthy" >&2
-          exit 1
+
+      - name: Smoke test — ingest endpoint
+        run: |
+          API_URL=$(kubectl get ingress "$HELM_RELEASE" -n "$K8S_NAMESPACE" \
+            -o jsonpath='{.spec.rules[0].host}')
+          STATUS=$(curl -sk -o /dev/null -w '%{http_code}' \
+            -X POST "https://${API_URL}/api/ingest/contract" || true)
+          if [ "$STATUS" = "200" ] || [ "$STATUS" = "401" ]; then
+            echo "Ingest endpoint reachable (status=$STATUS)"
+          else
+            echo "Ingest contract endpoint unexpected status=$STATUS" >&2
+            exit 1
+          fi
+
+      - name: Smoke test — alerts endpoint
+        run: |
+          API_URL=$(kubectl get ingress "$HELM_RELEASE" -n "$K8S_NAMESPACE" \
+            -o jsonpath='{.spec.rules[0].host}')
+          STATUS=$(curl -sk -o /dev/null -w '%{http_code}' \
+            "https://${API_URL}/api/alerts" || true)
+          if [ "$STATUS" = "200" ] || [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ]; then
+            echo "Alerts endpoint reachable (status=$STATUS)"
+          else
+            echo "Alerts endpoint unexpected status=$STATUS" >&2
+            exit 1
+          fi
+
+      - name: Smoke test — ML model status
+        run: |
+          API_URL=$(kubectl get ingress "$HELM_RELEASE" -n "$K8S_NAMESPACE" \
+            -o jsonpath='{.spec.rules[0].host}')
+          STATUS=$(curl -sk -o /dev/null -w '%{http_code}' \
+            "https://${API_URL}/api/models/status" || true)
+          if [ "$STATUS" = "200" ] || [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ]; then
+            echo "Models status endpoint reachable (status=$STATUS)"
+          else
+            echo "Models status endpoint unexpected status=$STATUS" >&2
+            exit 1
+          fi
 
   # ── Post-deploy notification ───────────────────────────────────────────────
   notify:

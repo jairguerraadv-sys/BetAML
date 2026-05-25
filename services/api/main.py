@@ -53,11 +53,36 @@ from models import (
 
 logger = structlog.get_logger()
 
-structlog.configure(
+import re as _re
+_CPF_RE_LOG = _re.compile(r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b")
+_EMAIL_RE_LOG = _re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
+_PII_KEYS = frozenset({"cpf", "cpf_encrypted", "email", "full_name", "name", "phone", "password", "token", "access_token", "refresh_token"})
+
+def _redact_value(v: object) -> object:
+    if isinstance(v, str):
+        v = _CPF_RE_LOG.sub("[REDACTED_CPF]", v)
+        v = _EMAIL_RE_LOG.sub("[REDACTED_EMAIL]", v)
+        return v
+    if isinstance(v, dict):
+        return {k: ("[REDACTED]" if str(k).lower() in _PII_KEYS else _redact_value(val)) for k, val in v.items()}
+    if isinstance(v, (list, tuple)):
+        return type(v)(_redact_value(i) for i in v)
+    return v
+
+def _pii_redact_processor(logger, method, event_dict):  # noqa: ARG001
+    for key in list(event_dict.keys()):
+        if str(key).lower() in _PII_KEYS:
+            event_dict[key] = "[REDACTED]"
+        else:
+            event_dict[key] = _redact_value(event_dict[key])
+    return event_dict
+
+
     processors=[
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
+        _pii_redact_processor,
     structlog.dev.ConsoleRenderer()
     if settings.environment in {"development", "test"}
     else structlog.processors.JSONRenderer(),

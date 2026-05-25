@@ -438,11 +438,25 @@ async def erase_player_data(
         reason=reason,
     )
 
+    # Count related records for LGPD completeness audit
+    from sqlalchemy import text as _text
+    erased_from: dict[str, int] = {}
+    for table, col in [("alerts", "player_id"), ("cases", "player_id"), ("transactions", "player_id")]:
+        try:
+            row = (await db.execute(
+                _text(f"SELECT COUNT(*) FROM {table} WHERE tenant_id = :tid AND {col} = (SELECT id FROM players WHERE external_player_id = :pid AND tenant_id = :tid LIMIT 1)"),
+                {"tid": tenant_id, "pid": player_id},
+            )).scalar_one_or_none()
+            erased_from[table] = int(row or 0)
+        except Exception:
+            erased_from[table] = -1
+
     return {
         "status": "erased",
         "player_id": player_id,
         "message": "Dados pessoais anonimizados com sucesso (LGPD Art. 18)",
         "erased_at": _utcnow().isoformat(),
+        "erased_from": erased_from,
     }
 
 

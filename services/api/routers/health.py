@@ -10,10 +10,11 @@ The old GET /health in main.py is kept as a backward-compat alias to /health/liv
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import UTC, datetime
 
 import structlog
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse
 
 from config import settings
@@ -21,6 +22,15 @@ from database import AsyncSessionLocal
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["infra"])
+
+_INTERNAL_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
+
+def _check_internal_token(x_internal_token: str | None) -> None:
+    """Allow unauthenticated access only when no INTERNAL_API_TOKEN is configured (dev)."""
+    if not _INTERNAL_TOKEN:
+        return
+    if x_internal_token != _INTERNAL_TOKEN:
+        raise HTTPException(401, "X-Internal-Token inválido ou ausente")
 
 VALID_ALERT_STATUSES = (
     "OPEN",
@@ -211,12 +221,13 @@ async def _run_health_checks() -> dict[str, str]:
 
 
 @router.get("/health/live", include_in_schema=False)
-async def health_live():
+async def health_live(x_internal_token: str | None = Header(default=None)):
+    _check_internal_token(x_internal_token)
     return {"status": "live"}
 
 
 @router.get("/health/ready", tags=["infra"])
-async def health_ready():
+async def health_ready(x_internal_token: str | None = Header(default=None)):
     """Aggregate readiness probe that checks all critical dependencies."""
     checks = await _run_health_checks()
     readiness_values = {
