@@ -31,3 +31,10 @@ frontend_url=http://localhost:3000
 
 == Migracoes SQL ==
 NOTICE:  relation "schema_migrations" already exists, skipping
+[PASS] dry-run das migracoes legadas validado
+
+== Backup ==
+[PASS] configuracao de backup Helm presente e habilitada
+
+== Resumo ==
+readiness_preflight=PASS

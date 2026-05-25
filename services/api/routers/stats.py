@@ -700,9 +700,20 @@ async def data_quality(
     if any(a["severity"] == "HIGH" for a in null_ratio_alerts):
         status = "CRITICAL"
 
+    release_cutoff_reasons: list[str] = []
+    if null_ratio_alerts:
+        release_cutoff_reasons.append("feature_null_ratio_alerts")
+    if high_error_job_list:
+        release_cutoff_reasons.append("ingest_high_error_jobs")
+    if any(item.get("stale") for item in data_freshness):
+        release_cutoff_reasons.append("stale_data_sources")
+    release_cutoff_blocked = len(release_cutoff_reasons) > 0
+
     return {
         "generated_at": now,
         "overall_status": status,
+        "release_cutoff_blocked": release_cutoff_blocked,
+        "release_cutoff_reasons": release_cutoff_reasons,
         "feature_quality": {
             "snapshots_evaluated_7d": total_snapshots_7d,
             "features_with_null_alerts": len(null_ratio_alerts),
