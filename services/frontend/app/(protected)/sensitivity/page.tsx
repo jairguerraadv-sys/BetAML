@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import {
   SlidersHorizontal, Save, RefreshCw, HelpCircle, ChevronRight,
-  AlertTriangle, Shield, Clock,
+  Shield, Clock,
 } from 'lucide-react';
 import ContextualHelp from '@/components/ContextualHelp';
 
@@ -19,6 +19,10 @@ interface ScoringConfig {
   medium_threshold: number;
   high_threshold: number;
   critical_threshold: number;
+  auto_case_threshold: number;
+  risk_band_low_threshold: number;
+  risk_band_high_threshold: number;
+  income_volume_ratio_threshold: number;
   sla_low_hours: number;
   sla_medium_hours: number;
   sla_high_hours: number;
@@ -194,11 +198,11 @@ export default function SensitivityPage() {
         <div className="flex items-start gap-2">
           <HelpCircle size={16} className="mt-0.5 shrink-0 text-blue-500" />
           <div>
-            <p className="font-semibold">Como interpretar os limiares</p>
+            <p className="font-semibold">Como interpretar os ajustes</p>
             <p className="mt-1 text-blue-800">
-              O sistema calcula um <strong>score de 0 a 100</strong> para cada apostador combinando regras,
-              ML e análise de rede. Alertas são gerados quando o score supera o limiar da faixa correspondente.
-              Limiares menores → mais alertas (maior recall). Limiares maiores → menos alertas (maior precisão).
+              O sistema combina condições de risco, comportamento fora do padrão e vínculos entre apostadores.
+              Valores menores deixam a plataforma mais rigorosa e geram mais alertas. Valores maiores deixam a
+              plataforma mais seletiva e reduzem volume.
             </p>
           </div>
         </div>
@@ -226,13 +230,13 @@ export default function SensitivityPage() {
         <div className="space-y-5">
           <WeightSlider
             label="Condições de risco cadastradas"
-            desc="Quanto as regras de PLD definidas pelo seu time pesam. Mais alto = condições cadastradas têm mais influência no score."
+            desc="Quanto as condições definidas pelo time de PLD pesam. Mais alto = condições cadastradas têm mais influência."
             value={form.rule_weight ?? 0.4}
             onChange={update('rule_weight')}
           />
           <WeightSlider
-            label="Análise de comportamento (IA)"
-            desc="Quanto os desvios do padrão histórico do apostador pesam. Mais alto = comportamento incomum tem mais influência."
+            label="Comportamento fora do padrão"
+            desc="Quanto desvios do histórico do apostador pesam. Mais alto = comportamento incomum gera mais atenção."
             value={form.ml_weight ?? 0.4}
             onChange={update('ml_weight')}
           />
@@ -254,7 +258,7 @@ export default function SensitivityPage() {
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <h2 className="mb-1 text-base font-bold text-gray-800">Faixas de risco
           <ContextualHelp title="O que são as faixas de risco?" side="right">
-            <p className="mb-1">Definem a partir de qual pontuação (0–100) um alerta é classificado em cada categoria:</p>
+            <p className="mb-1">Definem quando uma situação entra em cada prioridade de trabalho:</p>
             <ul className="space-y-1 pl-2">
               <li>• <strong>Abaixar</strong> o valor → mais alertas gerados (sistema mais rigoroso)</li>
               <li>• <strong>Elevar</strong> o valor → menos alertas (sistema mais seletivo)</li>
@@ -268,7 +272,7 @@ export default function SensitivityPage() {
         <div className="space-y-5">
           <ThresholdSlider
             label="Risco Baixo — a partir de"
-            desc="Pontuação mínima para gerar um alerta de baixa prioridade. Sugerido: 30–40."
+            desc="Sensibilidade mínima para gerar um alerta de baixa prioridade. Sugerido: 30-40."
             value={form.low_threshold ?? 30}
             min={10} max={(form.medium_threshold ?? 60) - 1}
             onChange={update('low_threshold')}
@@ -276,7 +280,7 @@ export default function SensitivityPage() {
           />
           <ThresholdSlider
             label="Risco Médio — a partir de"
-            desc="Pontuação mínima para classificar o alerta como prioridade média (amarelo). Sugerido: 55–65."
+            desc="Sensibilidade mínima para classificar o alerta como prioridade média. Sugerido: 55-65."
             value={form.medium_threshold ?? 60}
             min={(form.low_threshold ?? 30) + 1}
             max={(form.high_threshold ?? 80) - 1}
@@ -285,7 +289,7 @@ export default function SensitivityPage() {
           />
           <ThresholdSlider
             label="Risco Alto — a partir de"
-            desc="Pontuação mínima para alto risco. Casos podem ser abertos automaticamente acima deste valor. Sugerido: 75–85."
+            desc="Sensibilidade mínima para alto risco. Casos podem ser abertos automaticamente acima deste valor. Sugerido: 75-85."
             value={form.high_threshold ?? 80}
             min={(form.medium_threshold ?? 60) + 1}
             max={(form.critical_threshold ?? 95) - 1}
@@ -294,13 +298,77 @@ export default function SensitivityPage() {
           />
           <ThresholdSlider
             label="Risco Crítico — a partir de"
-            desc="Pontuação mínima para alertas críticos. SLA reduzido e escalonamento obrigatório. Sugerido: 90–95."
+            desc="Sensibilidade mínima para alertas críticos. SLA reduzido e escalonamento obrigatório. Sugerido: 90-95."
             value={form.critical_threshold ?? 95}
             min={(form.high_threshold ?? 80) + 1}
             max={99}
             onChange={update('critical_threshold')}
             colorClass="bg-red-100 text-red-700"
           />
+        </div>
+      </section>
+
+      {/* Política operacional */}
+      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <h2 className="mb-1 flex items-center gap-2 text-base font-bold text-gray-800">
+          <Shield size={16} /> Política de PLD
+        </h2>
+        <p className="mb-4 text-xs text-gray-500">
+          Defina quando o sistema abre casos automaticamente e como consolida a banda de risco do apostador.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="rounded-lg border border-gray-200 p-3">
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500">Abrir caso automaticamente acima de</label>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={form.auto_case_threshold ?? 0.75}
+              onChange={(e) => update('auto_case_threshold')(Number(e.target.value))}
+              className="mt-1 w-full rounded border border-gray-200 px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand"
+            />
+            <span className="text-[10px] text-gray-400">0 = mais flexível, 1 = mais rigoroso</span>
+          </div>
+          <div className="rounded-lg border border-gray-200 p-3">
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500">Renda x volume</label>
+            <input
+              type="number"
+              min={0.1}
+              max={20}
+              step={0.1}
+              value={form.income_volume_ratio_threshold ?? 1.5}
+              onChange={(e) => update('income_volume_ratio_threshold')(Number(e.target.value))}
+              className="mt-1 w-full rounded border border-gray-200 px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand"
+            />
+            <span className="text-[10px] text-gray-400">múltiplo da renda mensal declarada</span>
+          </div>
+          <div className="rounded-lg border border-gray-200 p-3">
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500">Cliente em risco médio a partir de</label>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={form.risk_band_low_threshold ?? 0.35}
+              onChange={(e) => update('risk_band_low_threshold')(Number(e.target.value))}
+              className="mt-1 w-full rounded border border-gray-200 px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand"
+            />
+            <span className="text-[10px] text-gray-400">classificação persistida no cadastro</span>
+          </div>
+          <div className="rounded-lg border border-gray-200 p-3">
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500">Cliente em alto risco a partir de</label>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={form.risk_band_high_threshold ?? 0.7}
+              onChange={(e) => update('risk_band_high_threshold')(Number(e.target.value))}
+              className="mt-1 w-full rounded border border-gray-200 px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand"
+            />
+            <span className="text-[10px] text-gray-400">classificação persistida no cadastro</span>
+          </div>
         </div>
       </section>
 

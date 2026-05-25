@@ -17,6 +17,13 @@ import {
   triageAlert,
   type AlertTriageDisposition,
 } from '@/lib/api';
+import {
+  alertReasonBullets,
+  formatIndicatorValue,
+  humanAlertType,
+  humanEvidenceName,
+  humanFeatureName,
+} from '@/lib/pld-language';
 
 const SEV_BADGE: Record<string, string> = {
   CRITICAL: 'bg-red-100 text-red-700 border border-red-200',
@@ -29,6 +36,19 @@ const STATUS_BADGE: Record<string, string> = {
   OPEN:      'bg-blue-100 text-blue-700',
   IN_REVIEW: 'bg-purple-100 text-purple-700',
   CLOSED:    'bg-gray-100 text-gray-500',
+};
+
+const SEV_PT: Record<string, string> = {
+  CRITICAL: 'Crítico',
+  HIGH: 'Alto',
+  MEDIUM: 'Médio',
+  LOW: 'Baixo',
+};
+
+const STATUS_PT: Record<string, string> = {
+  OPEN: 'Aguardando análise',
+  IN_REVIEW: 'Em revisão',
+  CLOSED: 'Fechado',
 };
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -153,10 +173,10 @@ export default function AlertDetailPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <span className={`rounded-full px-3 py-1 text-xs font-semibold ${SEV_BADGE[alert.severity] ?? 'bg-gray-100'}`}>
-            {alert.severity}
+            {SEV_PT[alert.severity] ?? alert.severity}
           </span>
           <span className={`rounded-full px-3 py-1 text-xs font-semibold ${STATUS_BADGE[alert.status] ?? 'bg-gray-100'}`}>
-            {alert.status}
+            {STATUS_PT[alert.status] ?? alert.status}
           </span>
           <a
             href={`/investigate/${alert.id}`}
@@ -167,19 +187,32 @@ export default function AlertDetailPage() {
         </div>
       </div>
 
+      <Section title="Por que estou vendo isso?">
+        <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
+          <ul className="space-y-2 text-sm text-blue-950">
+            {alertReasonBullets(alert).map((reason) => (
+              <li key={reason} className="flex items-start gap-2">
+                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />
+                <span>{reason}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </Section>
+
       {/* Metadados */}
-      <Section title="Informações do Alerta">
+      <Section title="Resumo para triagem">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <KV label="Tipo de alerta" value={alert.alert_type} />
+          <KV label="Tipo de situação" value={humanAlertType(alert.alert_type)} />
           <KV label="Criado em" value={new Date(alert.created_at).toLocaleString('pt-BR')} />
           <KV label="Cliente" value={
             alert.player_id
               ? <a href={`/players/${alert.player_id}`} className="text-brand hover:underline font-mono text-xs">{alert.player_id.slice(0, 8)}…</a>
               : null
           } />
-          <KV label="Regra disparada" value={alert.rule_id ? <span className="font-mono text-xs">{alert.rule_id.slice(0, 8)}…</span> : null} />
-          <KV label="Pontuação de risco" value={alert.anomaly_score != null ? `${(alert.anomaly_score * 100).toFixed(1)}%` : null} />
-          <KV label="Pontuação composta" value={alert.composite_score != null ? `${(alert.composite_score * 100).toFixed(1)}%` : null} />
+          <KV label="Condição que disparou" value={alert.rule_id ? <span className="font-mono text-xs">{alert.rule_id.slice(0, 8)}...</span> : null} />
+          <KV label="Intensidade do sinal" value={alert.anomaly_score != null ? `${(alert.anomaly_score * 100).toFixed(1)}%` : null} />
+          <KV label="Risco consolidado" value={alert.composite_score != null ? `${(alert.composite_score * 100).toFixed(1)}%` : null} />
           {alert.case_id && (
             <KV label="Caso vinculado" value={
               <a href={`/cases/${alert.case_id}`} className="text-brand hover:underline font-mono text-xs">
@@ -190,7 +223,7 @@ export default function AlertDetailPage() {
           {alert.triaged_at && (
             <KV label="Triado em" value={new Date(alert.triaged_at).toLocaleString('pt-BR')} />
           )}
-          {alert.label && <KV label="Label" value={alert.label} />}
+          {alert.label && <KV label="Qualidade marcada" value={alert.label} />}
         </div>
         {alert.description && (
           <p className="mt-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-600">{alert.description}</p>
@@ -198,14 +231,14 @@ export default function AlertDetailPage() {
       </Section>
 
       {/* Evidências */}
-      <Section title="Evidências">
+      <Section title="Evidências principais">
         {alert.evidence && Object.keys(alert.evidence).length > 0 ? (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             {Object.entries(alert.evidence).map(([k, v]) => (
               <div key={k} className="rounded-lg bg-gray-50 p-3">
-                <div className="mb-0.5 text-xs font-medium text-gray-400">{k}</div>
+                <div className="mb-0.5 text-xs font-medium text-gray-400">{humanEvidenceName(k)}</div>
                 <div className="text-sm font-semibold text-gray-800 break-all">
-                  {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                  {typeof v === 'object' ? 'ver detalhes técnicos abaixo' : formatIndicatorValue(k, v)}
                 </div>
               </div>
             ))}
@@ -300,19 +333,19 @@ export default function AlertDetailPage() {
       )}
 
       {explainability && explainability.top_features.length > 0 && (
-        <Section title="Explicabilidade ML">
+        <Section title="Principais sinais considerados pelo sistema">
           <div className="mb-4 grid gap-3 sm:grid-cols-3">
             <div className="rounded-lg bg-gray-50 p-3">
-              <div className="text-xs text-gray-400">Modelo</div>
+              <div className="text-xs text-gray-400">Analisador automático</div>
               <div className="text-sm font-semibold text-gray-800">{explainability.model_id?.slice(0, 8) ?? '—'}</div>
             </div>
             <div className="rounded-lg bg-gray-50 p-3">
-              <div className="text-xs text-gray-400">Método</div>
+              <div className="text-xs text-gray-400">Tipo de explicação</div>
               <div className="text-sm font-semibold text-gray-800">{explainability.explanation_method}</div>
             </div>
             <div className="rounded-lg bg-gray-50 p-3">
-              <div className="text-xs text-gray-400">Anomaly score</div>
-              <div className="text-sm font-semibold text-gray-800">{explainability.anomaly_score.toFixed(4)}</div>
+              <div className="text-xs text-gray-400">Intensidade do sinal</div>
+              <div className="text-sm font-semibold text-gray-800">{(explainability.anomaly_score * 100).toFixed(0)}%</div>
             </div>
           </div>
 
@@ -324,15 +357,15 @@ export default function AlertDetailPage() {
                 <div key={item.feature} className="rounded-lg border border-gray-100 p-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <div className="text-sm font-semibold text-gray-900">{item.feature}</div>
+                      <div className="text-sm font-semibold text-gray-900">{humanFeatureName(item.feature)}</div>
                       <div className="text-xs text-gray-500">
-                        valor atual: {String(item.current_value ?? '—')}
-                        {item.baseline_value !== null && item.baseline_value !== undefined && ` · baseline: ${item.baseline_value}`}
-                        {item.delta !== null && item.delta !== undefined && ` · delta: ${item.delta}`}
+                        valor atual: {formatIndicatorValue(item.feature, item.current_value)}
+                        {item.baseline_value !== null && item.baseline_value !== undefined && ` · padrão usual: ${formatIndicatorValue(item.feature, item.baseline_value)}`}
+                        {item.delta !== null && item.delta !== undefined && ` · diferença: ${formatIndicatorValue(item.feature, item.delta)}`}
                       </div>
                     </div>
                     <div className={`text-sm font-semibold ${positive ? 'text-red-600' : 'text-green-600'}`}>
-                      contribuição {item.contribution.toFixed(4)}
+                      influência {(Math.abs(item.contribution) * 100).toFixed(0)}%
                     </div>
                   </div>
                   <div className="mt-2 h-2 rounded-full bg-gray-100">
@@ -355,7 +388,7 @@ export default function AlertDetailPage() {
             onClick={() => setShowTriage(true)}
             className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand/90"
           >
-            Triagem
+            Registrar avaliação
           </button>
         )}
         {alert.status !== 'CLOSED' && (
@@ -367,7 +400,7 @@ export default function AlertDetailPage() {
             disabled={close.isPending}
             className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
-            {close.isPending ? 'Fechando...' : 'Fechar Alerta'}
+            {close.isPending ? 'Fechando...' : 'Descartar alerta'}
           </button>
         )}
         {!alert.case_id && (
@@ -375,7 +408,7 @@ export default function AlertDetailPage() {
             onClick={() => setShowLink(true)}
             className="rounded-lg border border-brand px-4 py-2 text-sm font-semibold text-brand hover:bg-brand/5"
           >
-            Vincular a Caso
+            Vincular a caso existente
           </button>
         )}
         {alert.case_id && (
@@ -389,7 +422,7 @@ export default function AlertDetailPage() {
         )}
       </div>
 
-      <Section title="Marcar qualidade para treinamento do modelo">
+      <Section title="Marcar qualidade para melhorar o sistema">
         <div className="grid gap-3 md:grid-cols-[220px_1fr_auto]">
           <select
             value={labelValue}
@@ -403,7 +436,7 @@ export default function AlertDetailPage() {
           <input
             value={labelNote}
             onChange={(e) => setLabelNote(e.target.value)}
-            placeholder="Nota opcional para feedback do modelo"
+            placeholder="Nota opcional para calibrar futuras detecções"
             className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
           />
           <button
@@ -411,7 +444,7 @@ export default function AlertDetailPage() {
             disabled={label.isPending}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
           >
-            {label.isPending ? 'Aplicando...' : 'Aplicar Label'}
+            {label.isPending ? 'Salvando...' : 'Salvar qualidade'}
           </button>
         </div>
         {label.isSuccess && (
@@ -426,7 +459,7 @@ export default function AlertDetailPage() {
       {showTriage && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-            <h2 className="mb-4 text-lg font-semibold">Triagem do Alerta</h2>
+            <h2 className="mb-4 text-lg font-semibold">Registrar avaliação do alerta</h2>
 
             <label className="mb-1 block text-sm font-medium">Disposição</label>
             <select
@@ -436,9 +469,9 @@ export default function AlertDetailPage() {
               className="mb-3 w-full rounded-lg border px-3 py-2 text-sm"
             >
               <option value="">Selecione...</option>
-              <option value="FALSE_POSITIVE">False Positive</option>
-              <option value="CONFIRMED">Confirmado</option>
-              <option value="IN_REVIEW">Em Análise</option>
+              <option value="FALSE_POSITIVE">Falso positivo (descartar)</option>
+              <option value="CONFIRMED">Confirmado como risco real</option>
+              <option value="IN_REVIEW">Em análise (manter em aberto)</option>
             </select>
 
             <label className="mb-1 block text-sm font-medium">Observação</label>
@@ -448,7 +481,7 @@ export default function AlertDetailPage() {
               value={note}
               onChange={(e) => setNote(e.target.value)}
               className="mb-4 w-full rounded-lg border px-3 py-2 text-sm"
-              placeholder="Justificativa..."
+              placeholder="Descreva sua análise de forma breve..."
             />
             <div className="flex gap-3">
               <button
@@ -457,7 +490,7 @@ export default function AlertDetailPage() {
                 aria-label="Confirmar triagem"
                 className="flex-1 rounded-lg bg-brand py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
-                {triage.isPending ? 'Salvando...' : 'Confirmar Triagem'}
+                {triage.isPending ? 'Salvando...' : 'Confirmar avaliação'}
               </button>
               <button onClick={() => setShowTriage(false)} className="flex-1 rounded-lg border py-2 text-sm">
                 Cancelar

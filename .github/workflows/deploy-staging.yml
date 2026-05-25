@@ -99,7 +99,7 @@ jobs:
       - name: Configure kubeconfig
         run: |
           mkdir -p "$HOME/.kube"
-          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > "$HOME/.kube/config"
+          echo "${{ secrets['KUBE_CONFIG_STAGING'] }}" | base64 -d > "$HOME/.kube/config"
           chmod 600 "$HOME/.kube/config"
 
       - name: Install Helm
@@ -161,7 +161,7 @@ jobs:
       - name: Notify Slack
         if: env.SLACK_WEBHOOK_URL != ''
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets['SLACK_WEBHOOK_URL'] }}
         run: |
           STATUS="${{ needs.deploy-staging.result }}"
           EMOJI="✅"

@@ -32,13 +32,13 @@ const MAIN_NAV = [
 
 // ── Configurações avançadas — visíveis só para senior/admin ──────────────────
 const ADV_NAV = [
-  { href: '/rules/builder',  label: 'Construtor de Regras',   icon: Wand2 },
+  { href: '/rules/builder',  label: 'Construtor Visual',      icon: Wand2 },
   { href: '/rules',          label: 'Condições de Risco',     icon: BookOpen },
-  { href: '/rules/compound', label: 'Regras Compostas',       icon: GitBranch },
+  { href: '/rules/compound', label: 'Condições Combinadas',   icon: GitBranch },
   { href: '/players',        label: 'Perfis de Apostadores',     icon: Users },
   { href: '/player-lists',   label: 'Listas de Monitoramento',icon: List },
-  { href: '/model-registry', label: 'Modelos Analíticos',     icon: BrainCircuit },
-  { href: '/feature-store',  label: 'Diagnóstico de Apostadores', icon: Database },
+  { href: '/model-registry', label: 'Analisadores Automáticos', icon: BrainCircuit },
+  { href: '/feature-store',  label: 'Base de Indicadores', icon: Database },
   { href: '/mappings',       label: 'Integração de Dados',        icon: Plug },
   { href: '/ingest-jobs',    label: 'Envios de Dados',            icon: Activity },
   { href: '/ingest-errors',  label: 'Quarentena de Erros',    icon: AlertOctagon },

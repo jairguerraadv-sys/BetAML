@@ -564,8 +564,8 @@ class ScoringConfigOut(BaseModel):
     high_threshold: float = 80.0
     critical_threshold: float = 95.0
     is_active: bool = True
-    sla_low_hours: int = 72
-    sla_medium_hours: int = 48
+    sla_low_hours: int = 168
+    sla_medium_hours: int = 72
     sla_high_hours: int = 24
     sla_critical_hours: int = 4
     data_retention_days: int = 365 * 5
@@ -573,6 +573,9 @@ class ScoringConfigOut(BaseModel):
     data_retention_silver_years: int = 5
     data_retention_gold_years: int = 3
     auto_case_threshold: float = 0.75
+    risk_band_low_threshold: float = 0.35
+    risk_band_high_threshold: float = 0.70
+    income_volume_ratio_threshold: float = 1.50
     ingest_rate_limit_tpm: int = 1000
     ml_challenger_pct: int = 0
     updated_at: Optional[datetime] = None
@@ -597,6 +600,9 @@ class ScoringConfigUpdate(BaseModel):
     data_retention_silver_years: Optional[int] = None
     data_retention_gold_years: Optional[int] = None
     auto_case_threshold: Optional[float] = None
+    risk_band_low_threshold: Optional[float] = None
+    risk_band_high_threshold: Optional[float] = None
+    income_volume_ratio_threshold: Optional[float] = None
     ingest_rate_limit_tpm: Optional[int] = None
     ml_challenger_pct: Optional[int] = None
 
@@ -887,6 +893,7 @@ class UserOut(BaseModel):
     username: str
     email: str
     role: str
+    roles: list[str] | None = None
     active: bool
     created_at: datetime
 
@@ -896,7 +903,7 @@ class UserOut(BaseModel):
 class UserCreateIn(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     email: str = Field(..., min_length=3, max_length=254)
-    role: str = Field(..., description="One of: ADMIN, AML_ANALYST, AUDITOR")
+    role: str = Field(..., description="One of: Operador_Analista, Operador_Gestor, Operador_AdminTecnico")
     password: str = Field(..., min_length=8)
 
 
@@ -907,7 +914,7 @@ class UserUpdateIn(BaseModel):
 
 class InviteIn(BaseModel):
     email: str = Field(..., min_length=3, max_length=254)
-    role: str = Field(..., description="Role for the invited user: ADMIN, AML_ANALYST, AUDITOR")
+    role: str = Field(..., description="Role for the invited user")
 
 
 class ReprocessJobIn(BaseModel):

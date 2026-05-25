@@ -20,7 +20,7 @@ from auth import AppRole, get_current_user, get_effective_roles, require_roles, 
 from database import get_db
 from models import (
     Alert, Case, CaseEvent, FeatureSnapshot, IngestError, IngestJob,
-    ModelInferenceLog, Player, ReportPackage, RuleDefinition, User,
+    ModelInferenceLog, Player, ReportPackage, RuleDefinition, Tenant, User,
 )
 
 router = APIRouter(prefix="/stats", tags=["stats"])
@@ -263,6 +263,11 @@ async def dashboard_stats(
     payload["dismissed_7d"] = dismissed_7d
     payload["my_cases_near_sla"] = my_cases_near_sla
     payload["high_fp_rules"] = high_fp_rules
+    tenant_row = (await db.execute(
+        select(Tenant.name, Tenant.slug).where(Tenant.id == tid)
+    )).first()
+    payload["tenant_name"] = tenant_row[0] if tenant_row else None
+    payload["tenant_slug"] = tenant_row[1] if tenant_row else None
     return payload
 
 
@@ -700,9 +705,20 @@ async def data_quality(
     if any(a["severity"] == "HIGH" for a in null_ratio_alerts):
         status = "CRITICAL"
 
+    release_cutoff_reasons: list[str] = []
+    if null_ratio_alerts:
+        release_cutoff_reasons.append("feature_null_ratio_alerts")
+    if high_error_job_list:
+        release_cutoff_reasons.append("ingest_high_error_jobs")
+    if any(item.get("stale") for item in data_freshness):
+        release_cutoff_reasons.append("stale_data_sources")
+    release_cutoff_blocked = len(release_cutoff_reasons) > 0
+
     return {
         "generated_at": now,
         "overall_status": status,
+        "release_cutoff_blocked": release_cutoff_blocked,
+        "release_cutoff_reasons": release_cutoff_reasons,
         "feature_quality": {
             "snapshots_evaluated_7d": total_snapshots_7d,
             "features_with_null_alerts": len(null_ratio_alerts),

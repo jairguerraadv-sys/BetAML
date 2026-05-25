@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 
 // Sempre usa o proxy local — o servidor Next.js encaminha para a API.
 // Isso garante que localhost:8000 nunca é chamado direto do browser,
@@ -7,16 +7,26 @@ const BASE = '/api-proxy';
 
 export const api = axios.create({ baseURL: BASE });
 
+type RetriableRequestConfig = InternalAxiosRequestConfig & { _retry?: boolean };
+
 // O JWT é transportado como cookie httpOnly (setado via /api/auth/login).
 // O middleware Next.js (middleware.ts) injeta automaticamente o header
 // Authorization: Bearer <token> nas chamadas /api-proxy/*.
 // NENHUM código JS no browser tem acesso direto ao token — imune a XSS.
 
-// Redireciona para login em 401
 api.interceptors.response.use(
   (r) => r,
-  (err) => {
-    if (err?.response?.status === 401 && typeof window !== 'undefined') {
+  async (err: AxiosError) => {
+    const original = err.config as RetriableRequestConfig | undefined;
+    if (err.response?.status === 401 && original && !original._retry && typeof window !== 'undefined') {
+      original._retry = true;
+      try {
+        await refreshToken();
+        return api.request(original);
+      } catch {
+        window.location.href = '/login';
+      }
+    } else if (err.response?.status === 401 && typeof window !== 'undefined') {
       window.location.href = '/login';
     }
     return Promise.reject(err);
@@ -28,6 +38,7 @@ api.interceptors.response.use(
 /** Resposta da API route Next.js /api/auth/login (sem o token — fica no cookie). */
 export interface LoginResponse {
   role: string;
+  roles: string[];
   tenant_id: string;
 }
 
@@ -53,8 +64,12 @@ export async function logout(): Promise<void> {
 }
 
 export async function refreshToken() {
-  const { data } = await api.post('/auth/refresh');
-  return data as { access_token: string; token_type: string };
+  const res = await fetch('/api/auth/refresh', { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? 'Sessão expirada');
+  }
+  return res.json() as Promise<LoginResponse>;
 }
 
 export interface AuditLog {
@@ -151,6 +166,7 @@ export interface Alert {
   id: string; title: string; severity: string; status: string;
   player_id: string; alert_type: string; created_at: string; rule_id?: string;
   anomaly_score?: number; case_id?: string; case_reference_number?: string | null;
+  game_type?: string;
 }
 
 export interface AlertDetail extends Alert {
@@ -546,6 +562,69 @@ export interface ReportPackageMeta {
   filed_at?: string | null;
 }
 
+export interface ReportFilingStatus {
+  case_id: string;
+  report_package_id: string | null;
+  report_status: string | null;
+  report_decision: string | null;
+  requires_submission: boolean;
+  protocol_registered: boolean;
+  coaf_protocol_number: string | null;
+  filing_channel: string;
+  days_since_report_created: number | null;
+  days_since_filed: number | null;
+  deadline_state: 'NO_REPORT' | 'OK' | 'WARNING' | 'BREACH' | string;
+  warnings: string[];
+}
+
+export interface ReportFilingOverview {
+  total_cases_with_reports: number;
+  requires_submission_count: number;
+  missing_protocol_count: number;
+  deadline_state_counts: Record<string, number>;
+  oldest_pending_submission_days: number | null;
+  top_breach_case_ids: string[];
+  truncated: boolean;
+}
+
+export interface ReportFilingHotlistItem {
+  case_id: string;
+  report_package_id: string;
+  report_status: string;
+  deadline_state: string;
+  action_required: 'SUBMIT_REPORT' | 'REGISTER_PROTOCOL' | string;
+  priority_rank: number;
+  requires_submission: boolean;
+  protocol_registered: boolean;
+  days_since_report_created: number | null;
+  warnings: string[];
+}
+
+export interface ReportFilingHotlist {
+  total_items: number;
+  items: ReportFilingHotlistItem[];
+}
+
+export interface ReportFilingQueueItem {
+  case_id: string;
+  report_package_id: string;
+  report_status: string;
+  report_decision: string | null;
+  requires_submission: boolean;
+  protocol_registered: boolean;
+  coaf_protocol_number: string | null;
+  days_since_report_created: number | null;
+  days_since_filed: number | null;
+  deadline_state: string;
+  warnings: string[];
+}
+
+export interface ReportFilingQueue {
+  total_items: number;
+  deadline_state_counts: Record<string, number>;
+  items: ReportFilingQueueItem[];
+}
+
 export interface SubmitReportResult {
   status: string;
   report_package_id: string;
@@ -561,6 +640,18 @@ export interface SubmitReportResult {
 export const fetchCaseReportPackages = (caseId: string) =>
   api.get<ReportPackageMeta[]>(`/cases/${caseId}/report-packages`).then((r) => r.data);
 
+export const fetchReportFilingStatus = (caseId: string) =>
+  api.get<ReportFilingStatus>(`/cases/${caseId}/report-filing-status`).then((r) => r.data);
+
+export const fetchReportFilingOverview = () =>
+  api.get<ReportFilingOverview>('/report-packages/filing-overview').then((r) => r.data);
+
+export const fetchReportFilingHotlist = (limit = 20) =>
+  api.get<ReportFilingHotlist>('/report-packages/filing-hotlist', { params: { limit } }).then((r) => r.data);
+
+export const fetchReportFilingQueue = (limit = 50) =>
+  api.get<ReportFilingQueue>('/report-packages/filing-queue', { params: { limit } }).then((r) => r.data);
+
 export const submitReportPackage = (caseId: string) =>
   api.post<SubmitReportResult>(`/cases/${caseId}/report-package/submit`).then((r) => r.data);
 
@@ -568,6 +659,17 @@ export const registerCoafProtocol = (caseId: string, rpId: string, coafProtocolN
   api.patch<{ report_package_id: string; coaf_protocol_number: string; registered_at: string }>(
     `/cases/${caseId}/report-packages/${rpId}/protocol-number`,
     { coaf_protocol_number: coafProtocolNumber },
+  ).then((r) => r.data);
+
+export const downloadReportPackage = (rpId: string) =>
+  api.get(`/report-packages/${rpId}/download`, { responseType: 'blob' }).then((r) => r.data as Blob);
+
+export const exportReportPackageHtml = (rpId: string) =>
+  api.get(`/report-packages/${rpId}/export`, { responseType: 'blob' }).then((r) => r.data as Blob);
+
+export const submitReportPackageFiling = (rpId: string) =>
+  api.post<{ report_package_id: string; status: string; filed_at: string; channel: string; message: string }>(
+    `/report-packages/${rpId}/submit-filing`,
   ).then((r) => r.data);
 
 export const assignCase = (caseId: string, userId: string) =>
@@ -597,6 +699,9 @@ export interface ScoringConfig {
   data_retention_silver_years: number;
   data_retention_gold_years: number;
   auto_case_threshold: number;
+  risk_band_low_threshold: number;
+  risk_band_high_threshold: number;
+  income_volume_ratio_threshold: number;
   ingest_rate_limit_tpm: number;
   ml_challenger_pct?: number;
   updated_at: string | null;
@@ -1139,6 +1244,7 @@ export interface AdminUser {
   username: string;
   email: string;
   role: string;
+  roles?: string[];
   active: boolean;
   created_at: string;
 }
@@ -1163,7 +1269,7 @@ export const deleteAdminUser = (id: string) =>
   api.delete(`/admin/users/${id}`);
 
 export const resetUserPassword = (id: string, new_password: string) =>
-  api.post(`/admin/users/${id}/reset-password`, { new_password });
+  api.post<{ user_id: string; username: string; message: string }>(`/admin/users/${id}/reset-password`, { new_password }).then((r) => r.data);
 
 export interface AdminApiKey {
   id: string;
@@ -1248,6 +1354,8 @@ export interface DashboardStats {
   dismissed_7d?: number;
   my_cases_near_sla?: number;
   high_fp_rules?: Array<{ rule_id: string; rule_name: string; fp_count: number }>;
+  tenant_name?: string;
+  tenant_slug?: string;
 }
 
 export const fetchDashboardStats = () =>
@@ -1398,6 +1506,18 @@ export interface PlayerNetworkItem {
   shared_by: Array<{ type: string; value: string }>;
 }
 
+interface PlayerNetworkApiEdge {
+  source: string;
+  target: string;
+  edge_type: string;
+  shared_hash_prefix?: string;
+}
+
+interface PlayerNetworkApiResponse {
+  focal_player_id: string;
+  edges: PlayerNetworkApiEdge[];
+}
+
 export interface CaseAlertHistory {
   player_id: string;
   cases: Array<{ id: string; title: string; status: string; severity: string; created_at: string }>;
@@ -1422,9 +1542,34 @@ export const fetchPlayerPaymentInstruments = (playerId: string) =>
   ).then((r) => r.data);
 
 export const fetchPlayerNetwork = (playerId: string) =>
-  api.get<{ player_id: string; related_players: PlayerNetworkItem[] }>(
-    `/players/${playerId}/network`,
-  ).then((r) => r.data);
+  api.get<PlayerNetworkApiResponse>(`/players/${playerId}/network`).then((r) => {
+    const data = r.data;
+    const related = new Map<string, Array<{ type: string; value: string }>>();
+
+    for (const edge of data.edges ?? []) {
+      let peerId: string | null = null;
+      if (edge.source === playerId) peerId = edge.target;
+      else if (edge.target === playerId) peerId = edge.source;
+      if (!peerId) continue;
+
+      const link = {
+        type: edge.edge_type,
+        value: edge.shared_hash_prefix ?? 'shared',
+      };
+      const current = related.get(peerId) ?? [];
+      if (!current.some((item) => item.type === link.type && item.value === link.value)) {
+        related.set(peerId, [...current, link]);
+      }
+    }
+
+    return {
+      player_id: data.focal_player_id ?? playerId,
+      related_players: Array.from(related.entries()).map(([peer_id, shared_by]) => ({
+        player_id: peer_id,
+        shared_by,
+      })),
+    };
+  });
 
 export const fetchPlayerCaseAlertHistory = (playerId: string) =>
   api.get<CaseAlertHistory>(`/players/${playerId}/case-alert-history`).then((r) => r.data);

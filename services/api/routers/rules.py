@@ -7,7 +7,7 @@ from typing import Any, Optional
 import uuid
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -105,13 +105,19 @@ async def validate_rule_dsl(
 
 @router.get("/rules")
 async def list_rules(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    envelope: bool = Query(False, description="Quando true, retorna {items,total,limit,offset}."),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    envelope_enabled = envelope if isinstance(envelope, bool) else False
     q = select(RuleDefinition).where(RuleDefinition.tenant_id == current_user.tenant_id)
+    if envelope_enabled:
+        q = q.limit(limit).offset(offset)
     result = await db.execute(q)
     rules = result.scalars().all()
-    return [
+    items = [
         {
             "id": r.id, "name": r.name, "status": r.status, "severity": r.severity,
             "scope": r.scope, "condition_dsl": r.condition_dsl, "params": r.params,
@@ -119,6 +125,18 @@ async def list_rules(
         }
         for r in rules
     ]
+    if not envelope_enabled:
+        return items
+
+    total = (await db.execute(
+        select(func.count()).select_from(RuleDefinition).where(RuleDefinition.tenant_id == current_user.tenant_id)
+    )).scalar_one()
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 class PreviewDslRequest(BaseModel):

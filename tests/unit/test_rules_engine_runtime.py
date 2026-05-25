@@ -129,3 +129,72 @@ def test_evaluate_rules_supports_compound_n_of_m():
     assert compound is not None
     assert compound["rule"]["compound_rule_id"] == "c1"
     assert compound["context_snapshot"]["matched_components"] == 2
+
+
+def test_risk_band_and_income_volume_use_tenant_policy():
+    rules = _load_module()
+    cfg = {
+        "risk_band_low_threshold": 0.25,
+        "risk_band_high_threshold": 0.60,
+        "income_volume_ratio_threshold": 2.0,
+    }
+
+    assert rules._risk_band_from_score(0.61, cfg) == "HIGH"
+    assert rules._risk_band_from_score(0.30, cfg) == "MEDIUM"
+    assert rules._risk_band_from_score(0.20, cfg) == "LOW"
+
+    signal = rules._income_volume_signal(
+        {"declared_income_monthly": 1000, "deposit_sum_30d": 2500},
+        cfg,
+    )
+    assert signal["tier"] == "RED"
+    assert signal["ratio"] == 2.5
+    assert signal["threshold"] == 2.0
+
+
+def test_publish_alert_enqueues_scoring_policy_for_db_writer():
+    rules = _load_module()
+    envelope = {
+        "tenant_id": "tenant-1",
+        "event_id": "evt-1",
+        "entity_type": "TRANSACTION",
+        "payload": {"player_id": "player-1"},
+    }
+    match = {
+        "rule": {
+            "id": "rule-1",
+            "name": "Volume incompatível",
+            "condition_dsl": "features.deposit_sum_30d > params.threshold",
+            "params": {"threshold": 1000},
+            "severity": "MEDIUM",
+            "version": 1,
+        },
+        "eval_ms": 5,
+        "rule_weight": 1.0,
+        "context_snapshot": {},
+        "features_snapshot": {
+            "declared_income_monthly": 1000,
+            "deposit_sum_30d": 2500,
+            "shared_device_score": 0.2,
+        },
+    }
+    cfg = {
+        **rules.DEFAULT_SCORING_CONFIG,
+        "auto_case_threshold": 0.55,
+        "risk_band_low_threshold": 0.25,
+        "risk_band_high_threshold": 0.60,
+        "income_volume_ratio_threshold": 2.0,
+    }
+    producer = AsyncMock()
+    producer.send = AsyncMock()
+    queue = asyncio.Queue()
+
+    asyncio.run(rules.publish_alert(envelope, match, producer, queue, scoring_cfg=cfg))
+
+    alert = producer.send.call_args[0][1]
+    assert alert["score_breakdown"]["auto_case_threshold"] == 0.55
+    assert alert["score_breakdown"]["income_volume"]["tier"] == "RED"
+    assert alert["evidence"]["scoring_policy"]["risk_band_high_threshold"] == 0.60
+
+    db_item = queue.get_nowait()
+    assert db_item["scoring_cfg"]["auto_case_threshold"] == 0.55

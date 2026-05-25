@@ -54,6 +54,16 @@ Ele valida em sequencia:
 5. Smoke E2E, extended e security
 6. Gate final de go/no-go (`scripts/release_decision_gate.sh`)
 
+Observacao operacional:
+- O gate final valida automaticamente o timestamp do `backup_reference` no formato `YYYYMMDDTHHMMSSZ`.
+- Por default, backups com idade maior que 24h resultam em `NO_GO`.
+- Override controlado: `--max-backup-age-hours N` ou `--skip-backup-age-check`.
+- O gate final exige `--external-provider` com provider real ativo no corte.
+- `mock`/`mock_identity` resultam em `NO_GO` (exceto override explícito `--allow-mock-provider`, apenas para ambiente controlado).
+- Em corte formal, rode o preflight com validação de provider real:
+  - `bash scripts/readiness_preflight.sh --require-real-provider --expected-provider <provider_real>`
+  - o preflight valida `EXTERNAL_VALIDATION_PROVIDER` (nao-mock), `EXTERNAL_VALIDATION_PROVIDER_URL` e `EXTERNAL_VALIDATION_PROVIDER_TOKEN`.
+
 Requer configuracao no repositorio GitHub:
 - variable `E2E_USERNAME`
 - secret `E2E_PASSWORD`
@@ -841,6 +851,29 @@ DELETE /player-lists/{list_id}/entries/{entry_id}
 
 - Compound rules suportam `AND`, `OR` e `N_OF_M`, com `severity_mode=MAX|FIXED`.
 - O `rules_engine` aplica pesos do tenant vindos de `scoring_configs` para combinar regra, ML e rede no `score_breakdown`.
+
+### Contratos de listagem com envelope opcional
+
+Para integrações que exigem paginação estável, use `envelope=true`.
+Sem esse parâmetro, o retorno legado (lista direta) é preservado.
+
+```bash
+GET /rules?envelope=true&limit=50&offset=0
+GET /player-lists?envelope=true&limit=50&offset=0
+GET /notifications?envelope=true&limit=50&offset=0
+GET /audit-logs?envelope=true&limit=50&offset=0
+```
+
+Shape de resposta em modo envelope:
+
+```json
+{
+  "items": [],
+  "total": 0,
+  "limit": 50,
+  "offset": 0
+}
+```
 
 ## 12. Troubleshooting
 

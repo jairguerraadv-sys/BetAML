@@ -345,52 +345,16 @@ async def _process_alert_event(payload: dict, Session: async_sessionmaker) -> No
 
 
 async def start_alert_consumer() -> None:
+    """Consumer legado desativado.
+
+    O `rules_engine` já é a autoridade única para materialização de alerts/cases.
+    Manter este consumer ativo cria corrida e duplicidade de casos, então ele foi
+    convertido em no-op por segurança operacional.
     """
-    Loop principal do consumer. Registrado como background task no startup da API.
-    Usa a implementação de KafkaConsumerClient de libs/clients.py.
-    """
-    import sys
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-
-    Session = _get_consumer_session()
-
-    logger.info("alert_consumer_starting", topic=TOPIC, group=GROUP_ID)
-    _last_error_time = 0.0
-
-    for attempt in range(MAX_RETRIES):
-        try:
-            from libs.clients import KafkaConsumerClient
-            consumer = KafkaConsumerClient(
-                bootstrap_servers=KAFKA_SERVERS,
-                topics=[TOPIC],
-                group_id=GROUP_ID,
-            )
-            await consumer.start()
-            logger.info("alert_consumer_connected", attempt=attempt)
-            break
-        except Exception as e:
-            wait = RETRY_DELAY_S * (2 ** attempt)
-            logger.warning("alert_consumer_connect_failed", error=str(e), retry_in=wait)
-            await asyncio.sleep(wait)
-    else:
-        logger.error("alert_consumer_all_retries_exhausted")
-        return
-
-    try:
-        async for msg in consumer:
-            try:
-                raw = msg.value if isinstance(msg.value, dict) else json.loads(msg.value)
-                await _process_alert_event(raw, Session)
-            except Exception as e:
-                logger.error("alert_consumer_process_error", error=str(e), exc_info=True)
-                _CONSUMER_ERRORS.inc()
-    except asyncio.CancelledError:
-        logger.info("alert_consumer_cancelled")
-    except Exception as e:
-        logger.error("alert_consumer_fatal", error=str(e), exc_info=True)
-    finally:
-        try:
-            await consumer.stop()
-        except Exception:
-            pass
-        logger.info("alert_consumer_stopped")
+    logger.warning(
+        "alert_consumer_disabled",
+        reason="rules_engine_is_authoritative_for_alert_and_case_materialization",
+        topic=TOPIC,
+        group=GROUP_ID,
+    )
+    return

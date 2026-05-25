@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { fetchAlerts, triageAlert, Alert, type AlertTriageDisposition } from '@/lib/api';
+import { alertReasonBullets, humanAlertType } from '@/lib/pld-language';
 import {
   AlertTriangle, Eye, FolderPlus, X, ChevronRight,
   Clock, Filter, RefreshCw, HelpCircle, Glasses, Search,
@@ -38,19 +39,6 @@ const SEV_STYLES: Record<string, { card: string; badge: string; dot: string }> =
     badge: 'bg-green-100 text-green-700',
     dot:   'bg-green-400',
   },
-};
-
-const TYPE_EXPLAIN: Record<string, string> = {
-  VELOCITY:       'Movimentação em velocidade incompatível com o perfil do jogador',
-  STRUCTURING:    'Padrão de múltiplas operações menores para evitar controles',
-  ML_ANOMALY:     'Comportamento divergente do padrão histórico detectado pelo sistema',
-  PEP_EXPOSURE:   'Envolvimento com pessoa politicamente exposta ou jurisdição de risco',
-  MULTI_ACCOUNT:  'Uso de múltiplas contas ou dispositivos em curto período',
-  HIGH_RISK_CUST: 'Jogador classificado como perfil de alto risco',
-  COMPOSITE:      'Combinação de múltiplos fatores de risco detectados simultaneamente',
-  SLOT_FREQUENCY: 'Alta frequência de rodadas em slots — possível automação ou lavagem',
-  CASINO_WASHING: 'Padrão de lavagem em casino ao vivo (chip washing)',
-  PRODUCT_DIVERSITY: 'Diversificação suspeita entre modalidades de jogo',
 };
 
 const DISP_PT: Record<string, string> = {
@@ -91,7 +79,7 @@ function AlertCard({
   onInvestigate: (id: string) => void;
 }) {
   const style   = SEV_STYLES[alert.severity] ?? SEV_STYLES.LOW;
-  const explain = TYPE_EXPLAIN[alert.alert_type] ?? `Tipo: ${alert.alert_type}`;
+  const reasons = alertReasonBullets(alert);
   const hasCase = !!alert.case_id;
 
   return (
@@ -108,6 +96,11 @@ function AlertCard({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <SevBadge sev={alert.severity} />
+            {alert.game_type && (
+              <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${VERTICAL_BADGE[alert.game_type] ?? 'bg-gray-100 text-gray-600'}`}>
+                {VERTICAL_LABELS[alert.game_type] ?? alert.game_type}
+              </span>
+            )}
             {hasCase && (
               <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700">
                 Em caso
@@ -118,18 +111,25 @@ function AlertCard({
 
         {/* Explicação em linguagem simples */}
         <div className="mt-3 rounded-lg bg-gray-50 px-3 py-2.5">
-          <p className="flex items-start gap-1.5 text-xs text-gray-600">
-            <HelpCircle size={12} className="mt-0.5 shrink-0 text-gray-400" />
-            <span>{explain}</span>
+          <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+            <HelpCircle size={12} /> Por que estou vendo isso?
           </p>
+          <ul className="space-y-1 text-xs text-gray-600">
+            {reasons.map((reason) => (
+              <li key={reason} className="flex items-start gap-2">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-gray-400" />
+                <span>{reason}</span>
+              </li>
+            ))}
+          </ul>
           {alert.anomaly_score != null && (
             <p className="mt-1 text-[10px] text-gray-400 flex items-center gap-0.5">
-              Pontuação de risco: <span className="font-semibold text-gray-600">{(alert.anomaly_score * 100).toFixed(0)}%</span>
+              Intensidade do sinal: <span className="font-semibold text-gray-600">{(alert.anomaly_score * 100).toFixed(0)}%</span>
               <ContextualHelp title="O que é a Pontuação de Risco?" side="right">
                 <p className="mb-1">Número de 0 a 100 calculado combinando:</p>
                 <ul className="space-y-0.5 pl-2">
-                  <li>• Regras determinísticas (ex: velocidade, estruturação)</li>
-                  <li>• Modelos de machine learning (padrão histórico)</li>
+                  <li>• Condições de risco cadastradas</li>
+                  <li>• Analisador automático de comportamento</li>
                   <li>• Análise de vínculos (dispositivos, contas compartilhadas)</li>
                 </ul>
                 <p className="mt-2 text-gray-500">Valores acima de 80 são considerados ALTO. Acima de 95, CRÍTICO.</p>
@@ -212,19 +212,45 @@ function PriorityTab({
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
+
+const VERTICAL_LABELS: Record<string, string> = {
+  SPORTSBOOK:    'Esportes',
+  CASINO_LIVE:   'Cassino Ao Vivo',
+  SLOT:          'Slots',
+  BINGO:         'Bingo',
+  RASPADINHA:    'Raspadinha',
+  VIRTUAL:       'Virtual',
+  INSTANT_GAME:  'Instantâneo',
+};
+
+const VERTICAL_BADGE: Record<string, string> = {
+  SPORTSBOOK:    'bg-blue-100 text-blue-700',
+  CASINO_LIVE:   'bg-purple-100 text-purple-700',
+  SLOT:          'bg-pink-100 text-pink-700',
+  BINGO:         'bg-orange-100 text-orange-700',
+  RASPADINHA:    'bg-yellow-100 text-yellow-700',
+  VIRTUAL:       'bg-teal-100 text-teal-700',
+  INSTANT_GAME:  'bg-cyan-100 text-cyan-700',
+};
+
 export default function AlertsPage() {
   const router = useRouter();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Alert | null>(null);
   const [sevFilter, setSevFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('OPEN');
+  const [gameTypeFilter, setGameTypeFilter] = useState<string>('');
   const [note, setNote]         = useState('');
   const [disposition, setDisp]  = useState<AlertTriageDisposition | ''>('');
   const [observingId, setObservingId] = useState<string | null>(null);
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['alerts', statusFilter],
-    queryFn:  () => fetchAlerts(statusFilter ? { status: statusFilter, per_page: '200' } : { per_page: '200' }),
+    queryKey: ['alerts', statusFilter, gameTypeFilter],
+    queryFn:  () => fetchAlerts({
+      ...(statusFilter ? { status: statusFilter } : {}),
+      ...(gameTypeFilter ? { game_type: gameTypeFilter } : {}),
+      per_page: '200',
+    }),
   });
   const allAlerts = data?.items ?? [];
 
@@ -303,6 +329,17 @@ export default function AlertsPage() {
             <option value="IN_REVIEW">Em revisão</option>
             <option value="">Todos os status</option>
             <option value="CLOSED">Fechados</option>
+          </select>
+          <select
+            aria-label="Filtrar por vertical"
+            value={gameTypeFilter}
+            onChange={(e) => setGameTypeFilter(e.target.value)}
+            className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-sm"
+          >
+            <option value="">Todas as Verticais</option>
+            {Object.entries(VERTICAL_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>{v}</option>
+            ))}
           </select>
           <button
             onClick={() => refetch()}
@@ -384,7 +421,7 @@ export default function AlertsPage() {
             </div>
 
             <div className="mb-2 rounded-lg bg-blue-50 border border-blue-100 px-3 py-2.5 text-xs text-blue-700">
-              {TYPE_EXPLAIN[selected.alert_type] ?? `Tipo: ${selected.alert_type}`}
+              {humanAlertType(selected.alert_type)}
             </div>
 
             <label className="mt-3 mb-1 block text-sm font-medium text-gray-700">O que você concluiu?</label>

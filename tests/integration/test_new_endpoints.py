@@ -10,7 +10,7 @@ No CI com Docker:
     TEST_STACK_UP=1 pytest tests/integration/test_new_endpoints.py
 
 Endpoints cobertos:
-  - GET  /search/players                        (TestSearchEndpoints)
+    - GET  /search                                (TestSearchEndpoints)
   - POST /players/{id}/erase                    (TestLGPDEraseEndpoint)
   - GET  /cases/{id}/report-package/xml         (TestCOAFXMLEndpoint)
   - POST /internal/alerts/webhook               (TestWebhookEndpoint)
@@ -57,36 +57,33 @@ def _headers(token: str) -> dict:
 
 @skip_unless_stack
 class TestSearchEndpoints:
-    """Covers GET /search/players — pagination and cross-tenant isolation."""
+    """Covers GET /search — payload shape and cross-tenant isolation."""
 
     def test_search_players_returns_paginated_results(self):
         token = _login("analyst_a", "analyst123")["access_token"]
-        resp = api("/search/players", headers=_headers(token), params={"q": "test"})
-        assert resp.status_code in (200, 404), (
-            f"Expected 200 or 404, got {resp.status_code}: {resp.text}"
+        resp = api("/search", headers=_headers(token), params={"q": "test"})
+        assert resp.status_code == 200, (
+            f"Expected 200, got {resp.status_code}: {resp.text}"
         )
-        if resp.status_code == 200:
-            data = resp.json()
-            # Accept either a bare list or a paginated envelope {items, total}
-            assert isinstance(data, list) or (
-                isinstance(data, dict) and ("items" in data or "total" in data)
-            ), f"Unexpected response shape: {data}"
+        data = resp.json()
+        assert isinstance(data, dict), f"Unexpected response type: {type(data)}"
+        assert "players" in data and "cases" in data and "alerts" in data, (
+            f"Missing expected keys in search payload: {data}"
+        )
+        assert isinstance(data["players"], list)
+        assert isinstance(data["cases"], list)
+        assert isinstance(data["alerts"], list)
 
     def test_search_players_cross_tenant_isolation(self):
         token_b = _login("admin_b", "admin123")["access_token"]
-        resp = api("/search/players", headers=_headers(token_b), params={"q": "test"})
-        assert resp.status_code in (200, 404), (
-            f"Expected 200 or 404, got {resp.status_code}: {resp.text}"
+        resp = api("/search", headers=_headers(token_b), params={"q": "test"})
+        assert resp.status_code == 200, (
+            f"Expected 200, got {resp.status_code}: {resp.text}"
         )
-        if resp.status_code == 200:
-            data = resp.json()
-            results = data if isinstance(data, list) else data.get("items", [])
-            assert isinstance(results, list), (
-                f"Results should be a list, got: {type(results)}"
-            )
-            # Tenant isolation is enforced at DB level; admin_b should only see
-            # OperadorB records. We assert the endpoint returns a valid list —
-            # seeded data ensures no cross-contamination.
+        data = resp.json()
+        assert isinstance(data, dict), f"Unexpected response type: {type(data)}"
+        for key in ("players", "cases", "alerts"):
+            assert isinstance(data.get(key), list), f"{key} should be list"
 
 
 # ── LGPD Erase ─────────────────────────────────────────────────────────────────
@@ -651,6 +648,20 @@ class TestExternalValidationEndpoints:
         assert pid, f"No id in player payload: {data[0]}"
         return pid
 
+    def test_players_list_supports_optional_envelope(self):
+        admin_token = _login("admin_a", "admin123")["access_token"]
+        resp = api("/players", headers=_headers(admin_token), params={"limit": 1, "offset": 0, "envelope": True})
+        assert resp.status_code == 200, (
+            f"Expected 200 from /players envelope mode, got {resp.status_code}: {resp.text}"
+        )
+
+        payload = resp.json()
+        assert isinstance(payload, dict), f"Expected dict payload, got: {type(payload)}"
+        assert isinstance(payload.get("items"), list)
+        assert isinstance(payload.get("total"), int)
+        assert payload.get("limit") == 1
+        assert payload.get("offset") == 0
+
     def test_external_validation_full_flow(self):
         admin_token = _login("admin_a", "admin123")["access_token"]
         player_id = self._first_player_id_for_tenant(admin_token)
@@ -761,3 +772,61 @@ class TestExternalValidationEndpoints:
         assert by_id_resp_other_tenant.status_code == 404, (
             f"Expected 404 cross-tenant, got {by_id_resp_other_tenant.status_code}: {by_id_resp_other_tenant.text}"
         )
+
+
+@skip_unless_stack
+class TestEnvelopeContracts:
+    """Covers optional envelope shape in list endpoints (Onda C contract hardening)."""
+
+    def test_rules_list_supports_optional_envelope(self):
+        admin_token = _login("admin_a", "admin123")["access_token"]
+        resp = api("/rules", headers=_headers(admin_token), params={"envelope": True, "limit": 5, "offset": 0})
+        assert resp.status_code == 200, (
+            f"Expected 200 from /rules envelope mode, got {resp.status_code}: {resp.text}"
+        )
+        payload = resp.json()
+        assert isinstance(payload, dict)
+        assert isinstance(payload.get("items"), list)
+        assert isinstance(payload.get("total"), int)
+        assert payload.get("limit") == 5
+        assert payload.get("offset") == 0
+
+    def test_player_lists_supports_optional_envelope(self):
+        admin_token = _login("admin_a", "admin123")["access_token"]
+        resp = api("/player-lists", headers=_headers(admin_token), params={"envelope": True, "limit": 5, "offset": 0})
+        assert resp.status_code == 200, (
+            f"Expected 200 from /player-lists envelope mode, got {resp.status_code}: {resp.text}"
+        )
+        payload = resp.json()
+        assert isinstance(payload, dict)
+        assert isinstance(payload.get("items"), list)
+        assert isinstance(payload.get("total"), int)
+        assert payload.get("limit") == 5
+        assert payload.get("offset") == 0
+
+    def test_notifications_supports_optional_envelope(self):
+        admin_token = _login("admin_a", "admin123")["access_token"]
+        resp = api("/notifications", headers=_headers(admin_token), params={"envelope": True, "limit": 5, "offset": 0})
+        assert resp.status_code == 200, (
+            f"Expected 200 from /notifications envelope mode, got {resp.status_code}: {resp.text}"
+        )
+        payload = resp.json()
+        assert isinstance(payload, dict)
+        assert isinstance(payload.get("items"), list)
+        assert isinstance(payload.get("total"), int)
+        assert payload.get("limit") == 5
+        assert payload.get("offset") == 0
+
+    def test_audit_logs_supports_optional_envelope(self):
+        admin_token = _login("admin_a", "admin123")["access_token"]
+        resp = api("/audit-logs", headers=_headers(admin_token), params={"envelope": True, "limit": 5, "offset": 0})
+        assert resp.status_code == 200, (
+            f"Expected 200 from /audit-logs envelope mode, got {resp.status_code}: {resp.text}"
+        )
+        payload = resp.json()
+        assert isinstance(payload, dict)
+        assert isinstance(payload.get("items"), list)
+        assert isinstance(payload.get("total"), int)
+        assert payload.get("limit") == 5
+        assert payload.get("offset") == 0
+

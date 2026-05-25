@@ -12,6 +12,8 @@ SKIP_HTTP=0
 SKIP_ALEMBIC=0
 SKIP_MIGRATION_DRY_RUN=0
 SKIP_BACKUP_CONFIG=0
+REQUIRE_REAL_PROVIDER=0
+EXPECTED_EXTERNAL_PROVIDER=""
 
 usage() {
   cat <<'EOF'
@@ -29,6 +31,8 @@ Opcoes:
   --skip-alembic             Nao valida cadeia Alembic
   --skip-migration-dry-run   Nao executa dry-run de migracao SQL legada
   --skip-backup-config       Nao valida configuracao de backup Helm
+  --require-real-provider    Exige provider externo real (nao-mock) e credenciais minimas
+  --expected-provider NAME   Provider esperado para o corte formal (ex.: idwall)
   -h, --help                 Exibe esta ajuda
 EOF
 }
@@ -75,6 +79,14 @@ while [[ $# -gt 0 ]]; do
       SKIP_BACKUP_CONFIG=1
       shift
       ;;
+    --require-real-provider)
+      REQUIRE_REAL_PROVIDER=1
+      shift
+      ;;
+    --expected-provider)
+      EXPECTED_EXTERNAL_PROVIDER="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -119,6 +131,16 @@ require_cmd() {
   return 0
 }
 
+has_any_cmd() {
+  local cmd
+  for cmd in "$@"; do
+    if command -v "$cmd" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 wait_for_http() {
   local label="$1"
   local url="$2"
@@ -145,7 +167,12 @@ echo "api_url=$API_URL"
 echo "frontend_url=$FRONTEND_URL"
 
 section "Dependencias"
-require_cmd bash grep sed awk find sha256sum || true
+require_cmd bash grep sed awk find || true
+if has_any_cmd sha256sum shasum; then
+  pass "checksum tool disponivel (sha256sum ou shasum)"
+else
+  fail "dependencia ausente: sha256sum/shasum"
+fi
 if [[ "$SKIP_HTTP" -eq 0 ]]; then
   require_cmd curl || true
 fi
@@ -161,7 +188,10 @@ if [[ "$SKIP_DOCKER" -eq 0 ]]; then
   if [[ ! -f "$COMPOSE_FILE" ]]; then
     fail "compose file nao encontrado: $COMPOSE_FILE"
   else
-    mapfile -t running_services < <(docker compose -f "$COMPOSE_FILE" ps --services --status running 2>/dev/null || true)
+    running_services=()
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && running_services+=("$line")
+    done < <(docker compose -f "$COMPOSE_FILE" ps --services --status running 2>/dev/null || true)
     required_services=(postgres redis redpanda minio clickhouse api frontend stream-processor rules-engine ml-service)
     for service in "${required_services[@]}"; do
       if printf '%s\n' "${running_services[@]}" | grep -Fxq "$service"; then
@@ -212,6 +242,61 @@ if [[ "$SKIP_BACKUP_CONFIG" -eq 0 ]]; then
     pass "configuracao de backup Helm presente e habilitada"
   else
     fail "configuracao de backup Helm incompleta"
+  fi
+fi
+
+if [[ "$REQUIRE_REAL_PROVIDER" -eq 1 ]]; then
+  section "External Validation Provider"
+
+  provider=""
+  provider_url=""
+  provider_token=""
+
+  if [[ "$SKIP_DOCKER" -eq 0 ]] && [[ -f "$COMPOSE_FILE" ]]; then
+    provider="$(docker compose -f "$COMPOSE_FILE" exec -T api sh -lc 'printf %s "${EXTERNAL_VALIDATION_PROVIDER:-}"' 2>/dev/null || true)"
+    provider_url="$(docker compose -f "$COMPOSE_FILE" exec -T api sh -lc 'printf %s "${EXTERNAL_VALIDATION_PROVIDER_URL:-}"' 2>/dev/null || true)"
+    provider_token="$(docker compose -f "$COMPOSE_FILE" exec -T api sh -lc 'printf %s "${EXTERNAL_VALIDATION_PROVIDER_TOKEN:-}"' 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$provider" ]]; then
+    provider="${EXTERNAL_VALIDATION_PROVIDER:-}"
+  fi
+  if [[ -z "$provider_url" ]]; then
+    provider_url="${EXTERNAL_VALIDATION_PROVIDER_URL:-}"
+  fi
+  if [[ -z "$provider_token" ]]; then
+    provider_token="${EXTERNAL_VALIDATION_PROVIDER_TOKEN:-}"
+  fi
+
+  provider_lc="$(printf '%s' "$provider" | tr '[:upper:]' '[:lower:]' | xargs)"
+  expected_lc="$(printf '%s' "$EXPECTED_EXTERNAL_PROVIDER" | tr '[:upper:]' '[:lower:]' | xargs)"
+
+  if [[ -z "$provider_lc" ]]; then
+    fail "EXTERNAL_VALIDATION_PROVIDER nao configurado"
+  elif [[ "$provider_lc" == "mock" || "$provider_lc" == "mock_identity" ]]; then
+    fail "EXTERNAL_VALIDATION_PROVIDER em modo mock ($provider_lc)"
+  else
+    pass "EXTERNAL_VALIDATION_PROVIDER real: $provider_lc"
+  fi
+
+  if [[ -n "$expected_lc" ]]; then
+    if [[ "$provider_lc" == "$expected_lc" ]]; then
+      pass "provider esperado confirmado: $expected_lc"
+    else
+      fail "provider divergente do esperado (esperado=$expected_lc atual=${provider_lc:-unset})"
+    fi
+  fi
+
+  if [[ -n "${provider_url// }" ]]; then
+    pass "EXTERNAL_VALIDATION_PROVIDER_URL configurado"
+  else
+    fail "EXTERNAL_VALIDATION_PROVIDER_URL ausente"
+  fi
+
+  if [[ -n "${provider_token// }" ]]; then
+    pass "EXTERNAL_VALIDATION_PROVIDER_TOKEN configurado"
+  else
+    fail "EXTERNAL_VALIDATION_PROVIDER_TOKEN ausente"
   fi
 fi
 

@@ -31,8 +31,12 @@ const updateFlag     = (flagName: string, value: string) => api.put(`/admin/flag
 
 type Tab = 'tenants' | 'keys' | 'flags' | 'users' | 'usage';
 
-const ROLES = ['ADMIN', 'AML_ANALYST', 'AUDITOR'] as const;
+const ROLES = ['Operador_Analista', 'Operador_Gestor', 'Operador_AdminTecnico'] as const;
 const ROLE_COLORS: Record<string, string> = {
+  Operador_Analista:    'bg-blue-100 text-blue-700',
+  Operador_Gestor:      'bg-emerald-100 text-emerald-700',
+  Operador_AdminTecnico:'bg-amber-100 text-amber-700',
+  BetAML_SuperAdmin:    'bg-red-100 text-red-700',
   ADMIN:        'bg-purple-100 text-purple-700',
   AML_ANALYST:  'bg-blue-100 text-blue-700',
   AUDITOR:      'bg-gray-100 text-gray-600',
@@ -41,10 +45,10 @@ const ROLE_COLORS: Record<string, string> = {
 
 // ── User Create Form ──────────────────────────────────────────────────────────
 function UserCreateForm({ onSuccess }: { onSuccess: () => void }) {
-  const [form, setForm] = useState<AdminUserCreateIn>({ username: '', email: '', password: '', role: 'AML_ANALYST' });
+  const [form, setForm] = useState<AdminUserCreateIn>({ username: '', email: '', password: '', role: 'Operador_Analista' });
   const mut = useMutation({
     mutationFn: () => createAdminUser(form),
-    onSuccess: () => { setForm({ username: '', email: '', password: '', role: 'AML_ANALYST' }); onSuccess(); },
+    onSuccess: () => { setForm({ username: '', email: '', password: '', role: 'Operador_Analista' }); onSuccess(); },
   });
   return (
     <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-5">
@@ -93,7 +97,15 @@ function UserCreateForm({ onSuccess }: { onSuccess: () => void }) {
 // ── Reset Password Modal ───────────────────────────────────────────────────────
 function ResetPwModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
   const [pw, setPw] = useState('');
-  const mut = useMutation({ mutationFn: () => resetUserPassword(user.id, pw), onSuccess: onClose });
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+  const mut = useMutation({
+    mutationFn: () => resetUserPassword(user.id, pw),
+    onSuccess: (data) => {
+      setOkMsg(data.message ?? 'Senha redefinida com sucesso.');
+      setPw('');
+      setTimeout(onClose, 900);
+    },
+  });
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -108,6 +120,7 @@ function ResetPwModal({ user, onClose }: { user: AdminUser; onClose: () => void 
             {mut.isPending ? 'Salvando…' : 'Redefinir'}
           </button>
         </div>
+        {okMsg && <p className="mt-2 text-xs text-emerald-700">{okMsg}</p>}
         {mut.isError && <p className="mt-2 text-xs text-red-600">Erro ao redefinir senha.</p>}
       </div>
     </div>
@@ -117,7 +130,7 @@ function ResetPwModal({ user, onClose }: { user: AdminUser; onClose: () => void 
 // ── Invite Modal ───────────────────────────────────────────────────────────────
 function InviteModal({ onClose }: { onClose: () => void }) {
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState('AML_ANALYST');
+  const [role, setRole] = useState('Operador_Analista');
   const [result, setResult] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const mut = useMutation({
@@ -144,9 +157,7 @@ function InviteModal({ onClose }: { onClose: () => void }) {
                 <label className="mb-1 block text-xs font-medium text-gray-600">Perfil *</label>
                 <select value={role} onChange={(e) => setRole(e.target.value)}
                   className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
-                  <option value="AML_ANALYST">AML_ANALYST</option>
-                  <option value="AUDITOR">AUDITOR</option>
-                  <option value="ADMIN">ADMIN</option>
+                  {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
               </div>
             </div>
@@ -780,6 +791,9 @@ export default function AdminPage() {
                           className={`rounded-full px-2 py-0.5 text-xs font-semibold border-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-brand
                             ${ROLE_COLORS[u.role] ?? 'bg-gray-100 text-gray-600'}`}
                         >
+                          {![...ROLES].includes(u.role as typeof ROLES[number]) && (
+                            <option value={u.role}>{u.role} (legado)</option>
+                          )}
                           {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
                         </select>
                       </td>

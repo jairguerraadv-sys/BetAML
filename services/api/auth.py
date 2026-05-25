@@ -49,9 +49,21 @@ ROLES: frozenset[str] = frozenset({
 # Mapeamento legado → novos papéis (para usuários sem a coluna `roles` preenchida)
 _LEGACY_ROLE_MAP: dict[str, list[str]] = {
     "AML_ANALYST": [AppRole.ANALISTA],
-    "AUDITOR":     [AppRole.ANALISTA],                                    # auditor = acesso leitura = Analista
+    # AUDITOR is intentionally read-only and must not inherit Operador_Analista,
+    # because many analyst routes are mutating triage/case operations.
+    "AUDITOR":     [],
     "ADMIN":       [AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.ANALISTA],  # admin legacy = acumula funções
     "SUPER_ADMIN": [AppRole.SUPER_ADMIN],
+}
+
+_NEW_ROLE_LEGACY_COMPAT: dict[str, list[str]] = {
+    # Compatibilidade temporária enquanto routers/tests legados ainda chamam
+    # require_roles("ADMIN", "AML_ANALYST", ...). A barreira canônica segue
+    # sendo o papel Operador_* ou BetAML_*.
+    AppRole.ANALISTA: ["AML_ANALYST"],
+    AppRole.GESTOR: ["ADMIN", "AML_ANALYST"],
+    AppRole.ADMIN_TECNICO: ["ADMIN"],
+    AppRole.SUPER_ADMIN: ["SUPER_ADMIN", "ADMIN"],
 }
 
 # Mapa estático de permissões (resource:action) por papel
@@ -105,15 +117,32 @@ def get_effective_roles(user: Any) -> set[str]:
     deriva do campo legado `role` (string) via _LEGACY_ROLE_MAP.
     Inclui sempre o valor legado para compatibilidade com guards antigos.
     """
-    # Novo estilo: coluna `roles` JSONB populada
-    user_roles: list[str] | None = getattr(user, "roles", None)
-    if user_roles:
-        return set(user_roles)
-    # Fallback legado
-    legacy = getattr(user, "role", "")
-    derived = set(_LEGACY_ROLE_MAP.get(legacy, [AppRole.ANALISTA]))
-    derived.add(legacy)   # mantém nome legado para guards antigos que usam require_roles("ADMIN")
-    return derived
+    effective: set[str] = set()
+
+    # Novo estilo: coluna `roles` JSONB populada.
+    # Alguns ambientes legados podem persistir string em vez de lista JSON.
+    user_roles = getattr(user, "roles", None)
+    if isinstance(user_roles, str):
+        normalized = user_roles.strip()
+        if normalized:
+            effective.add(normalized)
+    elif isinstance(user_roles, (list, tuple, set)):
+        effective.update(str(role).strip() for role in user_roles if str(role).strip())
+
+    # Campo legado continua existindo e precisa participar da compatibilidade:
+    # alguns tokens antigos e alguns routers ainda dependem dele.
+    legacy = str(getattr(user, "role", "") or "").strip()
+    if legacy:
+        effective.add(legacy)
+        effective.update(_LEGACY_ROLE_MAP.get(legacy, []))
+
+    # Compatibilidade inversa: usuários criados apenas com roles novos não
+    # devem ser negados por guards legados durante a migração.
+    for role in list(effective):
+        effective.update(_NEW_ROLE_LEGACY_COMPAT.get(role, []))
+
+    # Sem papel válido, negar por padrão (fail-closed).
+    return effective
 
 # ── Redis client para blacklist de JWT ────────────────────────────────────────
 _auth_redis: Any = None

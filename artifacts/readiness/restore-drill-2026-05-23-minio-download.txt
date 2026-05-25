@@ -1,0 +1,41 @@
+
+== Contexto ==
+timestamp_utc=2026-05-23T06:03:12Z
+compose_file=/Users/jairarantes/Desktop/BetAML/infra/docker-compose.yml
+postgres_service=postgres
+postgres_user=betaml
+postgres_db=betaml_dev
+restore_db=betaml_restore_drill_20260523T060312Z
+backup_bucket=betaml-backups
+
+== Dependencias ==
+
+== Compose ==
+postgres_service_running=postgres
+minio_service_running=minio
+
+== Backup Source ==
+backup_source=minio
+backup_object=betaml-backups/postgres/postgres_20260523T055719Z.sql.gz
+backup_file=/var/folders/03/1k2z62fd1lndxv6wzc25qmbw0000gn/T/tmp.So60XUbE/postgres_20260523T055719Z.sql.gz
+backup_timestamp=20260523T055719Z
+
+== Restore ==
+NOTICE:  database "betaml_restore_drill_20260523T060312Z" does not exist, skipping
+restore_db_created=betaml_restore_drill_20260523T060312Z
+restore_import=ok
+
+== Evidence ==
+table_counts=
+alerts|8
+cases|77
+players|104
+
+== MinIO Artifacts ==
+postgres_backup_object=ok
+minio_artifact_mirror=ok
+[2026-05-23 05:58:06 UTC]    35B STANDARD manifest.txt
+
+== Resumo ==
+restore_drill=PASS
+restore_db_retained=betaml_restore_drill_20260523T060312Z

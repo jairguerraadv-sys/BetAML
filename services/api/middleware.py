@@ -96,7 +96,18 @@ def _is_safe_maintenance_disable_request(request: Request, payload: dict | None)
         return False
     if str(request.query_params.get("enabled", "")).lower() != "false":
         return False
-    return bool(payload and payload.get("role") == "ADMIN")
+    if not payload:
+        return False
+    token_roles: set[str] = set()
+    raw_roles = payload.get("roles")
+    if isinstance(raw_roles, str):
+        token_roles.add(raw_roles)
+    elif isinstance(raw_roles, (list, tuple, set)):
+        token_roles.update(str(role) for role in raw_roles if role)
+    legacy_role = str(payload.get("role") or "")
+    if legacy_role:
+        token_roles.add(legacy_role)
+    return bool(token_roles.intersection({"ADMIN", "SUPER_ADMIN", "Operador_AdminTecnico", "BetAML_SuperAdmin"}))
 
 
 async def _is_maintenance_enabled(tenant_id: str) -> bool:

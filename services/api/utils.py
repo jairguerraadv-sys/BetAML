@@ -9,6 +9,8 @@ Expõe:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+import re
 from typing import Any, Optional
 
 import structlog
@@ -48,6 +50,9 @@ _SENSITIVE_PAYLOAD_KEYS = {
     "raw_payload",
     "token",
 }
+
+_CPF_RE = re.compile(r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b")
+_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 
 
 def _sanitize_audit_payload(value: Any, *, depth: int = 0) -> Any:
@@ -97,10 +102,30 @@ def sanitize_sensitive_payload(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, tuple):
         return tuple(sanitize_sensitive_payload(item, depth=depth + 1) for item in value[:20])
     if isinstance(value, str):
+        value = _CPF_RE.sub("[REDACTED_CPF]", value)
+        value = _EMAIL_RE.sub("[REDACTED_EMAIL]", value)
         if len(value) > 256:
             return value[:256] + "...[TRUNCATED]"
         return value
     return value
+
+
+def redact_sensitive_payload_for_storage(value: Any) -> str:
+    """Return a compact, redacted string safe for ingest_error persistence.
+
+    Bronze/raw lake objects may intentionally retain source payloads under
+    retention policy. Quarantine/error rows are operational surfaces viewed by
+    analysts and support users, so they store a redacted diagnostic copy.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            pass
+    sanitized = sanitize_sensitive_payload(value)
+    if isinstance(sanitized, str):
+        return sanitized
+    return json.dumps(sanitized, ensure_ascii=False, default=str)
 
 # ─── Kafka producer (lazy singleton) ──────────────────────────────────────────
 _producer = None

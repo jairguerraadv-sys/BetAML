@@ -22,9 +22,19 @@ from database import AsyncSessionLocal
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["infra"])
 
+VALID_ALERT_STATUSES = (
+    "OPEN",
+    "IN_REVIEW",
+    "CONFIRMED",
+    "DISMISSED",
+    "CLOSED",
+    "FALSE_POSITIVE",
+)
+
 
 async def _run_health_checks() -> dict[str, str]:
     checks: dict[str, str] = {}
+    data_quality_failures: list[str] = []
 
     # ── Postgres ──────────────────────────────────────────────────────────
     try:
@@ -41,7 +51,7 @@ async def _run_health_checks() -> dict[str, str]:
     # Reusa os checks críticos do script scripts/data_quality_checks.py para
     # integrar qualidade de dados ao readiness endpoint.
     try:
-        from sqlalchemy import text
+        from sqlalchemy import bindparam, text
 
         async with AsyncSessionLocal() as db:
             players_without_tenant = (
@@ -55,8 +65,9 @@ async def _run_health_checks() -> dict[str, str]:
                     db.execute(
                         text(
                             "SELECT COUNT(*) FROM alerts "
-                            "WHERE status NOT IN ('OPEN','IN_REVIEW','CLOSED','FALSE_POSITIVE')"
-                        )
+                            "WHERE status NOT IN :valid_statuses"
+                        ).bindparams(bindparam("valid_statuses", expanding=True)),
+                        {"valid_statuses": VALID_ALERT_STATUSES},
                     ),
                     timeout=2.0,
                 )
@@ -86,15 +97,19 @@ async def _run_health_checks() -> dict[str, str]:
             failures.append("alerts_invalid_status")
         if int(snapshots_missing_version or 0) > 0:
             failures.append("feature_snapshots_missing_version")
-        if int(unresolved_ingest_errors_24h or 0) > 100:
+        # Readiness é requisito de corte: qualquer backlog antigo não resolvido
+        # em ingestão bloqueia o status "ready".
+        if int(unresolved_ingest_errors_24h or 0) > 0:
             failures.append("unresolved_ingest_errors_24h")
 
+        data_quality_failures = failures
         checks["data_quality"] = "ok" if not failures else "error"
         if failures:
             logger.warning("health_check_data_quality_failed", failures=failures)
     except Exception as exc:  # noqa: BLE001
         logger.warning("health_check_data_quality_probe_failed", error=str(exc))
         checks["data_quality"] = "error"
+        data_quality_failures = ["data_quality_probe_failed"]
 
     # ── Redis ─────────────────────────────────────────────────────────────
     try:
@@ -188,6 +203,10 @@ async def _run_health_checks() -> dict[str, str]:
         logger.warning("health_check_stream_processor_failed", error=str(exc))
         checks["stream_processor"] = "error"
 
+    if data_quality_failures:
+        checks["data_quality_cutoff"] = "blocked"
+    else:
+        checks["data_quality_cutoff"] = "ok"
     return checks
 
 
@@ -200,11 +219,21 @@ async def health_live():
 async def health_ready():
     """Aggregate readiness probe that checks all critical dependencies."""
     checks = await _run_health_checks()
-    overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
+    readiness_values = {
+        k: v for k, v in checks.items()
+        if k not in {"data_quality", "data_quality_cutoff"}
+    }
+    overall = "ok" if all(v == "ok" for v in readiness_values.values()) else "degraded"
+    cutoff_blocked = checks.get("data_quality_cutoff") == "blocked"
+    cutoff_reasons: list[str] = []
+    if checks.get("data_quality") != "ok":
+        cutoff_reasons.append("data_quality")
     return JSONResponse(
         {
             "status": overall,
             "checks": checks,
+            "release_cutoff_blocked": cutoff_blocked,
+            "release_cutoff_reasons": cutoff_reasons,
             "timestamp": datetime.now(UTC).isoformat(),
         },
         status_code=200 if overall == "ok" else 503,

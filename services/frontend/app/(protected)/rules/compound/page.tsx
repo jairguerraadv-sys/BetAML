@@ -114,7 +114,7 @@ export default function CompoundRulesPage() {
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
-                Score Mínimo (0–1)
+                Risco mínimo para disparar (0–1)
               </label>
               <input
                 type="number"
@@ -237,7 +237,7 @@ export default function CompoundRulesPage() {
           <thead className="bg-gray-50 text-xs font-semibold uppercase text-gray-500 dark:bg-gray-800 dark:text-gray-400">
             <tr>
               <th className="px-4 py-3 text-left">Nome</th>
-              <th className="px-4 py-3 text-left">Score Mín.</th>
+              <th className="px-4 py-3 text-left">Risco mín.</th>
               <th className="px-4 py-3 text-left">Condições</th>
               <th className="px-4 py-3 text-left">Lógica</th>
               <th className="px-4 py-3 text-left">Status</th>

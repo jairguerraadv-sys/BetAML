@@ -13,7 +13,6 @@ import hashlib
 import os
 import re
 import secrets
-import string
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Optional
@@ -75,7 +74,7 @@ _ASSIGNABLE_ROLES = frozenset({
 # Mapeamento de role (legado ou novo) → lista de novos papéis para coluna `roles`
 _LEGACY_TO_ROLES: dict[str, list[str]] = {
     "AML_ANALYST":      [AppRole.ANALISTA],
-    "AUDITOR":          [AppRole.ANALISTA],
+    "AUDITOR":          [],
     "ADMIN":            [AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.ANALISTA],
     AppRole.ANALISTA:   [AppRole.ANALISTA],
     AppRole.GESTOR:     [AppRole.GESTOR, AppRole.ANALISTA],
@@ -196,6 +195,10 @@ class AdminOnboardingImportOut(BaseModel):
     file_name: Optional[str] = None
 
 
+class ResetPasswordIn(BaseModel):
+    new_password: str = Field(..., min_length=8, max_length=256)
+
+
 class AMLKPIOut(BaseModel):
     generated_at: datetime
     window_days: int
@@ -239,6 +242,7 @@ class OpsSummaryOut(BaseModel):
     ws_last_backpressure_at: datetime | None = None
     stale_models: int
     oldest_model_age_days: int | None = None
+    alerts: list[OperationalAlertOut] = Field(default_factory=list)
 
 
 class AutoCasePolicyOut(BaseModel):
@@ -836,7 +840,7 @@ async def get_scoring_config(
 async def update_scoring_config(
     body: ScoringConfigUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
+    current_user = Depends(require_role_any([AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     row = (await db.execute(
         select(ScoringConfig).where(ScoringConfig.tenant_id == current_user.tenant_id)
@@ -846,6 +850,18 @@ async def update_scoring_config(
 
     if body.ml_challenger_pct is not None and not (0 <= body.ml_challenger_pct <= 100):
         raise HTTPException(422, "ml_challenger_pct deve estar entre 0 e 100")
+    if body.auto_case_threshold is not None and not (0 <= body.auto_case_threshold <= 1):
+        raise HTTPException(422, "auto_case_threshold deve estar entre 0 e 1")
+    if body.risk_band_low_threshold is not None and not (0 <= body.risk_band_low_threshold <= 1):
+        raise HTTPException(422, "risk_band_low_threshold deve estar entre 0 e 1")
+    if body.risk_band_high_threshold is not None and not (0 <= body.risk_band_high_threshold <= 1):
+        raise HTTPException(422, "risk_band_high_threshold deve estar entre 0 e 1")
+    low_band = body.risk_band_low_threshold if body.risk_band_low_threshold is not None else row.risk_band_low_threshold
+    high_band = body.risk_band_high_threshold if body.risk_band_high_threshold is not None else row.risk_band_high_threshold
+    if float(low_band) >= float(high_band):
+        raise HTTPException(422, "risk_band_low_threshold deve ser menor que risk_band_high_threshold")
+    if body.income_volume_ratio_threshold is not None and body.income_volume_ratio_threshold <= 0:
+        raise HTTPException(422, "income_volume_ratio_threshold deve ser maior que zero")
 
     for field, val in body.model_dump(exclude_none=True).items():
         setattr(row, field, val)
@@ -861,7 +877,7 @@ async def update_scoring_config(
 async def preview_scoring_config(
     body: ScoringPreviewIn,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
+    current_user = Depends(require_role_any([AppRole.GESTOR, AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """Simula quantos alertas teriam sido gerados nos últimos 30d com a config proposta."""
     from datetime import timedelta
@@ -1583,13 +1599,13 @@ async def deactivate_user(
 @router.post("/admin/users/{user_id}/reset-password", tags=["admin"])
 async def reset_user_password(
     user_id: str,
+    body: ResetPasswordIn,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_role_any([AppRole.ADMIN_TECNICO, AppRole.SUPER_ADMIN])),
 ):
     """
-    Gera uma nova senha aleatória (16 chars) para o usuário e a salva como hash.
-    Retorna a senha em plaintext UMA ÚNICA VEZ — não é possível recuperá-la depois.
-    Sem envio de e-mail em MVP.
+    Redefine a senha do usuário com valor informado pelo operador autorizado.
+    Não retorna senha em plaintext para evitar vazamento em logs/telemetria.
     """
     target = (await db.execute(
         select(User).where(
@@ -1600,10 +1616,7 @@ async def reset_user_password(
     if target is None:
         raise HTTPException(404, "Usuário não encontrado")
 
-    # Gera senha aleatória segura de 16 caracteres (letras + dígitos + símbolos)
-    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-    new_password = "".join(secrets.choice(alphabet) for _ in range(16))
-    target.password_hash = hash_password(new_password)
+    target.password_hash = hash_password(body.new_password)
 
     await _write_audit(
         db, current_user.tenant_id, current_user.id,
@@ -1616,8 +1629,7 @@ async def reset_user_password(
     return {
         "user_id": user_id,
         "username": target.username,
-        "new_password": new_password,
-        "message": "Senha redefinida. Guarde-a agora — não será exibida novamente.",
+        "message": "Senha redefinida com sucesso.",
     }
 
 
@@ -1655,7 +1667,8 @@ async def generate_invite(
         by=current_user.id,
     )
     return {
-        "invite_link": f"/accept-invite?token={token}",
+        # Usa fragmento para evitar expor token em logs de proxy/servidor.
+        "invite_link": f"/accept-invite#token={token}",
         "email": body.email,
         "role": body.role,
         "expires_in_hours": 48,

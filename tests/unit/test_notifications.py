@@ -48,7 +48,7 @@ def _make_notification(notif_id: str = "notif-1", is_read: bool = False):
     return n
 
 
-def _make_db_with_notifs(notifs: list, scalar_one_value=None):
+def _make_db_with_notifs(notifs: list, scalar_one_value=None, total: int | None = None):
     db = AsyncMock()
     db.__aenter__ = AsyncMock(return_value=db)
     db.__aexit__ = AsyncMock(return_value=False)
@@ -61,6 +61,7 @@ def _make_db_with_notifs(notifs: list, scalar_one_value=None):
         call_count[0] += 1
         result.scalars.return_value.all.return_value = notifs
         result.scalar_one_or_none.return_value = scalar_one_value
+        result.scalar_one.return_value = len(notifs) if total is None else total
         return result
 
     db.execute = _execute
@@ -80,7 +81,7 @@ async def test_list_notifications_returns_all():
     db = _make_db_with_notifs(notifs)
     user = _make_user()
 
-    result = await list_notifications(unread_only=False, limit=50, db=db, current_user=user)
+    result = await list_notifications(unread_only=False, limit=50, offset=0, envelope=False, db=db, current_user=user)
 
     assert len(result) == 3
 
@@ -94,7 +95,7 @@ async def test_list_notifications_unread_only_passes_filter():
     db = _make_db_with_notifs(unread)
     user = _make_user()
 
-    result = await list_notifications(unread_only=True, limit=50, db=db, current_user=user)
+    result = await list_notifications(unread_only=True, limit=50, offset=0, envelope=False, db=db, current_user=user)
 
     assert len(result) == 1
     assert result[0].is_read is False
@@ -108,9 +109,27 @@ async def test_list_notifications_empty():
     db = _make_db_with_notifs([])
     user = _make_user()
 
-    result = await list_notifications(unread_only=False, limit=50, db=db, current_user=user)
+    result = await list_notifications(unread_only=False, limit=50, offset=0, envelope=False, db=db, current_user=user)
 
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_list_notifications_supports_optional_envelope():
+    """GET /notifications?envelope=true returns {items,total,limit,offset}."""
+    from routers.notifications import list_notifications
+
+    notifs = [_make_notification("n-1")]
+    db = _make_db_with_notifs(notifs, total=1)
+    user = _make_user()
+
+    result = await list_notifications(unread_only=False, limit=10, offset=0, envelope=True, db=db, current_user=user)
+
+    assert isinstance(result, dict)
+    assert isinstance(result.get("items"), list)
+    assert result.get("total") == 1
+    assert result.get("limit") == 10
+    assert result.get("offset") == 0
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-import { API_URL, apiLoginAsAdmin, authHeaders, login, loginAsAdmin } from './helpers';
+import { apiLoginAsAdmin, createAlertViaApi, login, loginAsAdmin } from './helpers';
 
 test.describe('Notifications', () => {
   test('user can load notifications and switch filters', async ({ page }) => {
@@ -16,26 +16,13 @@ test.describe('Notifications', () => {
   });
 
   test('notificação COAF_DEADLINE_WARNING exibe badge laranja de prazo', async ({ page, request }) => {
-    // Injetar uma notificação COAF_DEADLINE_WARNING via API (endpoint admin interno)
     const adminSession = await apiLoginAsAdmin(request);
-
-    const response = await request.post(`${API_URL}/internal/e2e/notifications`, {
-      headers: authHeaders(adminSession.access_token),
-      data: {
-        type: 'COAF_DEADLINE_WARNING',
-        title: 'Prazo COAF se aproximando',
-        body: 'O caso possui prazo de 5 dias para comunicação regulatória.',
-        reference_type: 'Case',
-        reference_id: 'e2e-case-placeholder',
-      },
+    await createAlertViaApi(request, adminSession.access_token, {
+      alert_type: 'COAF_DEADLINE_WARNING',
+      title: 'Prazo COAF se aproximando',
+      description: 'O caso possui prazo de 5 dias para comunicação regulatória.',
+      severity: 'HIGH',
     });
-
-    // Se o endpoint de seed de notificações não existe, pular o teste de UI
-    if (response.status() === 404) {
-      test.skip();
-      return;
-    }
-    expect(response.ok()).toBeTruthy();
 
     await loginAsAdmin(page);
     await page.goto('/notifications');
@@ -47,23 +34,12 @@ test.describe('Notifications', () => {
 
   test('notificação COAF_DEADLINE_BREACH exibe badge vermelho de prazo vencido', async ({ page, request }) => {
     const adminSession = await apiLoginAsAdmin(request);
-
-    const response = await request.post(`${API_URL}/internal/e2e/notifications`, {
-      headers: authHeaders(adminSession.access_token),
-      data: {
-        type: 'COAF_DEADLINE_BREACH',
-        title: 'PRAZO COAF VENCIDO',
-        body: 'O prazo regulatório de comunicação ao COAF foi excedido.',
-        reference_type: 'Case',
-        reference_id: 'e2e-case-placeholder',
-      },
+    await createAlertViaApi(request, adminSession.access_token, {
+      alert_type: 'COAF_DEADLINE_BREACH',
+      title: 'PRAZO COAF VENCIDO',
+      description: 'O prazo regulatório de comunicação ao COAF foi excedido.',
+      severity: 'CRITICAL',
     });
-
-    if (response.status() === 404) {
-      test.skip();
-      return;
-    }
-    expect(response.ok()).toBeTruthy();
 
     await loginAsAdmin(page);
     await page.goto('/notifications');
@@ -75,16 +51,11 @@ test.describe('Notifications', () => {
 
   test('notificações COAF são filtradas corretamente no modo "não lidas"', async ({ page, request }) => {
     const adminSession = await apiLoginAsAdmin(request);
-
-    await request.post(`${API_URL}/internal/e2e/notifications`, {
-      headers: authHeaders(adminSession.access_token),
-      data: {
-        type: 'COAF_DEADLINE_WARNING',
-        title: 'Aviso COAF E2E Filter',
-        body: 'Teste de filtro.',
-        reference_type: 'Case',
-        reference_id: 'e2e-filter-test',
-      },
+    await createAlertViaApi(request, adminSession.access_token, {
+      alert_type: 'COAF_DEADLINE_WARNING',
+      title: 'Aviso COAF E2E Filter',
+      description: 'Teste de filtro.',
+      severity: 'HIGH',
     });
 
     await loginAsAdmin(page);

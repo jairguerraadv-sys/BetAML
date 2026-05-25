@@ -27,6 +27,15 @@ async def test_external_validation_provider_contract_exposes_runtime_configurati
     assert result.timeout_seconds >= 1.0
 
 
+def test_external_validation_request_defaults_to_configured_provider_when_omitted(monkeypatch):
+    import routers.external_validation as external_validation
+
+    monkeypatch.setattr(external_validation, "_VALIDATION_PROVIDER", "serasa")
+
+    assert external_validation.ExternalValidationRequestIn().provider is None
+    assert external_validation._resolve_effective_provider(None) == "serasa"
+
+
 @pytest.mark.asyncio
 async def test_history_filters_are_applied():
     from routers.external_validation import list_external_validation_history

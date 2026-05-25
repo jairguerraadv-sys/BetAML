@@ -21,6 +21,16 @@ Fechamento remoto final validado no branch atual (2026-05-11):
 - [artifacts/readiness/release-readiness-remote.txt](../artifacts/readiness/release-readiness-remote.txt): `release_readiness_remote=PASS`, run `25696032708`, head `74c9e14`
 - Workflow `Release Readiness` concluido em `success` para `main`, com `Run external validation integration smoke` e `Install Playwright deps` aprovados no GitHub Actions.
 
+Reexecucao incremental Onda C validada no branch atual (2026-05-23):
+- [artifacts/readiness/onda-c-contract-hardening-2026-05-23.md](../artifacts/readiness/onda-c-contract-hardening-2026-05-23.md): hardening WS ingest + contratos envelope + docs OpenAPI/ops atualizados.
+- Suites validadas nesta rodada: `6 passed` (WS ingest), `23 passed` (audit/notifications), `33 passed` (player-lists/rules), `5 passed` (envelope contracts), `28 passed` (new_endpoints), `79 passed` (pipeline).
+
+Fechamento readiness local desta rodada (2026-05-23):
+- [artifacts/readiness/preflight-2026-05-23.txt](../artifacts/readiness/preflight-2026-05-23.txt): `readiness_preflight=PASS`.
+- [artifacts/readiness/restore-drill-2026-05-23.txt](../artifacts/readiness/restore-drill-2026-05-23.txt): `restore_drill=PASS`.
+- [artifacts/readiness/restore-drill-2026-05-23-minio-download.txt](../artifacts/readiness/restore-drill-2026-05-23-minio-download.txt): `restore_drill=PASS` no fluxo nativo de download MinIO.
+- [artifacts/readiness/release-go-no-go-2026-05-23.txt](../artifacts/readiness/release-go-no-go-2026-05-23.txt): `release_go_no_go=GO`.
+
 ## 1. Mudancas e release
 
 - Versao atualizada no `CHANGELOG.md` com escopo e rollback plan.
@@ -68,12 +78,13 @@ Fechamento remoto final validado no branch atual (2026-05-11):
 ## 5.2 Criterios explicitos de go/no-go
 
 Go-live so pode seguir quando todos os itens abaixo estiverem verdes e anexados ao ticket/canal operacional:
-- `artifact-readiness-preflight` do workflow manual ou saida equivalente de `scripts/readiness_preflight.sh`.
+- `artifact-readiness-preflight` do workflow manual ou saida equivalente de `scripts/readiness_preflight.sh --require-real-provider --expected-provider <provider_real>`.
 - `artifact-readiness-go-no-go` com decisao final `release_go_no_go=GO`.
 - `artifact-readiness-capacity-smoke` do mesmo readiness com `load_slo=PASS` para o endpoint `POST /ingest/batch`.
 - Evidencia do ultimo backup valido com idade inferior a 24h.
 - Evidencia de restore drill em banco isolado, sem restore in-place em producao.
 - Revisao alvo de rollback definida (Helm revision ou tag de imagem) e responsavel on-call nomeado.
+- Provider externo/KYC real definido para o corte (mock não permitido em go/no-go formal).
 - Smoke funcional pos-deploy concluido sem 5xx persistente, backlog anormal ou falha de tenant isolation.
 
 No-go automatico:

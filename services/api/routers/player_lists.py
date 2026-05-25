@@ -76,15 +76,21 @@ async def _get_list_or_404(list_id: str, tenant_id: str, db: AsyncSession) -> Pl
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@router.get("", response_model=list[PlayerListOut])
+@router.get("")
 async def list_player_lists(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    envelope: bool = Query(False, description="Quando true, retorna {items,total,limit,offset}."),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """List all player watchlists for the current tenant."""
-    rows = (await db.execute(
-        select(PlayerList).where(PlayerList.tenant_id == current_user.tenant_id)
-    )).scalars().all()
+    envelope_enabled = envelope if isinstance(envelope, bool) else False
+    base_q = select(PlayerList).where(PlayerList.tenant_id == current_user.tenant_id)
+    if envelope_enabled:
+        rows = (await db.execute(base_q.limit(limit).offset(offset))).scalars().all()
+    else:
+        rows = (await db.execute(base_q)).scalars().all()
 
     out = []
     for row in rows:
@@ -94,7 +100,18 @@ async def list_player_lists(
         d = {c.name: getattr(row, c.name) for c in row.__table__.columns}
         d["entry_count"] = cnt
         out.append(d)
-    return out
+    if not envelope_enabled:
+        return out
+
+    total = (await db.execute(
+        select(func.count()).select_from(PlayerList).where(PlayerList.tenant_id == current_user.tenant_id)
+    )).scalar_one()
+    return {
+        "items": out,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/{list_id}", response_model=PlayerListOut)

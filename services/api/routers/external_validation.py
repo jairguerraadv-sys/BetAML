@@ -26,7 +26,7 @@ router = APIRouter(tags=["external_validation"])
 logger = structlog.get_logger(__name__)
 
 class ExternalValidationRequestIn(BaseModel):
-    provider: str = "mock_identity"
+    provider: str | None = None
     validation_type: str = "CPF_IDENTITY"
     payload: dict = Field(default_factory=dict)
 

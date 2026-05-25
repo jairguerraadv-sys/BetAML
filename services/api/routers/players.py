@@ -47,6 +47,7 @@ def _normalize_feature_history_row(columns: list[str], row: tuple) -> dict:
 async def list_players(
     limit: int = Query(50, le=200),
     offset: int = 0,
+    envelope: bool = Query(False, description="Quando true, retorna {items,total,limit,offset}."),
     current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN])),
     repo: PlayerRepository = Depends(get_player_repo),
     db: AsyncSession = Depends(get_db),
@@ -60,7 +61,7 @@ async def list_players(
             pii_accessed="cpf_masked"
         )
         await db.flush()
-    return [
+    items = [
         {
             "id": p.id,
             "external_player_id": p.external_player_id,
@@ -75,6 +76,16 @@ async def list_players(
         }
         for p in players
     ]
+    if not envelope:
+        return items
+
+    total = await repo.count_active(current_user.tenant_id)
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/players/{player_id}")
@@ -91,7 +102,7 @@ async def get_player(
         # LGPD Art. 18 — dados anonimizados; não retornar PII
         raise HTTPException(410, "Dados deste player foram anonimizados (LGPD Art. 18)")
     cpf_plain = decrypt_pii(p.cpf_encrypted)
-    # AUDITOR tem AppRole.ANALISTA no mapa legado (leitura), mas não acesso full PII
+    # AUDITOR is read-only and must not receive full PII.
     _legacy_role = getattr(current_user, "role", None)
     show_full = bool(
         get_effective_roles(current_user).intersection({AppRole.ANALISTA, AppRole.GESTOR})
@@ -822,7 +833,7 @@ async def get_player_network(
                 for src in pid_set:
                     all_edges.append({
                         "source": src, "target": p2,
-                        "edge_type": "payment_account",
+                        "edge_type": "bank_account",
                         "shared_hash_prefix": bh[:12] + "…",
                         "event_count": int(ev_cnt),
                         "weight": min(1.0, round(ev_cnt / 5, 2)),

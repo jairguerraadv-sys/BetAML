@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import {
-  BarChart as BarChartIcon,
+  FileBarChart2,
   AlertTriangle,
   FolderOpen,
   Clock,
@@ -31,7 +31,7 @@ import {
   Legend,
 } from 'recharts';
 
-import { fetchDashboardStats } from '@/lib/api';
+import { fetchDashboardStats, fetchReportFilingOverview } from '@/lib/api';
 import { useUser } from '@/contexts/UserContext';
 import { fmtDate, useLocale } from '@/lib/i18n';
 
@@ -153,6 +153,12 @@ export default function DashboardPage() {
     refetchInterval: 30_000,
   });
 
+  const { data: filingOverview } = useQuery({
+    queryKey: ['report-filing-overview'],
+    queryFn: fetchReportFilingOverview,
+    refetchInterval: 60_000,
+  });
+
   const severityTimeline = useMemo(
     () =>
       (stats?.alerts_by_severity_30d ?? []).map((row) => ({
@@ -166,6 +172,7 @@ export default function DashboardPage() {
   const ruleTypeData = stats?.alerts_by_rule_type ?? [];
   const heatmapPoints = stats?.alert_heatmap ?? [];
   const highFpRules = stats?.high_fp_rules ?? [];
+  const canOpenIngestJobs = Boolean(user?.roles?.includes('Operador_AdminTecnico'));
 
   return (
     <div className="space-y-6">
@@ -177,6 +184,12 @@ export default function DashboardPage() {
         <p className="mt-2 max-w-3xl text-sm text-cyan-50/80">
           Resumo da sua fila de trabalho — alertas abertos, SLA, risco e eventos do dia.
         </p>
+        {stats?.tenant_name && (
+          <span className="mt-3 inline-flex items-center rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 text-xs font-semibold text-cyan-200">
+            Operador: {stats.tenant_name}
+            {stats.tenant_slug && <span className="ml-1.5 font-normal opacity-70">({stats.tenant_slug})</span>}
+          </span>
+        )}
         {stats?.generated_at && (
           <p className="mt-4 text-xs text-cyan-100/70">
             Atualizado em {fmtDate(stats.generated_at, locale)}
@@ -221,7 +234,7 @@ export default function DashboardPage() {
           title="Eventos ingeridos hoje"
           value={(stats?.events_ingested_today ?? 0).toLocaleString(locale)}
           sub="processados desde 00:00"
-          href="/ingest-jobs"
+          href={canOpenIngestJobs ? '/ingest-jobs' : undefined}
           tone="success"
         />
       </div>
@@ -263,6 +276,33 @@ export default function DashboardPage() {
             </ul>
           )}
         </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <KpiCard
+          icon={FileBarChart2}
+          title="Comunicações pendentes"
+          value={filingOverview?.requires_submission_count ?? 0}
+          sub="FILE_SAR aguardando submissão"
+          href="/reports"
+          tone={(filingOverview?.requires_submission_count ?? 0) > 0 ? 'danger' : 'success'}
+        />
+        <KpiCard
+          icon={ShieldAlert}
+          title="Protocolos pendentes"
+          value={filingOverview?.missing_protocol_count ?? 0}
+          sub="FILED sem protocolo COAF"
+          href="/reports"
+          tone={(filingOverview?.missing_protocol_count ?? 0) > 0 ? 'warning' : 'success'}
+        />
+        <KpiCard
+          icon={Clock}
+          title="Pior pendência COAF"
+          value={filingOverview?.oldest_pending_submission_days != null ? `${filingOverview.oldest_pending_submission_days}d` : '—'}
+          sub="idade do pacote mais antigo"
+          href="/reports"
+          tone={(filingOverview?.deadline_state_counts?.BREACH ?? 0) > 0 ? 'danger' : 'default'}
+        />
       </div>
 
       {isLoading && (

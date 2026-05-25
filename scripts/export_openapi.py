@@ -16,7 +16,7 @@ def main() -> int:
 
     schema = app.openapi()
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text(json.dumps(schema, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    OUTPUT.write_text(json.dumps(schema, indent=4, ensure_ascii=True) + "\n", encoding="utf-8")
     print(f"OpenAPI exportado em {OUTPUT}")
     return 0
 

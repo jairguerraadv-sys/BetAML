@@ -184,6 +184,36 @@ async def test_list_rules_returns_rule_dicts():
     assert result[0]["status"] == "ACTIVE"
 
 
+@pytest.mark.asyncio
+async def test_list_rules_supports_optional_envelope():
+    from routers.rules import list_rules
+
+    rule = _make_rule()
+    db = _make_db()
+    calls = {"i": 0}
+
+    async def _execute(stmt):
+        res = MagicMock()
+        if calls["i"] == 0:
+            res.scalars.return_value.all.return_value = [rule]
+        else:
+            res.scalar_one.return_value = 3
+        calls["i"] += 1
+        return res
+
+    db.execute = _execute
+    user = _make_user()
+
+    result = await list_rules(limit=25, offset=0, envelope=True, current_user=user, db=db)
+
+    assert isinstance(result, dict)
+    assert result["total"] == 3
+    assert result["limit"] == 25
+    assert result["offset"] == 0
+    assert isinstance(result["items"], list)
+    assert result["items"][0]["id"] == "r1"
+
+
 # ---------------------------------------------------------------------------
 # create_rule
 # ---------------------------------------------------------------------------

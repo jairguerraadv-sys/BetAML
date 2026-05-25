@@ -207,7 +207,7 @@ class Settings(BaseSettings):
     # T10: chave de autenticação para chamadas internas ao ml_service
     ml_internal_api_key: str = ""
     # Contrato oficial de ingestão da plataforma.
-    # Valores aceitos: canonical-first | raw-first
+    # Valor aceito em runtime: canonical-first
     ingest_pipeline_mode: str = "canonical-first"
     rules_engine_metrics_url: str = "http://rules-engine:8002/metrics"
     stream_processor_metrics_url: str = "http://stream-processor:8003/metrics"
@@ -247,8 +247,8 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_ingest_pipeline_mode(cls, value):
         mode = str(value or "canonical-first").strip().lower()
-        if mode not in {"canonical-first", "raw-first"}:
-            raise ValueError("INGEST_PIPELINE_MODE must be 'canonical-first' or 'raw-first'")
+        if mode != "canonical-first":
+            raise ValueError("INGEST_PIPELINE_MODE must be 'canonical-first'")
         return mode
 
     @field_validator(

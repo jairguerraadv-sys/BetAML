@@ -146,7 +146,24 @@ CREATE TABLE IF NOT EXISTS public.schema_migrations (
 );
 SQL
 
-mapfile -t MIGRATIONS < <(find "${ROOT_DIR}/infra" -maxdepth 1 -type f -name 'migration_v*.sql' -print | sort -V)
+MIGRATIONS=()
+while IFS= read -r migration_path; do
+  [[ -n "${migration_path}" ]] && MIGRATIONS+=("${migration_path}")
+done < <(find "${ROOT_DIR}/infra" -maxdepth 1 -type f -name 'migration_v*.sql' -print | sort -V)
+
+sha256_file() {
+  local file_path="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file_path" | awk '{print $1}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file_path" | awk '{print $1}'
+    return
+  fi
+  echo "ERRO: sha256sum/shasum nao encontrado" >&2
+  exit 1
+}
 
 if [[ ${#MIGRATIONS[@]} -eq 0 ]]; then
   echo "Nenhuma migration encontrada em ${ROOT_DIR}/infra" >&2
@@ -157,7 +174,7 @@ echo "Aplicando migrations em ${PG_DB} (${PG_SERVICE})"
 for migration in "${MIGRATIONS[@]}"; do
   file="$(basename "${migration}")"
   version="$(version_from_filename "${file}")"
-  checksum="$(sha256sum "${migration}" | awk '{print $1}')"
+  checksum="$(sha256_file "${migration}")"
 
   existing_checksum="$(run_psql -tAc "SELECT checksum FROM public.schema_migrations WHERE filename = '${file}'" | tr -d '[:space:]')"
 

@@ -15,8 +15,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { canAccessRoute } from './lib/nav-config';
 
-// Rotas que NÃO requerem autenticação
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/_next', '/favicon.ico', '/forbidden'];
+// Rotas que NÃO requerem autenticação.
+// Inclui health técnico para monitoramento externo sem sessão de usuário.
+const PUBLIC_PATHS = [
+  '/login',
+  '/api/auth/login',
+  '/api/auth/logout',
+  '/api/auth/refresh',
+  '/api/health',
+  '/api-proxy/health',
+  '/_next',
+  '/favicon.ico',
+  '/forbidden',
+];
 
 // Deployment mode vem de variável de ambiente build-time
 const DEPLOYMENT_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE ?? 'saas';
@@ -51,6 +62,19 @@ export function middleware(req: NextRequest) {
     roles = JSON.parse(decodeURIComponent(rolesRaw)) as string[];
   } catch {
     // cookie inválido ou ausente
+  }
+
+  if (pathname === '/') {
+    const target = roles.includes('Operador_Analista') || roles.includes('Operador_Gestor')
+      ? '/dashboard'
+      : roles.includes('Operador_AdminTecnico')
+        ? '/admin'
+        : roles.includes('BetAML_SuperAdmin')
+          ? '/admin/onboarding'
+          : '/dashboard';
+    const url = req.nextUrl.clone();
+    url.pathname = target;
+    return NextResponse.redirect(url);
   }
 
   if (!canAccessRoute(pathname, roles)) {

@@ -4,6 +4,13 @@ import { useRouter } from 'next/navigation';
 import { login } from '@/lib/api';
 import { useUser } from '@/contexts/UserContext';
 
+function getPostLoginRoute(roles: string[]): string {
+  if (roles.includes('Operador_Analista') || roles.includes('Operador_Gestor')) return '/dashboard';
+  if (roles.includes('Operador_AdminTecnico')) return '/admin';
+  if (roles.includes('BetAML_SuperAdmin')) return '/admin/onboarding';
+  return '/dashboard';
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const { refresh } = useUser();
@@ -23,9 +30,9 @@ export default function LoginPage() {
       await login(username, password, tenantSlug);
 
       // Atualiza o contexto de usuário (sem persistir em localStorage).
-      await refresh();
-
-      router.push('/dashboard');
+      const me = await refresh();
+      const effectiveRoles = [...(me?.roles ?? []), ...(me?.role ? [me.role] : [])];
+      router.push(getPostLoginRoute(effectiveRoles));
     } catch {
       setError('Credenciais inválidas.');
     } finally {

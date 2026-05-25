@@ -90,6 +90,27 @@ curl -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8000/audit-logs?action=promote_model&pii_only=false"
 ```
 
+## Contratos de Listagem (modo legado + envelope)
+
+Os endpoints abaixo mantêm compatibilidade retroativa com retorno em lista direta.
+Quando enviado `envelope=true`, retornam o shape paginado:
+
+```json
+{
+  "items": [],
+  "total": 0,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+Endpoints suportados:
+
+- `GET /rules?envelope=true&limit=50&offset=0`
+- `GET /player-lists?envelope=true&limit=50&offset=0`
+- `GET /notifications?envelope=true&limit=50&offset=0`
+- `GET /audit-logs?envelope=true&limit=50&offset=0`
+
 ## Regeneracao
 
 ```bash

@@ -86,7 +86,7 @@ export default function CasesPage() {
       statusFilter === 'active'
         ? { limit: 200 }
         : statusFilter === 'closed'
-        ? { status: 'CLOSED', limit: 200 }
+        ? { status_filter: 'CLOSED', limit: 200 }
         : { limit: 500 },
     ),
   });

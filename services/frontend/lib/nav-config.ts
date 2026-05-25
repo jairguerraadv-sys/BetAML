@@ -46,7 +46,6 @@ const SECTION_PLD: NavSection = {
     { path: '/alerts',         label: 'Monitor de Alertas',    icon: 'AlertTriangle',   tooltip: 'Fila de alertas por prioridade para triagem' },
     { path: '/cases',          label: 'Casos em Investigação', icon: 'FolderOpen',      tooltip: 'Gerencie investigações em andamento' },
     { path: '/cases/examples', label: 'Casos Exemplares',      icon: 'BookOpen',        tooltip: 'Casos fictícios para treinamento e referência' },
-    { path: '/players',        label: 'Perfis de Apostadores', icon: 'Users',           tooltip: 'Apostadores monitorados do tenant' },
     { path: '/reports',        label: 'Relatórios PLD',        icon: 'FileBarChart2',   tooltip: 'Dossiês e relatórios para COAF/BACEN' },
     { path: '/notifications',  label: 'Notificações',          icon: 'Bell',            tooltip: 'Alertas enviados para você' },
   ],
@@ -54,13 +53,15 @@ const SECTION_PLD: NavSection = {
 
 /** Seção Gestão — exclusiva para Gestor */
 const SECTION_GESTAO: NavSection = {
-  label: 'Gestão de Risco',
+  label: 'Ajustes e Configurações',
   items: [
     { path: '/sensitivity',      label: 'Ajustes de Sensibilidade', icon: 'SlidersHorizontal', tooltip: 'Calibre o volume e precisão dos alertas' },
+    { path: '/players',          label: 'Perfis de Apostadores',    icon: 'Users',             tooltip: 'Apostadores monitorados do operador' },
     { path: '/rules',            label: 'Condições de Risco',       icon: 'BookOpen',           tooltip: 'Regras de detecção no tenant' },
-    { path: '/rules/builder',    label: 'Construtor de Regras',     icon: 'Wand2',              tooltip: 'Editor visual de condições de risco' },
-    { path: '/rules/compound',   label: 'Regras Compostas',         icon: 'GitBranch',          tooltip: 'Combinações de regras e macros' },
+    { path: '/rules/builder',    label: 'Construtor Visual',        icon: 'Wand2',              tooltip: 'Editor guiado de condições de risco' },
+    { path: '/rules/compound',   label: 'Condições Combinadas',     icon: 'GitBranch',          tooltip: 'Combinações de condições de risco' },
     { path: '/player-lists',     label: 'Listas de Monitoramento',  icon: 'List',               tooltip: 'Listas PEP, sanções e monitoramento especial' },
+    { path: '/feature-store',    label: 'Base de Indicadores',      icon: 'Database',           tooltip: 'Qualidade e histórico dos indicadores usados pelo sistema' },
   ],
 };
 
@@ -83,7 +84,7 @@ const SECTION_PLATAFORMA: NavSection = {
   items: [
     { path: '/admin',            label: 'Operadores (Tenants)',    icon: 'Building2',      tooltip: 'Gerencie operadores e recursos administrativos da plataforma' },
     { path: '/admin/onboarding', label: 'Onboarding de Operadores', icon: 'LayoutTemplate', tooltip: 'Fluxo guiado de criação e bootstrap de novos tenants' },
-    { path: '/model-registry',   label: 'Modelos Analíticos',      icon: 'BrainCircuit',   tooltip: 'Registry e versionamento de modelos analíticos' },
+    { path: '/model-registry',   label: 'Analisadores Automáticos', icon: 'BrainCircuit',   tooltip: 'Versionamento dos analisadores automáticos de risco' },
     { path: '/admin/ops',        label: 'Métricas da Plataforma',  icon: 'BarChart3',      tooltip: 'Saúde operacional e indicadores consolidados' },
     { path: '/audit-logs',       label: 'Auditoria da Plataforma', icon: 'ShieldCheck',    tooltip: 'Log de ações administrativas e trilha de auditoria' },
   ],
@@ -123,7 +124,7 @@ export const ROUTE_ROLES: Array<{ pattern: RegExp; roles: AppRole[] }> = [
   { pattern: /^\/admin\/ops/,   roles: ['Operador_Gestor', 'BetAML_SuperAdmin'] },
   { pattern: /^\/admin(?:\/)?$/, roles: ['Operador_AdminTecnico', 'BetAML_SuperAdmin'] },
   { pattern: /^\/settings/,      roles: ['Operador_AdminTecnico'] },
-  { pattern: /^\/audit-logs/,    roles: ['Operador_AdminTecnico', 'Operador_Gestor', 'Operador_Analista'] },
+  { pattern: /^\/audit-logs/,    roles: ['Operador_AdminTecnico', 'Operador_Gestor', 'Operador_Analista', 'BetAML_SuperAdmin'] },
   // Plataforma — apenas SuperAdmin
   { pattern: /^\/platform/,      roles: ['BetAML_SuperAdmin'] },
   { pattern: /^\/model-registry/,roles: ['Operador_Gestor', 'Operador_AdminTecnico', 'BetAML_SuperAdmin'] },

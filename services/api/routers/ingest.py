@@ -39,7 +39,12 @@ from libs.connectors import (
 )
 from libs.mapping import MappingEngine, get_default_mapping, validate_canonical_ingest_payload
 from models import IngestError, IngestJob, MappingConfig, ScoringConfig, SystemFlag, User
-from utils import get_producer, redis_rate_limit, sanitize_sensitive_payload
+from utils import (
+    get_producer,
+    redact_sensitive_payload_for_storage,
+    redis_rate_limit,
+    sanitize_sensitive_payload,
+)
 
 try:
     from minio import Minio
@@ -68,6 +73,14 @@ _INGEST_CONTRACT_INFO = Info(
 )
 
 _INGEST_WS_RUNTIME: dict[str, dict[str, Any]] = {}
+
+
+def _stored_raw_payload(value: Any) -> str:
+    return redact_sensitive_payload_for_storage(value)
+
+
+def _error_sample_row(line: int | None, reason: str, raw: Any) -> dict[str, Any]:
+    return {"line": line, "reason": reason, "raw": sanitize_sensitive_payload(raw)}
 
 
 def _ensure_ws_runtime(tenant_id: str) -> dict[str, Any]:
@@ -222,7 +235,7 @@ def _current_ingest_contract() -> IngestContractOut:
     # O runtime atual oficializa canonical-first: API valida/aplica mapping e publica em canonical.*
     # As trilhas raw.* permanecem como tópicos de entrada legada/backfill controlado.
     return IngestContractOut(
-        pipeline_mode=settings.ingest_pipeline_mode,
+        pipeline_mode="canonical-first",
         official_path="api_ingest_to_canonical_topics",
         source_topics=[
             "canonical.players",
@@ -662,7 +675,7 @@ async def ingest_event(
             tenant_id=principal.tenant_id,
             source_system=body.source_system,
             entity_type="TRANSACTION",
-            raw_payload=json.dumps(body.payload, ensure_ascii=False, default=str),
+            raw_payload=_stored_raw_payload(body.payload),
             error_reason="PAYMENT_METHOD_NOT_ALLOWED",
             error_detail={
                 "method": "CARD_CREDIT",
@@ -761,7 +774,7 @@ async def ingest_batch(
                 tenant_id=principal.tenant_id,
                 source_system=body.source_system,
                 entity_type="TRANSACTION",
-                raw_payload=json.dumps(body.payload, ensure_ascii=False, default=str),
+                raw_payload=_stored_raw_payload(body.payload),
                 error_reason="PAYMENT_METHOD_NOT_ALLOWED",
                 error_detail={
                     "method": "CARD_CREDIT",
@@ -975,14 +988,14 @@ async def ingest_epsilon_webhook(
             reason = err.get("reason", "webhook_validation_error") if isinstance(err, dict) else str(err)
             raw_payload = err.get("raw", body.decode("utf-8", errors="replace")[:300]) if isinstance(err, dict) else body.decode("utf-8", errors="replace")[:300]
             line_number = err.get("line") if isinstance(err, dict) else None
-            error_rows.append({"line": line_number, "reason": reason, "raw": raw_payload})
+            error_rows.append(_error_sample_row(line_number, reason, raw_payload))
             db.add(
                     IngestError(
                         tenant_id=principal.tenant_id,
                         ingest_job_id=job_pk,
                         source_system="ConnectorEpsilon",
                         entity_type="TRANSACTION",
-                        raw_payload=str(raw_payload),
+                        raw_payload=_stored_raw_payload(raw_payload),
                     error_reason=reason,
                     error_detail={"channel": "webhook", "connector": "epsilon", "line": line_number},
                     line_number=line_number,
@@ -1011,14 +1024,14 @@ async def ingest_epsilon_webhook(
         except Exception as exc:  # noqa: BLE001
             failed += 1
             reason = f"mapping_failed: {exc}"
-            error_rows.append({"line": None, "reason": reason, "raw": rec})
+            error_rows.append(_error_sample_row(None, reason, rec))
             db.add(
                 IngestError(
                     tenant_id=principal.tenant_id,
                     ingest_job_id=job_pk,
                     source_system="ConnectorEpsilon",
                     entity_type="TRANSACTION",
-                    raw_payload=json.dumps(rec, ensure_ascii=False),
+                    raw_payload=_stored_raw_payload(rec),
                     error_reason=reason,
                     error_detail={
                         "channel": "webhook",
@@ -1054,14 +1067,14 @@ async def ingest_epsilon_webhook(
             )
             if not ok:
                 failed += 1
-                error_rows.append({"line": None, "reason": "publish_failed_after_retries", "raw": rec})
+                error_rows.append(_error_sample_row(None, "publish_failed_after_retries", rec))
                 db.add(
                     IngestError(
                         tenant_id=principal.tenant_id,
                         ingest_job_id=job_pk,
                         source_system="ConnectorEpsilon",
                         entity_type="TRANSACTION",
-                        raw_payload=json.dumps(rec, ensure_ascii=False),
+                        raw_payload=_stored_raw_payload(rec),
                         error_reason="publish_failed_after_retries",
                         error_detail={"channel": "webhook", "connector": "epsilon"},
                         resolved=False,
@@ -1615,6 +1628,13 @@ async def ingest_websocket(websocket: WebSocket):
             await websocket.send_json({"error": "inactive_user"})
             await websocket.close(code=1008)
             return
+
+        # Hardening multi-tenant: impede replay cross-tenant com token adulterado/antigo.
+        if str(user.tenant_id) != str(tenant_id):
+            await websocket.send_json({"error": "tenant_mismatch"})
+            await websocket.close(code=1008)
+            return
+
         if user.role not in {"ADMIN", "AML_ANALYST"}:
             await websocket.send_json({"error": "insufficient_role"})
             await websocket.close(code=1008)
@@ -1813,14 +1833,14 @@ async def parse_connector_payload(
         except Exception as exc:  # noqa: BLE001
             failed += 1
             reason = f"mapping_failed: {exc}"
-            error_rows.append({"line": None, "reason": reason, "raw": rec})
+            error_rows.append(_error_sample_row(None, reason, rec))
             db.add(
                 IngestError(
                     tenant_id=current_user.tenant_id,
                     ingest_job_id=job_pk,
                     source_system=source_system,
                     entity_type=entity_type,
-                    raw_payload=json.dumps(rec, ensure_ascii=False),
+                    raw_payload=_stored_raw_payload(rec),
                     error_reason=reason,
                     error_detail={"connector": name, "stage": "mapping", "mapping_config_id": effective_mapping_id},
                     resolved=False,
@@ -1833,14 +1853,14 @@ async def parse_connector_payload(
             failed += 1
             validation_errors = payload_validation.get("validation_errors") or ["payload incompatível com schema canônico"]
             reason = f"validation_failed: {'; '.join(str(error) for error in validation_errors)}"
-            error_rows.append({"line": None, "reason": reason, "raw": rec})
+            error_rows.append(_error_sample_row(None, reason, rec))
             db.add(
                 IngestError(
                     tenant_id=current_user.tenant_id,
                     ingest_job_id=job_pk,
                     source_system=source_system,
                     entity_type=entity_type,
-                    raw_payload=json.dumps(rec, ensure_ascii=False),
+                    raw_payload=_stored_raw_payload(rec),
                     error_reason=reason,
                     error_detail={"connector": name, "stage": "validation", "mapping_config_id": effective_mapping_id},
                     resolved=False,
@@ -1872,7 +1892,7 @@ async def parse_connector_payload(
             )
             if not ok:
                 failed += 1
-                error_rows.append({"line": None, "reason": "publish_failed_after_retries", "raw": rec})
+                error_rows.append(_error_sample_row(None, "publish_failed_after_retries", rec))
                 continue
         accepted += 1
 
@@ -1881,14 +1901,14 @@ async def parse_connector_payload(
         reason = err.get("reason", "parse_error") if isinstance(err, dict) else str(err)
         raw_payload = err.get("raw", "") if isinstance(err, dict) else ""
         line_number = err.get("line") if isinstance(err, dict) else None
-        error_rows.append({"line": line_number, "reason": reason, "raw": raw_payload})
+        error_rows.append(_error_sample_row(line_number, reason, raw_payload))
         db.add(
             IngestError(
                 tenant_id=current_user.tenant_id,
                 ingest_job_id=job_pk,
                 source_system=source_system,
                 entity_type=entity_type,
-                raw_payload=str(raw_payload),
+                raw_payload=_stored_raw_payload(raw_payload),
                 error_reason=reason,
                 error_detail={"line": line_number, "connector": name},
                 line_number=line_number,

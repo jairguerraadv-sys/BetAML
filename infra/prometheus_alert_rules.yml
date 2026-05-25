@@ -99,8 +99,8 @@ groups:
       - alert: KafkaConsumerLagHigh
         expr: |
           sum by (group, topic) (
-            vectorized_kafka_consumer_group_committed_offset - on(topic, partition)
-            vectorized_kafka_log_end_offset
+            vectorized_kafka_log_end_offset - on(topic, partition)
+            vectorized_kafka_consumer_group_committed_offset
           ) > 1000
         for: 5m
         labels:

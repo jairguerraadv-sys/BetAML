@@ -35,6 +35,8 @@ class Tenant(Base):
     # plan_tier define os multiplicadores de rate limit:
     #   starter → 0.5×   standard → 1×   professional → 2×   enterprise → 5×
     plan_tier            = Column(String(20), nullable=False, default="standard")
+    webhook_url          = Column(String(512), nullable=True, default=None)
+    webhook_secret       = Column(String(128), nullable=True, default=None)
     created_at           = Column(DateTime(timezone=True), server_default=func.now())
     updated_at           = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -358,6 +360,7 @@ class Alert(Base):
     ml_weight        = Column(Numeric(4, 3), default=0.4)
     network_weight   = Column(Numeric(4, 3), default=0.2)
     source_event_id  = Column(Text)
+    game_type        = Column(String(30))   # vertical: SPORTSBOOK, CASINO_LIVE, SLOT, BINGO, etc.
     case_id          = Column(UUID(as_uuid=False), ForeignKey("cases.id", use_alter=True, name="fk_alerts_case"))
     # GAP-R3: rastreabilidade de proveniência para alertas gerados via backfill/reprocess
     ingest_mode      = Column(String(20), nullable=False, default="incremental")
@@ -622,7 +625,7 @@ class ExternalValidationRequest(Base):
     id                  = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
     tenant_id           = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     player_id           = Column(UUID(as_uuid=False), ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
-    provider            = Column(String(40), nullable=False, default="mock_identity")
+    provider            = Column(String(40), nullable=False)
     validation_type     = Column(String(40), nullable=False, default="CPF_IDENTITY")
     status              = Column(String(20), nullable=False, default="PENDING")  # PENDING/COMPLETED/FAILED
     request_payload     = Column(JSONB, nullable=False, default={})
@@ -647,6 +650,14 @@ class SystemFlag(Base):
     updated_by = Column(UUID(as_uuid=False), ForeignKey("users.id"))
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    @property
+    def key(self) -> str:
+        return f"{self.tenant_id}:{self.flag_name}"
+
+    @property
+    def value(self):
+        return self.flag_value
 
 
 # ── Eventos de Negócio (OLTP) ─────────────────────────────────────────────────
