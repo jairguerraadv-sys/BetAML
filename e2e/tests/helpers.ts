@@ -456,6 +456,39 @@ export async function createAlertViaApi(
   };
 }
 
+export async function createNotificationViaApi(
+  request: APIRequestContext,
+  token: string,
+  overrides?: Partial<{
+    type: string;
+    title: string;
+    body: string;
+    reference_type: string;
+    reference_id: string;
+    user_id: string;
+  }>,
+) {
+  const response = await request.post(`${API_URL}/internal/e2e/notifications`, {
+    headers: authHeaders(token),
+    data: {
+      type: overrides?.type ?? 'COAF_DEADLINE_WARNING',
+      title: overrides?.title ?? `E2E Notification ${Date.now()}`,
+      body: overrides?.body ?? 'Notificação criada automaticamente pela suíte E2E',
+      reference_type: overrides?.reference_type,
+      reference_id: overrides?.reference_id,
+      user_id: overrides?.user_id,
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+  return (await response.json()) as {
+    id: string;
+    user_id: string;
+    type: string;
+    title: string;
+    body: string;
+  };
+}
+
 export async function createIngestJobViaApi(request: APIRequestContext, token: string, fileName?: string) {
   const csvName = fileName ?? `e2e-ingest-${Date.now()}.csv`;
   const csv = [

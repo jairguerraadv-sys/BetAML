@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import require_roles
 from config import settings
 from database import get_db
-from models import Alert, Player, User
+from models import Alert, Notification, Player, User
 from utils import write_audit
 
 logger = structlog.get_logger(__name__)
@@ -114,6 +114,64 @@ async def create_e2e_alert(
             "severity": alert.severity,
             "status": alert.status,
             "case_id": alert.case_id,
+        },
+    )
+
+
+class E2ENotificationCreateIn(BaseModel):
+    type: str = "COAF_DEADLINE_WARNING"
+    title: str = Field(default_factory=lambda: f"E2E Notification {uuid.uuid4().hex[:8]}")
+    body: str | None = "Notificação criada pela suíte E2E"
+    reference_type: str | None = None
+    reference_id: str | None = None
+    user_id: str | None = None
+
+
+@router.post(
+    "/e2e/notifications",
+    status_code=status.HTTP_201_CREATED,
+    include_in_schema=False,
+    summary="Create deterministic notification fixture for E2E suites",
+)
+async def create_e2e_notification(
+    body: E2ENotificationCreateIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "SUPER_ADMIN")),
+) -> JSONResponse:
+    _ensure_internal_e2e_enabled()
+
+    target_user_id = body.user_id if body.user_id else str(current_user.id)
+
+    notification = Notification(
+        tenant_id=current_user.tenant_id,
+        user_id=target_user_id,
+        type=body.type,
+        title=body.title,
+        body=body.body,
+        reference_type=body.reference_type,
+        reference_id=body.reference_id,
+        is_read=False,
+    )
+    db.add(notification)
+    await db.flush()
+    await write_audit(
+        db,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+        action="CREATE_E2E_NOTIFICATION",
+        entity_type="Notification",
+        entity_id=notification.id,
+        after={"title": notification.title, "type": notification.type},
+    )
+    await db.commit()
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "id": str(notification.id),
+            "user_id": str(notification.user_id),
+            "type": notification.type,
+            "title": notification.title,
+            "body": notification.body,
         },
     )
 

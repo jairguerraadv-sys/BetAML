@@ -61,7 +61,7 @@ test.describe('Cases', () => {
     await page.getByRole('button', { name: /gerar dossiê/i }).click();
 
     await expect(page.getByText(/relatório gerado com sucesso/i)).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByRole('heading', { name: /histórico de reportpackages/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /histórico de dossiês/i })).toBeVisible();
   });
 
   test('case detail can request a narrative suggestion', async ({ page, request }) => {

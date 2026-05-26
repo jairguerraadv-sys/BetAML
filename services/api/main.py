@@ -169,29 +169,45 @@ app.add_middleware(MaintenanceModeMiddleware)
 app.add_middleware(RequestIDMiddleware)
 
 # ─── Middleware: propaga tenant_id para RLS do Postgres ───────────────────────
-@app.middleware("http")
-async def set_rls_tenant_middleware(request: Request, call_next):
-    from jose import jwt as _jwt, JWTError
-    request.state.user_role = None
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
+# Pure ASGI middleware — avoids BaseHTTPMiddleware's call_next incompatibility
+# with prometheus_fastapi_instrumentator's send_wrapper (RuntimeError: No response returned.)
+class _TenantRLSMiddleware:
+    __slots__ = ("app",)
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+
+        from jose import jwt as _jwt, JWTError
+        from starlette.requests import Request as _Request
+
+        request = _Request(scope)
+        request.state.user_role = None
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            try:
+                payload = _jwt.decode(
+                    auth_header[7:], settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+                )
+                tid = payload.get("tenant_id")
+                role = payload.get("role")
+                if tid:
+                    current_tenant_id.set(tid)
+                if role:
+                    request.state.user_role = role
+            except JWTError:
+                pass
         try:
-            payload = _jwt.decode(
-                auth_header[7:], settings.jwt_secret, algorithms=[settings.jwt_algorithm]
-            )
-            tid = payload.get("tenant_id")
-            role = payload.get("role")
-            if tid:
-                current_tenant_id.set(tid)
-            if role:
-                request.state.user_role = role
-        except JWTError:
-            pass  # token inválido — get_current_user rejeitará na rota
-    try:
-        response = await call_next(request)
-    finally:
-        current_tenant_id.set(None)  # evita vazamento entre requests no mesmo worker
-    return response
+            await self.app(scope, receive, send)
+        finally:
+            current_tenant_id.set(None)
+
+
+app.add_middleware(_TenantRLSMiddleware)
 
 
 # ─── Prometheus metrics ───────────────────────────

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-import { apiLoginAsAdmin, createAlertViaApi, login, loginAsAdmin } from './helpers';
+import { apiLoginAsAdmin, createNotificationViaApi, login, loginAsAdmin } from './helpers';
 
 test.describe('Notifications', () => {
   test('user can load notifications and switch filters', async ({ page }) => {
@@ -17,11 +17,10 @@ test.describe('Notifications', () => {
 
   test('notificação COAF_DEADLINE_WARNING exibe badge laranja de prazo', async ({ page, request }) => {
     const adminSession = await apiLoginAsAdmin(request);
-    await createAlertViaApi(request, adminSession.access_token, {
-      alert_type: 'COAF_DEADLINE_WARNING',
+    await createNotificationViaApi(request, adminSession.access_token, {
+      type: 'COAF_DEADLINE_WARNING',
       title: 'Prazo COAF se aproximando',
-      description: 'O caso possui prazo de 5 dias para comunicação regulatória.',
-      severity: 'HIGH',
+      body: 'O caso possui prazo de 5 dias para comunicação regulatória.',
     });
 
     await loginAsAdmin(page);
@@ -34,11 +33,10 @@ test.describe('Notifications', () => {
 
   test('notificação COAF_DEADLINE_BREACH exibe badge vermelho de prazo vencido', async ({ page, request }) => {
     const adminSession = await apiLoginAsAdmin(request);
-    await createAlertViaApi(request, adminSession.access_token, {
-      alert_type: 'COAF_DEADLINE_BREACH',
+    await createNotificationViaApi(request, adminSession.access_token, {
+      type: 'COAF_DEADLINE_BREACH',
       title: 'PRAZO COAF VENCIDO',
-      description: 'O prazo regulatório de comunicação ao COAF foi excedido.',
-      severity: 'CRITICAL',
+      body: 'O prazo regulatório de comunicação ao COAF foi excedido.',
     });
 
     await loginAsAdmin(page);
@@ -51,11 +49,10 @@ test.describe('Notifications', () => {
 
   test('notificações COAF são filtradas corretamente no modo "não lidas"', async ({ page, request }) => {
     const adminSession = await apiLoginAsAdmin(request);
-    await createAlertViaApi(request, adminSession.access_token, {
-      alert_type: 'COAF_DEADLINE_WARNING',
+    await createNotificationViaApi(request, adminSession.access_token, {
+      type: 'COAF_DEADLINE_WARNING',
       title: 'Aviso COAF E2E Filter',
-      description: 'Teste de filtro.',
-      severity: 'HIGH',
+      body: 'Teste de filtro.',
     });
 
     await loginAsAdmin(page);

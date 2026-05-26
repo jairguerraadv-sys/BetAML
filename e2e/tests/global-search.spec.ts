@@ -16,7 +16,7 @@ test.describe('Global Search', () => {
     });
 
     await loginAsAdmin(page);
-    await page.goto('/dashboard');
+    await page.goto('/dashboard', { waitUntil: 'networkidle' });
 
     await page.getByRole('button', { name: /abrir busca global/i }).click();
     await expect(page.getByLabel(/buscar cpf, nome, caso ou alerta/i)).toBeVisible();
@@ -27,6 +27,8 @@ test.describe('Global Search', () => {
     const result = page.getByRole('option', { name: new RegExp(query, 'i') });
     await expect(result).toBeVisible({ timeout: 10_000 });
 
+    // Use ArrowDown to focus the first result, then Enter to navigate
+    await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
     await page.waitForURL(`**/cases/${createdCase.id}`, { timeout: 10_000 });
     await expect(page.getByRole('heading', { name: new RegExp(query, 'i') })).toBeVisible();

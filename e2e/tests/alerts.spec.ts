@@ -28,7 +28,7 @@ test.describe('Alerts', () => {
     await page.goto(`/alerts/${alert.id}`);
     await expect(page.getByRole('heading', { name: new RegExp(alert.title ?? 'alerta', 'i') })).toBeVisible();
 
-    await page.getByRole('button', { name: /triagem/i }).click();
+    await page.getByRole('button', { name: /registrar avaliação/i }).click();
     await page.getByLabel(/disposição da triagem/i).selectOption('FALSE_POSITIVE');
     await page.getByLabel(/observação da triagem/i).fill('Triagem automatizada via Playwright');
     await page.getByRole('button', { name: /confirmar triagem/i }).click();
@@ -65,14 +65,14 @@ test.describe('Alerts', () => {
     await expect(page.getByRole('heading', { name: new RegExp(alert.title ?? 'alerta', 'i') })).toBeVisible();
 
     await page.locator('select').first().selectOption('FALSE_POSITIVE');
-    await page.getByPlaceholder(/nota opcional para feedback do modelo/i).fill('Feedback de qualidade via Playwright');
-    await page.getByRole('button', { name: /aplicar label/i }).click();
+    await page.getByPlaceholder(/nota opcional para calibrar futuras detecções/i).fill('Feedback de qualidade via Playwright');
+    await page.getByRole('button', { name: /salvar qualidade/i }).click();
 
     await expect(page.getByText(/label atualizado com sucesso/i)).toBeVisible({ timeout: 10_000 });
 
     page.once('dialog', (dialog) => dialog.accept());
-    await page.getByRole('button', { name: /fechar alerta/i }).click();
+    await page.getByRole('button', { name: /descartar alerta/i }).click();
 
-    await expect(page.getByText('CLOSED')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/fechado/i)).toBeVisible({ timeout: 10_000 });
   });
 });

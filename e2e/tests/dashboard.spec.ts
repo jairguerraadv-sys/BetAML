@@ -12,7 +12,7 @@ test.describe('Dashboard', () => {
     await expect(page.getByRole('link', { name: /^em investigação\b/i })).toBeVisible();
     await expect(page.getByRole('link', { name: /^próximos do sla\b/i })).toBeVisible();
     await expect(page.getByRole('link', { name: /^jogadores alto risco\b/i })).toBeVisible();
-    await expect(page.getByRole('link', { name: /^eventos ingeridos hoje\b/i })).toBeVisible();
+    await expect(page.getByText(/^eventos ingeridos hoje$/i)).toBeVisible();
   });
 
   test('KPI values are numeric', async ({ page }) => {
