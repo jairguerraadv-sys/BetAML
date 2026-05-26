@@ -78,14 +78,15 @@ def _pii_redact_processor(logger, method, event_dict):  # noqa: ARG001
     return event_dict
 
 
+structlog.configure(
     processors=[
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         _pii_redact_processor,
-    structlog.dev.ConsoleRenderer()
-    if settings.environment in {"development", "test"}
-    else structlog.processors.JSONRenderer(),
+        structlog.dev.ConsoleRenderer()
+        if settings.environment in {"development", "test"}
+        else structlog.processors.JSONRenderer(),
     ],
     wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
     logger_factory=structlog.PrintLoggerFactory(),
