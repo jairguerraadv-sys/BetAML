@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Search, X, FileText, AlertTriangle, Users } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useLocale } from '@/lib/i18n';
+import { useGlossary } from '@/lib/use-glossary';
 
 interface SearchResult {
   type: 'player' | 'case' | 'alert';
@@ -31,6 +32,7 @@ const TYPE_LABELS = { player: 'Jogador', case: 'Caso', alert: 'Alerta' };
 export default function GlobalSearch() {
   const router = useRouter();
   const [locale] = useLocale();
+  const { translate } = useGlossary();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -76,21 +78,21 @@ export default function GlobalSearch() {
           type: 'player' as const,
           id: p.id,
           label: p.name || p.external_id,
-          sublabel: `${p.risk_band} · ${p.external_id}${p.cpf_masked ? ` · ${p.cpf_masked}` : ''}`,
+          sublabel: `${translate.riskBand(p.risk_band)} · ${p.external_id}${p.cpf_masked ? ` · ${p.cpf_masked}` : ''}`,
           href: `/players/${p.id}`,
         })),
         ...data.cases.map((c) => ({
           type: 'case' as const,
           id: c.id,
           label: c.reference_number,
-          sublabel: `${c.status} · ${c.title}`,
+          sublabel: `${translate.caseStatus(c.status)} · ${c.title}`,
           href: `/cases/${c.id}`,
         })),
         ...data.alerts.map((a) => ({
           type: 'alert' as const,
           id: a.id,
-          label: a.alert_type,
-          sublabel: `${a.severity} · ${a.id.slice(0, 8)}`,
+          label: translate.alertType(a.alert_type),
+          sublabel: `${translate.severity(a.severity)} · ${a.id.slice(0, 8)}`,
           href: `/alerts/${a.id}`,
         })),
       ];
