@@ -73,6 +73,50 @@ function CaseStatusBadge({ status }: { status: string }) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Mapas locais para componentes que não usam hooks
+const STATUS_PT: Record<string, string> = {
+  OPEN: 'Aberto',
+  INVESTIGATING: 'Em investigação',
+  PENDING_REVIEW: 'Aguardando revisão',
+  PENDING_APPROVAL: 'Aguardando aprovação',
+  IN_REVIEW: 'Em revisão',
+  UNDER_REVIEW: 'Em revisão',
+  CLOSED: 'Encerrado',
+  RESOLVED: 'Resolvido',
+  REPORTED: 'Reportado',
+  ARCHIVED: 'Arquivado',
+};
+
+const STATUS_CLS: Record<string, string> = {
+  OPEN: 'bg-blue-100 text-blue-700',
+  INVESTIGATING: 'bg-indigo-100 text-indigo-700',
+  IN_PROGRESS: 'bg-indigo-100 text-indigo-700',
+  PENDING_REVIEW: 'bg-purple-100 text-purple-700',
+  CLOSED: 'bg-gray-100 text-gray-500',
+  REPORTED: 'bg-green-100 text-green-700',
+};
+
+const SEV_LABEL: Record<string, string> = {
+  CRITICAL: 'Crítica',
+  HIGH: 'Alta',
+  MEDIUM: 'Média',
+  LOW: 'Baixa',
+};
+
+const SEV_CLS: Record<string, string> = {
+  CRITICAL: 'bg-red-100 text-red-700 border-red-200',
+  HIGH: 'bg-orange-100 text-orange-700 border-orange-200',
+  MEDIUM: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+  LOW: 'bg-green-100 text-green-700 border-green-200',
+};
+
+const RISK_BAND_CLS: Record<string, string> = {
+  HIGH: 'bg-red-100 text-red-700',
+  MEDIUM: 'bg-yellow-100 text-yellow-700',
+  LOW: 'bg-green-100 text-green-700',
+};
+
 const ECON_CLS: Record<string, string> = {
   GREEN:   'bg-green-100 text-green-700',
   YELLOW:  'bg-yellow-100 text-yellow-700',

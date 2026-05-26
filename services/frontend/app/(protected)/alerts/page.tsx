@@ -179,6 +179,13 @@ function AlertCard({
 }
 
 // ── Contador por prioridade ────────────────────────────────────────────────────
+const SEV_PT_LABELS: Record<string, string> = {
+  CRITICAL: 'Crítica',
+  HIGH: 'Alta',
+  MEDIUM: 'Média',
+  LOW: 'Baixa',
+};
+
 function PriorityTab({
   sev, count, active, onClick,
 }: { sev: string; count: number; active: boolean; onClick: () => void }) {
@@ -195,7 +202,7 @@ function PriorityTab({
       onClick={onClick}
       className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${color}`}
     >
-      {sev === 'ALL' ? 'Todos' : SEV_PT[sev]} {count > 0 && <span className="ml-1">({count})</span>}
+      {sev === 'ALL' ? 'Todos' : SEV_PT_LABELS[sev]} {count > 0 && <span className="ml-1">({count})</span>}
     </button>
   );
 }
@@ -368,7 +375,7 @@ export default function AlertsPage() {
           <AlertTriangle size={32} className="mx-auto mb-3 text-gray-300" />
           <p className="text-sm font-medium text-gray-400">Nenhum alerta nessa fila</p>
           <p className="mt-1 text-xs text-gray-400">
-            {sevFilter !== 'ALL' ? `Sem alertas ${SEV_PT[sevFilter]?.toLowerCase()} no momento.` : 'Tudo em dia!'}
+            {sevFilter !== 'ALL' ? `Sem alertas ${SEV_PT_LABELS[sevFilter]?.toLowerCase()} no momento.` : 'Tudo em dia!'}
           </p>
         </div>
       ) : (
