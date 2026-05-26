@@ -20,36 +20,7 @@ import { useUser } from '@/contexts/UserContext';
 import OnboardingTour from './OnboardingTour';
 
 // ── Jornadas principais do analista ──────────────────────────────────────────
-const MAIN_NAV = [
-  { href: '/dashboard',   label: 'Painel Diário',          icon: LayoutDashboard, tooltip: 'Resumo do dia: alertas, casos pendentes e KPIs' },
-  { href: '/alerts',      label: 'Monitor de Alertas',     icon: AlertTriangle,   tooltip: 'Fila de alertas por prioridade para triagem' },
-  { href: '/cases',       label: 'Casos em Investigação',  icon: FolderOpen,      tooltip: 'Gerencie investigações em andamento' },
-  { href: '/cases/examples', label: 'Casos Exemplares',    icon: BookOpen,        tooltip: 'Casos fictícios para treinamento e referência' },
-  { href: '/sensitivity', label: 'Ajustes de Sensibilidade', icon: SlidersHorizontal, tooltip: 'Calibre o volume e precisão dos alertas' },
-  { href: '/reports',     label: 'Relatórios Reguladores', icon: FileBarChart2,   tooltip: 'Gere dossiês e relatórios para COAF/BACEN' },
-  { href: '/notifications', label: 'Notificações',         icon: Bell,            tooltip: 'Alertas enviados para você' },
-];
-
-// ── Configurações avançadas — visíveis só para senior/admin ──────────────────
-const ADV_NAV = [
-  { href: '/rules/builder',  label: 'Construtor Visual',      icon: Wand2 },
-  { href: '/rules',          label: 'Condições de Risco',     icon: BookOpen },
-  { href: '/rules/compound', label: 'Condições Combinadas',   icon: GitBranch },
-  { href: '/players',        label: 'Perfis de Apostadores',     icon: Users },
-  { href: '/player-lists',   label: 'Listas de Monitoramento',icon: List },
-  { href: '/model-registry', label: 'Analisadores Automáticos', icon: BrainCircuit },
-  { href: '/feature-store',  label: 'Base de Indicadores', icon: Database },
-  { href: '/mappings',       label: 'Integração de Dados',        icon: Plug },
-  { href: '/ingest-jobs',    label: 'Envios de Dados',            icon: Activity },
-  { href: '/ingest-errors',  label: 'Quarentena de Erros',    icon: AlertOctagon },
-  { href: '/audit-logs',     label: 'Log de Auditoria',       icon: ScrollText },
-  { href: '/admin/ops',      label: 'Operações',              icon: Activity },
-  { href: '/settings',       label: 'Parâmetros de Sistema',  icon: Settings },
-  { href: '/admin',          label: 'Administração',          icon: Shield },
-];
-
-// Roles que veem o menu avançado
-const ADVANCED_ROLES = ['ADMIN', 'SUPER_ADMIN'];
+// NOTA: A navegação é gerenciada por nav-config.ts
 
 /** Mapeia nome de ícone (string de nav-config) para componente Lucide. */
 const ICON_MAP: Record<string, React.ElementType> = {
