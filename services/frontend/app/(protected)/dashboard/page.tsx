@@ -283,7 +283,7 @@ export default function DashboardPage() {
           icon={FileBarChart2}
           title="Comunicações pendentes"
           value={filingOverview?.requires_submission_count ?? 0}
-          sub="FILE_SAR aguardando submissão"
+          sub="COS aguardando submissão ao Coaf"
           href="/reports"
           tone={(filingOverview?.requires_submission_count ?? 0) > 0 ? 'danger' : 'success'}
         />

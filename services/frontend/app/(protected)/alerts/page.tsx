@@ -4,19 +4,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { fetchAlerts, triageAlert, Alert, type AlertTriageDisposition } from '@/lib/api';
 import { alertReasonBullets, humanAlertType } from '@/lib/pld-language';
+import { useGlossary } from '@/lib/use-glossary';
+import { TRIAGE_DISPOSITION_LABELS } from '@/lib/glossary';
 import {
   AlertTriangle, Eye, FolderPlus, X, ChevronRight,
   Clock, Filter, RefreshCw, HelpCircle, Glasses, Search,
 } from 'lucide-react';
 import ContextualHelp from '@/components/ContextualHelp';
-
-// ── Tradução de termos técnicos ────────────────────────────────────────────────
-const SEV_PT: Record<string, string> = {
-  CRITICAL: 'Crítico',
-  HIGH:     'Alto',
-  MEDIUM:   'Médio',
-  LOW:      'Baixo',
-};
 
 const SEV_STYLES: Record<string, { card: string; badge: string; dot: string }> = {
   CRITICAL: {
@@ -41,22 +35,17 @@ const SEV_STYLES: Record<string, { card: string; badge: string; dot: string }> =
   },
 };
 
-const DISP_PT: Record<string, string> = {
-  FALSE_POSITIVE: 'Falso positivo (descartar)',
-  CONFIRMED:      'Confirmado como risco real',
-  IN_REVIEW:      'Em análise (manter em aberto)',
-};
-
 function SeverityDot({ sev }: { sev: string }) {
   const style = SEV_STYLES[sev] ?? SEV_STYLES.LOW;
   return <span className={`inline-block h-2.5 w-2.5 rounded-full ${style.dot}`} />;
 }
 
 function SevBadge({ sev }: { sev: string }) {
+  const { translate } = useGlossary();
   const style = SEV_STYLES[sev] ?? SEV_STYLES.LOW;
   return (
     <span className={`rounded px-2 py-0.5 text-xs ${style.badge}`}>
-      {SEV_PT[sev] ?? sev}
+      {translate.severity(sev)}
     </span>
   );
 }
@@ -426,7 +415,7 @@ export default function AlertsPage() {
 
             <label className="mt-3 mb-1 block text-sm font-medium text-gray-700">O que você concluiu?</label>
             <div className="space-y-2 mb-3">
-              {(Object.entries(DISP_PT) as Array<[AlertTriageDisposition, string]>).map(([val, label]) => (
+              {(Object.entries(TRIAGE_DISPOSITION_LABELS) as Array<[AlertTriageDisposition, string]>).map(([val, label]) => (
                 <label
                   key={val}
                   className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors text-sm ${

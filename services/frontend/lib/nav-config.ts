@@ -42,12 +42,12 @@ export interface NavSection {
 const SECTION_PLD: NavSection = {
   label: 'Meu Trabalho',
   items: [
-    { path: '/dashboard',      label: 'Painel Diário',         icon: 'LayoutDashboard', tooltip: 'Resumo do dia: alertas, casos pendentes e KPIs' },
-    { path: '/alerts',         label: 'Monitor de Alertas',    icon: 'AlertTriangle',   tooltip: 'Fila de alertas por prioridade para triagem' },
-    { path: '/cases',          label: 'Casos em Investigação', icon: 'FolderOpen',      tooltip: 'Gerencie investigações em andamento' },
-    { path: '/cases/examples', label: 'Casos Exemplares',      icon: 'BookOpen',        tooltip: 'Casos fictícios para treinamento e referência' },
-    { path: '/reports',        label: 'Relatórios PLD',        icon: 'FileBarChart2',   tooltip: 'Dossiês e relatórios para COAF/BACEN' },
-    { path: '/notifications',  label: 'Notificações',          icon: 'Bell',            tooltip: 'Alertas enviados para você' },
+    { path: '/dashboard',      label: 'Painel Diário',      icon: 'LayoutDashboard', tooltip: 'Resumo do dia: alertas, casos pendentes e KPIs' },
+    { path: '/alerts',         label: 'Alertas',            icon: 'AlertTriangle',   tooltip: 'Fila de alertas para triagem por prioridade' },
+    { path: '/cases',          label: 'Casos',              icon: 'FolderOpen',      tooltip: 'Investigações em andamento e histórico' },
+    { path: '/cases/examples', label: 'Casos Exemplares',   icon: 'BookOpen',        tooltip: 'Casos fictícios para treinamento e referência' },
+    { path: '/reports',        label: 'Comunicação ao Coaf',icon: 'FileBarChart2',   tooltip: 'Dossiês COS e relatórios regulatórios' },
+    { path: '/notifications',  label: 'Notificações',       icon: 'Bell',            tooltip: 'Alertas e avisos enviados para você' },
   ],
 };
 

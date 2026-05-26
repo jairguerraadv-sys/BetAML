@@ -3,12 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchPlayers, Player } from '@/lib/api';
 import DataTable from '@/components/DataTable';
 import { useRouter } from 'next/navigation';
-
-const BAND_COLOR: Record<string, string> = {
-  HIGH:   'bg-red-100 text-red-700',
-  MEDIUM: 'bg-yellow-100 text-yellow-700',
-  LOW:    'bg-green-100 text-green-700',
-};
+import { RiskBandBadge } from '@/components/badges';
 
 export default function PlayersPage() {
   const router = useRouter();
@@ -41,11 +36,7 @@ export default function PlayersPage() {
       accessorKey: 'risk_band' as keyof Player,
       cell: (v: unknown) => {
         const band = (v as string) ?? 'LOW';
-        return (
-          <span className={`rounded px-2 py-0.5 text-xs font-bold ${BAND_COLOR[band] ?? 'bg-gray-100 text-gray-600'}`}>
-            {band}
-          </span>
-        );
+        return <RiskBandBadge riskBand={band} size="sm" />;
       },
     },
   ];

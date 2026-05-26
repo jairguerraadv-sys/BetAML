@@ -9,10 +9,12 @@ import {
 } from '@/lib/api';
 import { Bell, CheckCheck, Filter } from 'lucide-react';
 import { useLocale, fmtDate } from '@/lib/i18n';
+import { useGlossary } from '@/lib/use-glossary';
 
 export default function NotificationsPage() {
   const qc = useQueryClient();
   const [locale] = useLocale();
+  const { translate } = useGlossary();
   const [mode, setMode] = useState<'all' | 'unread'>('all');
 
   const { data: items = [], isLoading } = useQuery({
@@ -127,7 +129,7 @@ export default function NotificationsPage() {
                         ? 'bg-orange-100 text-orange-700'
                         : 'bg-gray-100 text-gray-600'
                   }`}>
-                    {n.type}
+                    {translate.notificationType(n.type)}
                   </span>
                   {n.reference_type && (
                     <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">

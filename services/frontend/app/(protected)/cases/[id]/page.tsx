@@ -41,40 +41,38 @@ import {
   Search, ShieldCheck,
 } from 'lucide-react';
 import PlayerNetworkGraph from '@/components/PlayerNetworkGraph';
+import { useGlossary } from '@/lib/use-glossary';
+import { CASE_DECISION_LABELS, CASE_STATUS_LABELS, SEVERITY_COLORS, RISK_BAND_COLORS } from '@/lib/glossary';
+
+// ── Badge Helpers (usando glossário centralizado) ────────────────────────────
+function SeverityBadge({ severity }: { severity: string }) {
+  const { translate, style } = useGlossary();
+  return (
+    <span className={`rounded border px-2 py-0.5 font-semibold ${style.severityColor(severity)}`}>
+      {translate.severity(severity)}
+    </span>
+  );
+}
+
+function CaseStatusBadge({ status }: { status: string }) {
+  const { translate } = useGlossary();
+  const colors: Record<string, string> = {
+    OPEN: 'bg-blue-100 text-blue-700',
+    INVESTIGATING: 'bg-indigo-100 text-indigo-700',
+    PENDING_REVIEW: 'bg-purple-100 text-purple-700',
+    IN_REVIEW: 'bg-purple-100 text-purple-700',
+    UNDER_REVIEW: 'bg-purple-100 text-purple-700',
+    CLOSED: 'bg-gray-100 text-gray-500',
+    REPORTED: 'bg-green-100 text-green-700',
+  };
+  return (
+    <span className={`rounded px-2 py-0.5 text-xs font-semibold ${colors[status] ?? 'bg-gray-100 text-gray-600'}`}>
+      {translate.caseStatus(status)}
+    </span>
+  );
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const SEV_LABEL: Record<string, string> = {
-  CRITICAL: 'Crítico', HIGH: 'Alto', MEDIUM: 'Médio', LOW: 'Baixo',
-};
-const SEV_CLS: Record<string, string> = {
-  CRITICAL: 'bg-red-100 text-red-700 border-red-200',
-  HIGH:     'bg-orange-100 text-orange-700 border-orange-200',
-  MEDIUM:   'bg-yellow-100 text-yellow-700 border-yellow-200',
-  LOW:      'bg-green-100 text-green-700 border-green-200',
-};
-const STATUS_CLS: Record<string, string> = {
-  OPEN:           'bg-blue-100 text-blue-700',
-  INVESTIGATING:  'bg-indigo-100 text-indigo-700',
-  PENDING_REVIEW: 'bg-purple-100 text-purple-700',
-  IN_REVIEW:      'bg-purple-100 text-purple-700',    // legacy
-  UNDER_REVIEW:   'bg-purple-100 text-purple-700',    // legacy
-  CLOSED:         'bg-gray-100 text-gray-500',
-  REPORTED:       'bg-green-100 text-green-700',
-};
-const RISK_BAND_CLS: Record<string, string> = {
-  HIGH:   'bg-red-100 text-red-700',
-  MEDIUM: 'bg-yellow-100 text-yellow-700',
-  LOW:    'bg-green-100 text-green-700',
-};
-const STATUS_PT: Record<string, string> = {
-  OPEN:           'Aberto',
-  INVESTIGATING:  'Investigando',
-  PENDING_REVIEW: 'Aguarda Revisão',
-  IN_REVIEW:      'Em revisão',
-  UNDER_REVIEW:   'Em revisão',
-  CLOSED:         'Encerrado',
-  REPORTED:       'Reportado ao COAF',
-};
 const ECON_CLS: Record<string, string> = {
   GREEN:   'bg-green-100 text-green-700',
   YELLOW:  'bg-yellow-100 text-yellow-700',
