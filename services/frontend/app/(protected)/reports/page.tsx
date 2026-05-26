@@ -25,16 +25,13 @@ import {
   ShieldCheck,
   Users,
 } from 'lucide-react';
+import { useGlossary } from '@/lib/use-glossary';
 
 const SEV_CLS: Record<string, string> = {
   CRITICAL: 'bg-red-100 text-red-700 border border-red-200',
   HIGH:     'bg-orange-100 text-orange-700 border border-orange-200',
   MEDIUM:   'bg-yellow-100 text-yellow-700 border border-yellow-200',
   LOW:      'bg-green-100 text-green-700 border border-green-200',
-};
-
-const SEV_PT: Record<string, string> = {
-  CRITICAL: 'Crítico', HIGH: 'Alto', MEDIUM: 'Médio', LOW: 'Baixo',
 };
 
 const FILING_STATE_CLS: Record<string, string> = {
@@ -52,7 +49,7 @@ const FILING_STATE_PT: Record<string, string> = {
 };
 
 const FILING_ACTION_PT: Record<string, string> = {
-  SUBMIT_REPORT: 'Submeter COAF',
+  SUBMIT_REPORT: 'Submeter ao Coaf',
   REGISTER_PROTOCOL: 'Registrar protocolo',
 };
 
@@ -61,6 +58,7 @@ function fmt(d: Date) {
 }
 
 export default function ReportsPage() {
+  const { translate } = useGlossary();
   const today = new Date();
   const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
   const qc = useQueryClient();
@@ -169,10 +167,10 @@ export default function ReportsPage() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-700">
-              <ShieldCheck size={16} className="text-gray-400" /> Governança de Filing COAF
+              <ShieldCheck size={16} className="text-gray-400" /> Governança de Comunicação ao Coaf
             </h2>
             <p className="mt-1 text-xs text-gray-500">
-              Pacotes FILE_SAR pendentes, prazos regulatórios e protocolos pós-submissão.
+              Dossiês COS pendentes, prazos regulatórios e protocolos pós-submissão.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -417,7 +415,7 @@ export default function ReportsPage() {
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             {(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const).map((sev) => (
               <div key={sev} className={`rounded-xl p-4 ${SEV_CLS[sev]}`}>
-                <p className="text-xs font-semibold opacity-70">{SEV_PT[sev]}</p>
+                <p className="text-xs font-semibold opacity-70">{translate.severity(sev)}</p>
                 <p className="mt-1 text-2xl font-bold">{report.alerts_by_severity[sev] ?? 0}</p>
                 <p className="text-xs opacity-60">alertas</p>
               </div>
@@ -439,7 +437,7 @@ export default function ReportsPage() {
               </p>
             </div>
             <div className="rounded-xl border border-gray-200 bg-white p-4">
-              <p className="text-xs text-gray-500">Comunicações COAF</p>
+              <p className="text-xs text-gray-500">COS comunicadas ao Coaf</p>
               <p className="mt-1 text-2xl font-bold text-gray-900">
                 {report.total_sar_reports.toLocaleString('pt-BR')}
               </p>
