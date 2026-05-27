@@ -16,11 +16,15 @@ fi
 cd "$ROOT_DIR"
 
 INCLUDE_REMAINDER=false
+CRITICAL_COVERAGE=false
 PASSTHROUGH_ARGS=()
 for arg in "$@"; do
   case "$arg" in
     --include-remainder)
       INCLUDE_REMAINDER=true
+      ;;
+    --critical-coverage)
+      CRITICAL_COVERAGE=true
       ;;
     *)
       PASSTHROUGH_ARGS+=("$arg")
@@ -31,19 +35,34 @@ done
 COMMON_ARGS=()
 COVERAGE_SOURCE_ARGS=()
 FINAL_ONLY_ARGS=()
-for arg in "${PASSTHROUGH_ARGS[@]}"; do
-  case "$arg" in
-    --cov=*)
-      COVERAGE_SOURCE_ARGS+=("$arg")
-      ;;
-    --cov-report=*|--cov-fail-under=*)
-      FINAL_ONLY_ARGS+=("$arg")
-      ;;
-    *)
-      COMMON_ARGS+=("$arg")
-      ;;
-  esac
-done
+if [[ "${#PASSTHROUGH_ARGS[@]}" -gt 0 ]]; then
+  for arg in "${PASSTHROUGH_ARGS[@]}"; do
+    case "$arg" in
+      --cov=*)
+        COVERAGE_SOURCE_ARGS+=("$arg")
+        ;;
+      --cov-report=*|--cov-fail-under=*)
+        FINAL_ONLY_ARGS+=("$arg")
+        ;;
+      *)
+        COMMON_ARGS+=("$arg")
+        ;;
+    esac
+  done
+fi
+
+CRITICAL_INCLUDE="services/api/auth.py,services/api/config.py,services/api/database.py,services/api/models.py,services/api/routers/auth.py,services/api/routers/audit.py,services/api/routers/ingest.py,services/api/routers/ml.py,services/api/routers/reports.py"
+
+if [[ "$CRITICAL_COVERAGE" == "true" ]]; then
+  if [[ "${#COVERAGE_SOURCE_ARGS[@]}" -eq 0 ]]; then
+    COVERAGE_SOURCE_ARGS+=("--cov=services/api")
+  fi
+  if [[ "${#FINAL_ONLY_ARGS[@]}" -eq 0 ]]; then
+    FINAL_ONLY_ARGS+=("--cov-report=term-missing")
+    FINAL_ONLY_ARGS+=("--cov-report=xml:coverage.xml")
+    FINAL_ONLY_ARGS+=("--cov-report=json:artifacts/coverage/critical-api-coverage.json")
+  fi
+fi
 
 BATCH_1=(
   tests/unit/test_cases.py
@@ -147,3 +166,13 @@ for i in "${!BATCHES[@]}"; do
   batch_label="$(printf '%s' "$batch_name" | tr '[:upper:]' '[:lower:]')"
   run_batch "$batch_label" "$append_coverage" "$is_final" "${batch_files[@]}"
 done
+
+if [[ "$CRITICAL_COVERAGE" == "true" ]]; then
+  echo "[critical-unit] enforcing critical API coverage >= 70%"
+  if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+    COVERAGE_CMD=("$ROOT_DIR/.venv/bin/python" -m coverage)
+  else
+    COVERAGE_CMD=(python -m coverage)
+  fi
+  "${COVERAGE_CMD[@]}" report --include="$CRITICAL_INCLUDE" --fail-under=70
+fi

@@ -100,11 +100,7 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           KAFKA_BOOTSTRAP_SERVERS: localhost:9092
         run: |
-          bash scripts/run_critical_unit_batches.sh --include-remainder -q --tb=short \
-            --cov=services/api \
-            --cov-report=term-missing \
-            --cov-report=xml:coverage.xml \
-            --cov-fail-under=40
+          bash scripts/run_critical_unit_batches.sh --critical-coverage --include-remainder -q --tb=short
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4

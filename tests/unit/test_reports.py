@@ -13,9 +13,11 @@ from __future__ import annotations
 import sys
 import os
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import BackgroundTasks, HTTPException
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../services/api"))
 
@@ -152,3 +154,110 @@ def test_reports_generate_monthly_requires_admin_analyst():
     assert "require_roles" in dep_repr or "get_current_user" not in dep_repr, (
         "POST /reports/monthly-summary should use require_roles('ADMIN','AML_ANALYST'), not bare get_current_user"
     )
+
+
+@pytest.mark.asyncio
+async def test_get_monthly_summary_rejects_invalid_date_format():
+    from routers.reports import get_monthly_summary
+
+    db = AsyncMock()
+    user = SimpleNamespace(id="u-1", tenant_id="tenant-1")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_monthly_summary(
+            date_from="2026/01/01",
+            date_to="2026-01-31",
+            db=db,
+            current_user=user,
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_get_monthly_summary_rejects_reversed_dates():
+    from routers.reports import get_monthly_summary
+
+    db = AsyncMock()
+    user = SimpleNamespace(id="u-1", tenant_id="tenant-1")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_monthly_summary(
+            date_from="2026-02-10",
+            date_to="2026-02-01",
+            db=db,
+            current_user=user,
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_get_monthly_summary_csv_returns_streaming_response():
+    from routers.reports import get_monthly_summary_csv
+
+    db = AsyncMock()
+    db.commit = AsyncMock()
+    user = SimpleNamespace(id="u-1", tenant_id="tenant-1")
+    fake_report = {
+        "period": {"from": "2026-01-01T00:00:00+00:00", "to": "2026-01-31T23:59:59+00:00"},
+        "generated_at": "2026-01-31T23:59:59+00:00",
+        "alerts_by_severity": {"CRITICAL": 1, "HIGH": 2, "MEDIUM": 3, "LOW": 4},
+        "cases_summary": {"open": 1, "investigating": 2, "closed": 3, "reported": 4},
+        "total_ingested_events": 10,
+        "total_alerts": 10,
+        "total_cases": 10,
+        "total_cases_opened": 1,
+        "total_cases_closed": 2,
+        "total_cases_reported": 3,
+        "total_communications_generated": 4,
+        "total_sar_reports": 5,
+        "false_positive_rate": 0.1,
+        "true_positive_rate": 90.0,
+        "top_rules_by_fires": [],
+        "top_players_by_risk": [],
+        "quality_metrics": {
+            "labeled_alerts": 10,
+            "true_positive_count": 9,
+            "false_positive_count": 1,
+            "unknown_count": 0,
+            "true_positive_rate": 90.0,
+            "false_positive_rate": 0.1,
+        },
+    }
+
+    with patch("routers.reports._build_monthly_report", new_callable=AsyncMock, return_value=fake_report), patch(
+        "routers.reports.write_audit", new_callable=AsyncMock
+    ):
+        response = await get_monthly_summary_csv(
+            date_from="2026-01-01",
+            date_to="2026-01-31",
+            db=db,
+            current_user=user,
+        )
+
+    assert response.media_type == "text/csv; charset=utf-8-sig"
+    assert "monthly_summary_2026-01-01_2026-01-31.csv" in response.headers["Content-Disposition"]
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_monthly_report_queues_background_task():
+    from routers.reports import MonthlyReportIn, generate_monthly_report
+
+    db = AsyncMock()
+    db.commit = AsyncMock()
+    tasks = BackgroundTasks()
+    user = SimpleNamespace(id="u-1", tenant_id="tenant-1")
+
+    with patch("routers.reports.write_audit", new_callable=AsyncMock):
+        response = await generate_monthly_report(
+            body=MonthlyReportIn(year=2026, month=3),
+            background_tasks=tasks,
+            db=db,
+            current_user=user,
+        )
+
+    assert response == {"status": "queued", "year": 2026, "month": 3}
+    assert len(tasks.tasks) == 1
+    db.commit.assert_awaited_once()
