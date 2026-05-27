@@ -669,6 +669,7 @@ class ModelRegistryOut(BaseModel):
     training_rows: Optional[int] = None
     feature_columns: list[str] = []
     metrics: dict = {}
+    trained_on_synthetic: bool = False
     artifact_path: Optional[str] = None
     artifact_uri: Optional[str] = None
     status: str
