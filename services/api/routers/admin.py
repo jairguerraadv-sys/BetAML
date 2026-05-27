@@ -850,6 +850,12 @@ async def update_scoring_config(
 
     if body.ml_challenger_pct is not None and not (0 <= body.ml_challenger_pct <= 100):
         raise HTTPException(422, "ml_challenger_pct deve estar entre 0 e 100")
+    if body.min_precision is not None and not (0 <= body.min_precision <= 1):
+        raise HTTPException(422, "min_precision deve estar entre 0 e 1")
+    if body.max_false_positive_rate is not None and not (0 <= body.max_false_positive_rate <= 1):
+        raise HTTPException(422, "max_false_positive_rate deve estar entre 0 e 1")
+    if body.min_recall is not None and not (0 <= body.min_recall <= 1):
+        raise HTTPException(422, "min_recall deve estar entre 0 e 1")
     if body.auto_case_threshold is not None and not (0 <= body.auto_case_threshold <= 1):
         raise HTTPException(422, "auto_case_threshold deve estar entre 0 e 1")
     if body.risk_band_low_threshold is not None and not (0 <= body.risk_band_low_threshold <= 1):

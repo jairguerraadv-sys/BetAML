@@ -9,7 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from libs.ml_governance import blocks_synthetic_model_promotion, is_synthetic_model
+from libs.ml_governance import (
+    blocks_synthetic_model_promotion,
+    evaluate_model_promotion_candidate,
+    is_synthetic_model,
+)
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -66,6 +70,76 @@ def test_is_synthetic_model_explicit_flag_precedence() -> None:
     assert is_synthetic_model({}, True) is True
     # Explicit false does not mask legacy marker (backward compatibility)
     assert is_synthetic_model({"synthetic_bootstrap": True}, False) is True
+
+
+def test_evaluate_model_promotion_candidate_blocks_threshold_breaches() -> None:
+    cfg = SimpleNamespace(
+        min_precision=0.8,
+        max_false_positive_rate=0.2,
+        min_recall=0.6,
+        require_manual_approval=True,
+    )
+    decision = evaluate_model_promotion_candidate(
+        metrics={"precision": 0.7, "false_positive_rate": 0.25, "recall": 0.5},
+        trained_on_synthetic=False,
+        scoring_config=cfg,
+        environment="production",
+    )
+
+    assert decision.allowed is False
+    assert "precision_below_threshold" in decision.reasons
+    assert "false_positive_rate_above_threshold" in decision.reasons
+    assert "recall_below_threshold" in decision.reasons
+
+
+def test_evaluate_model_promotion_candidate_reads_aliases() -> None:
+    cfg = SimpleNamespace(
+        min_precision=0.8,
+        max_false_positive_rate=0.2,
+        min_recall=0.6,
+        require_manual_approval=False,
+    )
+    decision = evaluate_model_promotion_candidate(
+        metrics={
+            "validation_precision": 0.81,
+            "fpr": 0.19,
+            "val_recall": 0.61,
+        },
+        trained_on_synthetic=False,
+        scoring_config=cfg,
+        environment="production",
+    )
+
+    assert decision.allowed is True
+    assert decision.metrics["precision"] == pytest.approx(0.81)
+    assert decision.metrics["false_positive_rate"] == pytest.approx(0.19)
+    assert decision.metrics["recall"] == pytest.approx(0.61)
+
+
+def test_evaluate_model_promotion_candidate_blocks_missing_metrics_in_strict_env() -> None:
+    cfg = SimpleNamespace(min_precision=0.8, max_false_positive_rate=0.2, min_recall=None)
+    decision = evaluate_model_promotion_candidate(
+        metrics={},
+        trained_on_synthetic=False,
+        scoring_config=cfg,
+        environment="staging",
+    )
+
+    assert decision.allowed is False
+    assert "missing_precision_metric" in decision.reasons
+    assert "missing_false_positive_rate_metric" in decision.reasons
+
+
+def test_evaluate_model_promotion_candidate_allows_missing_metrics_in_dev() -> None:
+    cfg = SimpleNamespace(min_precision=0.8, max_false_positive_rate=0.2, min_recall=None)
+    decision = evaluate_model_promotion_candidate(
+        metrics={},
+        trained_on_synthetic=False,
+        scoring_config=cfg,
+        environment="development",
+    )
+
+    assert decision.allowed is True
 
 
 class _FakeConn:
@@ -200,7 +274,9 @@ async def test_promote_model_blocks_synthetic_candidate_in_production() -> None:
     db = AsyncMock()
     find_result = MagicMock()
     find_result.scalar_one_or_none.return_value = model
-    db.execute = AsyncMock(return_value=find_result)
+    scoring_result = MagicMock()
+    scoring_result.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(side_effect=[find_result, scoring_result])
     db.commit = AsyncMock()
 
     with patch("routers.ml.settings.environment", "production"), patch(
@@ -212,14 +288,14 @@ async def test_promote_model_blocks_synthetic_candidate_in_production() -> None:
     assert exc.value.status_code == 422
     assert model.status == "challenger"
     assert model.is_active is False
-    # only SELECT by id, no archive update query
-    assert db.execute.await_count == 1
+    # select challenger + scoring config; sem update de archive
+    assert db.execute.await_count == 2
     audit_mock.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_promote_model_allows_non_synthetic_in_production() -> None:
-    from routers.ml import promote_model
+    from routers.ml import PromoteModelRequest, promote_model
 
     model = SimpleNamespace(
         id="model-y",
@@ -228,7 +304,7 @@ async def test_promote_model_allows_non_synthetic_in_production() -> None:
         is_challenger=True,
         is_active=False,
         model_type="ANOMALY",
-        metrics={"synthetic_bootstrap": False},
+        metrics={"synthetic_bootstrap": False, "precision": 0.91, "false_positive_rate": 0.08},
         trained_on_synthetic=False,
         champion_id="old",
         promoted_by=None,
@@ -239,14 +315,70 @@ async def test_promote_model_allows_non_synthetic_in_production() -> None:
     db = AsyncMock()
     find_result = MagicMock()
     find_result.scalar_one_or_none.return_value = model
-    db.execute = AsyncMock(side_effect=[find_result, MagicMock()])
+    scoring_cfg = SimpleNamespace(
+        min_precision=0.8,
+        max_false_positive_rate=0.2,
+        min_recall=None,
+        require_manual_approval=True,
+    )
+    scoring_result = MagicMock()
+    scoring_result.scalar_one_or_none.return_value = scoring_cfg
+    champion_result = MagicMock()
+    champion_result.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(side_effect=[find_result, scoring_result, champion_result, MagicMock()])
     db.commit = AsyncMock()
 
     with patch("routers.ml.settings.environment", "production"), patch(
         "routers.ml._write_audit", new_callable=AsyncMock
     ):
-        response = await promote_model("model-y", db=db, current_user=current_user)
+        response = await promote_model(
+            "model-y",
+            body=PromoteModelRequest(approval_reason="Aprovado apos revisao de qualidade"),
+            db=db,
+            current_user=current_user,
+        )
 
     assert response["status"] == "promoted"
     assert model.status == "champion"
     assert model.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_promote_model_blocks_without_approval_reason_when_required() -> None:
+    from routers.ml import promote_model
+
+    model = SimpleNamespace(
+        id="model-z",
+        tenant_id="tenant-1",
+        status="challenger",
+        is_challenger=True,
+        is_active=False,
+        model_type="ANOMALY",
+        metrics={"precision": 0.91, "false_positive_rate": 0.08},
+        trained_on_synthetic=False,
+    )
+    current_user = SimpleNamespace(id="user-1", tenant_id="tenant-1")
+    scoring_cfg = SimpleNamespace(
+        min_precision=0.8,
+        max_false_positive_rate=0.2,
+        min_recall=None,
+        require_manual_approval=True,
+    )
+
+    db = AsyncMock()
+    find_result = MagicMock()
+    find_result.scalar_one_or_none.return_value = model
+    scoring_result = MagicMock()
+    scoring_result.scalar_one_or_none.return_value = scoring_cfg
+    db.execute = AsyncMock(side_effect=[find_result, scoring_result])
+    db.commit = AsyncMock()
+
+    with patch("routers.ml.settings.environment", "production"), patch(
+        "routers.ml._write_audit", new_callable=AsyncMock
+    ) as audit_mock:
+        with pytest.raises(HTTPException) as exc:
+            await promote_model("model-z", db=db, current_user=current_user)
+
+    assert exc.value.status_code == 422
+    assert db.execute.await_count == 2
+    audit_mock.assert_awaited_once()
