@@ -38,6 +38,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
 
 from config import settings  # noqa: E402
+from ml_governance import (
+    blocks_synthetic_model_promotion,
+    is_synthetic_model,
+    sync_synthetic_metrics,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -481,6 +486,15 @@ async def retrain_isolation_forest() -> None:
                 )
 
             # De-promove champion anterior antes de promover o novo
+            synthetic_candidate = is_synthetic_model(training_metadata, None)
+            if is_champion and synthetic_candidate and blocks_synthetic_model_promotion(settings.environment):
+                logger.warning(
+                    "ml_champion_promotion_blocked_synthetic",
+                    model_type=model_type,
+                    environment=settings.environment,
+                )
+                is_champion = False
+
             if is_champion and current_champion:
                 current_champion.status = "archived"
                 db.add(current_champion)
@@ -496,7 +510,7 @@ async def retrain_isolation_forest() -> None:
                     artifact_uri=f"s3://{bucket}/{model_filename}",
                     training_rows=sample_pool_count,
                     feature_columns=FEATURE_COLUMNS,
-                    metrics={
+                    metrics=sync_synthetic_metrics({
                         "run_id": run_id,
                         "metrics_artifact_uri": f"s3://{bucket}/{metrics_filename}",
                         "precision": precision,
@@ -508,7 +522,8 @@ async def retrain_isolation_forest() -> None:
                         "validation_f1_score": f1,
                         "validation_auc_roc": auc_roc,
                         **training_metadata,
-                    },
+                    }, synthetic_candidate),
+                    trained_on_synthetic=synthetic_candidate,
                     status="champion" if is_champion else "STAGING",
                     is_challenger=False,
                     trained_at=datetime.now(UTC),
@@ -613,7 +628,11 @@ async def _train_structuring_detector_job() -> None:
                     artifact_uri=result["artifact_uri"],
                     training_rows=result["training_rows"],
                     feature_columns=result["feature_columns"],
-                    metrics=result["metrics"],
+                    metrics=sync_synthetic_metrics(
+                        result["metrics"],
+                        is_synthetic_model(result.get("metrics"), None),
+                    ),
+                    trained_on_synthetic=is_synthetic_model(result.get("metrics"), None),
                     status="STAGING",
                     trained_at=datetime.now(UTC),
                 )
@@ -701,7 +720,11 @@ async def _train_network_clustering_job() -> None:
                     artifact_uri=result["artifact_uri"],
                     training_rows=result["training_rows"],
                     feature_columns=result["feature_columns"],
-                    metrics=result["metrics"],
+                    metrics=sync_synthetic_metrics(
+                        result["metrics"],
+                        is_synthetic_model(result.get("metrics"), None),
+                    ),
+                    trained_on_synthetic=is_synthetic_model(result.get("metrics"), None),
                     status="champion",  # sempre champion (não é supervisionado)
                     trained_at=datetime.now(UTC),
                 )
@@ -783,7 +806,11 @@ async def _train_recurrence_estimator_job() -> None:
                     artifact_uri=result["artifact_uri"],
                     training_rows=result["training_rows"],
                     feature_columns=result["feature_columns"],
-                    metrics=result["metrics"],
+                    metrics=sync_synthetic_metrics(
+                        result["metrics"],
+                        is_synthetic_model(result.get("metrics"), None),
+                    ),
+                    trained_on_synthetic=is_synthetic_model(result.get("metrics"), None),
                     status="champion",  # sempre champion (é scoring, não classificação)
                     trained_at=datetime.now(UTC),
                 )
@@ -944,6 +971,14 @@ async def bootstrap_model_if_needed() -> None:
 
             artifact_uri = f"s3://{bucket}/{model_filename}"
             registry_tenant_id = await _resolve_registry_tenant_id(db)
+            synthetic_bootstrap = True
+            if blocks_synthetic_model_promotion(settings.environment):
+                logger.warning(
+                    "ml_bootstrap_active_blocked_synthetic",
+                    environment=str(settings.environment or "development").strip().lower(),
+                )
+                return
+
             if registry_tenant_id:
                 registry_entry = ModelRegistry(
                     tenant_id=registry_tenant_id,
@@ -954,13 +989,14 @@ async def bootstrap_model_if_needed() -> None:
                     artifact_uri=artifact_uri,
                     training_rows=n_samples,
                     feature_columns=FEATURE_COLUMNS,
-                    metrics={
+                    metrics=sync_synthetic_metrics({
                         "note": "Bootstrap sintético — substitua com treino real",
                         "contamination": 0.10,
                         "n_estimators": 50,
                         "training_samples": n_samples,
                         "synthetic": True,
-                    },
+                    }, synthetic_bootstrap),
+                    trained_on_synthetic=synthetic_bootstrap,
                     # "bootstrap" indica que não é um modelo produtivo;
                     # o ml_service deve reconhecer este status como "champion fallback".
                     status="bootstrap",

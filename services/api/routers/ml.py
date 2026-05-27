@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import AppRole, require_role_any
 from config import settings
 from database import get_db
+from libs.ml_governance import blocks_synthetic_model_promotion, is_synthetic_model
 from libs.models import Alert, AuditLog, ModelInferenceLog, ModelRegistry, ScoringConfig
 from libs.schemas import (
     ModelABMetricsOut,
@@ -528,6 +529,31 @@ async def promote_model(
         raise HTTPException(404, "Modelo não encontrado")
     if str(getattr(model, "status", "")) != "challenger" or not bool(getattr(model, "is_challenger", False)):
         raise HTTPException(409, "Somente challenger designado pode ser promovido")
+
+    synthetic_flag = is_synthetic_model(
+        getattr(model, "metrics", None),
+        getattr(model, "trained_on_synthetic", None),
+    )
+    if synthetic_flag and blocks_synthetic_model_promotion(settings.environment):
+        await _write_audit(
+            db,
+            current_user.tenant_id,
+            current_user.id,
+            "PROMOTE_MODEL_BLOCKED_SYNTHETIC",
+            "ModelRegistry",
+            model_id,
+            {
+                "model_type": model.model_type,
+                "environment": settings.environment,
+                "trained_on_synthetic": True,
+                "reason": "synthetic_model_promotion_blocked",
+            },
+        )
+        await db.commit()
+        raise HTTPException(
+            422,
+            "Synthetic bootstrap models cannot be promoted to active/champion outside development or test environments.",
+        )
 
     await db.execute(
         update(ModelRegistry).where(
