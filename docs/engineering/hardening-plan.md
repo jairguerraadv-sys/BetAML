@@ -186,15 +186,20 @@ Routers em `services/api/routers/`: `admin`, `alerts`, `audit`, `auth`, `cases`,
 ---
 
 ### PR-03 – `hardening/ml-no-synthetic-seed`
+**Status:** IMPLEMENTADO LOCALMENTE, validacao CI pendente.
 **Objetivo:** remover ou isolar bootstrap sintético do fluxo de treinamento.  
 **Escopo:**
-- Gate no trainer: se `ALLOW_SYNTHETIC_SEED=false`, bloquear promoção de modelo treinado sobre dados sintéticos.
-- Adicionar campo `trained_on_synthetic` ao `ModelRegistry`.
-- `is_active` não pode ser `true` se `trained_on_synthetic=true` em ambiente `production`.
-- Teste de regressão: treino com flag sintético não promove champion.
+- Adicionar campo `trained_on_synthetic` ao `ModelRegistry` com migration e backfill de `metrics.synthetic_bootstrap`/`metrics.synthetic`.
+- Gate central no registro (`register_model_db`) para bloquear active/champion sintético fora de development/test/local.
+- Gate na promoção manual (`/model-registry/{id}/promote`) para bloquear challenger sintético fora de development/test/local.
+- Gate na auto-promocao agendada (`auto_promote_challenger_models`) para impedir troca silenciosa de champion por challenger sintético.
+- Testes de regressão de governança cobrindo cenários de production/staging/development e compatibilidade legada.
 - Agente recomendado: `BetAML ML Hardening Agent`
 
 **Critério de aceite:** tentativa de promover modelo sintético em `ENVIRONMENT=production` retorna 4xx.
+
+**Risco residual após PR-03:** promoção sintética fica bloqueada, porém thresholds formais de precisão/FPR,
+aprovação explícita de promoção e feedback loop operacional completo permanecem no escopo do PR-07.
 
 ---
 
