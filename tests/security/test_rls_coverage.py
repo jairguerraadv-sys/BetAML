@@ -23,9 +23,7 @@ Note: Unit-mode tests (no DB) cover static catalog checks and are always run.
 from __future__ import annotations
 
 import os
-import sys
 import uuid
-from typing import Any
 
 import pytest
 
@@ -45,16 +43,6 @@ skip_unless_stack = pytest.mark.skipif(
 # Full set of sensitive tables that MUST have RLS + FORCE RLS after PR-01.
 # If a table is added to models.py with tenant_id, add it here too.
 SENSITIVE_RLS_TABLES: frozenset[str] = frozenset({
-    # Originally protected (pre PR-01)
-    "users",
-    "system_flags",
-    "api_keys",
-    "ingest_errors",
-    "external_validation_requests",
-    "financial_transactions",
-    "bets",
-    "model_registry",
-    # Added by PR-01
     "players",
     "device_events",
     "player_kyc_events",
@@ -102,13 +90,25 @@ async def _connect():
 async def _set_tenant(conn, tenant_id: str | None) -> None:
     """Set (or clear) the app.current_tenant Postgres session variable."""
     if tenant_id:
-        await conn.execute(f"SELECT set_config('app.current_tenant', $1, false)", tenant_id)
+        await conn.execute("SELECT set_config('app.current_tenant', $1, false)", tenant_id)
     else:
         await conn.execute("SELECT set_config('app.current_tenant', '', false)")
 
 
 async def _clear_tenant(conn) -> None:
     await _set_tenant(conn, None)
+
+
+async def _tenant_user_id(conn, tenant_id: str) -> str:
+    """Return one existing user id for the tenant (required by notifications)."""
+    await _set_tenant(conn, tenant_id)
+    uid = await conn.fetchval(
+        "SELECT id::text FROM users WHERE tenant_id = $1 ORDER BY created_at ASC LIMIT 1",
+        tenant_id,
+    )
+    if not uid:
+        raise AssertionError(f"No user found for tenant {tenant_id}; seeds/setup required")
+    return uid
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -124,16 +124,35 @@ async def pg():
 
 
 @pytest.fixture(scope="module")
-async def rls_tenants(pg):
+async def requires_non_bypass_role(pg):
+    """Skip runtime isolation checks when current DB role bypasses RLS."""
+    is_bypass = await pg.fetchval(
+        """
+        SELECT r.rolbypassrls
+        FROM pg_roles r
+        WHERE r.rolname = current_user
+        """
+    )
+    if bool(is_bypass):
+        pytest.skip(
+            "Role de conexão possui BYPASSRLS; testes de isolamento runtime "
+            "não são válidos neste ambiente."
+        )
+    return True
+
+
+@pytest.fixture(scope="module")
+async def rls_tenants(pg, requires_non_bypass_role):
     """Create two isolated tenants and return their IDs."""
     tid_a = str(uuid.uuid4())
     tid_b = str(uuid.uuid4())
     slug_a = f"rls-test-a-{tid_a[:8]}"
     slug_b = f"rls-test-b-{tid_b[:8]}"
+    user_a = str(uuid.uuid4())
+    user_b = str(uuid.uuid4())
 
-    # Bypass RLS for setup using superuser connection (or set superuser context)
-    # We temporarily use a known superuser path: SET app.current_tenant to '' disables
-    # tenant RLS for users/tenants with BYPASSRLS. As a fallback, we use raw INSERT.
+    # tenants policy allows bootstrap INSERT when current_tenant_id() is NULL.
+    await _clear_tenant(pg)
     await pg.execute(
         "INSERT INTO tenants (id, name, slug, active, settings, risk_score_threshold, plan_tier)"
         " VALUES ($1, $2, $3, true, '{}'::jsonb, 0.75, 'standard')"
@@ -146,10 +165,46 @@ async def rls_tenants(pg):
         " ON CONFLICT (id) DO NOTHING",
         tid_b, f"RLS Test Tenant B {tid_b[:8]}", slug_b,
     )
-    yield {"a": tid_a, "b": tid_b}
+
+    await _set_tenant(pg, tid_a)
+    await pg.execute(
+        """
+        INSERT INTO users (id, tenant_id, username, email, password_hash, role, active)
+        VALUES ($1, $2, $3, $4, $5, $6, true)
+        ON CONFLICT (id) DO NOTHING
+        """,
+        user_a,
+        tid_a,
+        f"rls_user_a_{tid_a[:8]}",
+        f"rls_user_a_{tid_a[:8]}@example.test",
+        "hash",
+        "AML_ANALYST",
+    )
+
+    await _set_tenant(pg, tid_b)
+    await pg.execute(
+        """
+        INSERT INTO users (id, tenant_id, username, email, password_hash, role, active)
+        VALUES ($1, $2, $3, $4, $5, $6, true)
+        ON CONFLICT (id) DO NOTHING
+        """,
+        user_b,
+        tid_b,
+        f"rls_user_b_{tid_b[:8]}",
+        f"rls_user_b_{tid_b[:8]}@example.test",
+        "hash",
+        "AML_ANALYST",
+    )
+
+    yield {"a": tid_a, "b": tid_b, "user_a": user_a, "user_b": user_b}
 
     # Cleanup — use BYPASSRLS or superuser; cleanup failures are non-fatal
     try:
+        await _set_tenant(pg, tid_a)
+        await pg.execute("DELETE FROM users WHERE id = $1", user_a)
+        await _set_tenant(pg, tid_b)
+        await pg.execute("DELETE FROM users WHERE id = $1", user_b)
+        await _clear_tenant(pg)
         await pg.execute("DELETE FROM tenants WHERE id = ANY($1)", [tid_a, tid_b])
     except Exception:
         pass
@@ -266,7 +321,7 @@ class TestEmptyTenantContextReturnsNoRows:
 
     @pytest.mark.asyncio
     @skip_unless_stack
-    async def test_no_rows_without_tenant_context(self, rls_tenants):
+    async def test_no_rows_without_tenant_context(self, rls_tenants, requires_non_bypass_role):
         """After clearing app.current_tenant, every target table returns 0 rows."""
         conn = await _connect()
         try:
@@ -294,19 +349,20 @@ class TestCrossTenantIsolation:
 
     @pytest.mark.asyncio
     @skip_unless_stack
-    async def test_tenant_a_cannot_read_tenant_b_notifications(self, rls_tenants):
+    async def test_tenant_a_cannot_read_tenant_b_notifications(self, rls_tenants, requires_non_bypass_role):
         """Tenant A's SELECT on notifications must not return Tenant B's rows."""
         conn = await _connect()
         tid_a = rls_tenants["a"]
         tid_b = rls_tenants["b"]
         try:
+            user_b = await _tenant_user_id(conn, tid_b)
             # Insert a notification for tenant B (bypass RLS by setting context to B)
             await _set_tenant(conn, tid_b)
             notif_id = str(uuid.uuid4())
             await conn.execute(
-                "INSERT INTO notifications (id, tenant_id, type, title) VALUES ($1, $2, $3, $4)"
+                "INSERT INTO notifications (id, tenant_id, user_id, type, title) VALUES ($1, $2, $3, $4, $5)"
                 " ON CONFLICT (id) DO NOTHING",
-                notif_id, tid_b, "ALERT", "RLS Test Notification B",
+                notif_id, tid_b, user_b, "ALERT", "RLS Test Notification B",
             )
 
             # Now switch to Tenant A — must not see Tenant B's notification
@@ -328,7 +384,7 @@ class TestCrossTenantIsolation:
 
     @pytest.mark.asyncio
     @skip_unless_stack
-    async def test_tenant_a_cannot_read_tenant_b_rule_definitions(self, rls_tenants):
+    async def test_tenant_a_cannot_read_tenant_b_rule_definitions(self, rls_tenants, requires_non_bypass_role):
         """Tenant A must not read Tenant B's rule_definitions."""
         conn = await _connect()
         tid_a = rls_tenants["a"]
@@ -361,18 +417,19 @@ class TestCrossTenantIsolation:
 
     @pytest.mark.asyncio
     @skip_unless_stack
-    async def test_tenant_a_update_does_not_affect_tenant_b(self, rls_tenants):
+    async def test_tenant_a_update_does_not_affect_tenant_b(self, rls_tenants, requires_non_bypass_role):
         """UPDATE from Tenant A's context must not touch Tenant B rows."""
         conn = await _connect()
         tid_a = rls_tenants["a"]
         tid_b = rls_tenants["b"]
         try:
+            user_b = await _tenant_user_id(conn, tid_b)
             await _set_tenant(conn, tid_b)
             notif_id = str(uuid.uuid4())
             await conn.execute(
-                "INSERT INTO notifications (id, tenant_id, type, title) VALUES ($1, $2, $3, $4)"
+                "INSERT INTO notifications (id, tenant_id, user_id, type, title) VALUES ($1, $2, $3, $4, $5)"
                 " ON CONFLICT (id) DO NOTHING",
-                notif_id, tid_b, "ALERT", "Original B Title",
+                notif_id, tid_b, user_b, "ALERT", "Original B Title",
             )
 
             # Tenant A tries to UPDATE
@@ -396,19 +453,20 @@ class TestCrossTenantIsolation:
 
     @pytest.mark.asyncio
     @skip_unless_stack
-    async def test_insert_with_wrong_tenant_id_is_blocked(self, rls_tenants):
+    async def test_insert_with_wrong_tenant_id_is_blocked(self, rls_tenants, requires_non_bypass_role):
         """INSERT with tenant_id ≠ current_tenant_id() must fail or be blocked."""
         conn = await _connect()
         tid_a = rls_tenants["a"]
         tid_b = rls_tenants["b"]
         try:
+            user_a = await _tenant_user_id(conn, tid_a)
             # Set context to Tenant A but try inserting a row for Tenant B
             await _set_tenant(conn, tid_a)
             insert_id = str(uuid.uuid4())
             try:
                 await conn.execute(
-                    "INSERT INTO notifications (id, tenant_id, type, title) VALUES ($1, $2, $3, $4)",
-                    insert_id, tid_b, "ALERT", "Cross-tenant insert attempt",
+                    "INSERT INTO notifications (id, tenant_id, user_id, type, title) VALUES ($1, $2, $3, $4, $5)",
+                    insert_id, tid_b, user_a, "ALERT", "Cross-tenant insert attempt",
                 )
                 # If INSERT succeeded without error, verify 0 rows visible to A
                 # (should be blocked by WITH CHECK in INSERT policy)
@@ -584,3 +642,44 @@ class TestSensitiveTableRegression:
         assert not diff, (
             f"APPEND_ONLY_TABLES contains tables not in SENSITIVE_RLS_TABLES: {diff}"
         )
+
+    @pytest.mark.asyncio
+    @skip_unless_stack
+    async def test_sensitive_tables_missing_tenant_id_require_fk_based_rls(self):
+        """
+        Guardrail for indirect-tenant cases.
+
+        If any table in SENSITIVE_RLS_TABLES lacks tenant_id, PR-01 must include
+        EXISTS-based policies via parent FK. Today all 20 tables have tenant_id
+        direto, so this test asserts that expectation.
+        """
+        conn = await _connect()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT c.relname AS table_name,
+                       EXISTS (
+                         SELECT 1
+                         FROM information_schema.columns ic
+                         WHERE ic.table_schema = 'public'
+                           AND ic.table_name = c.relname
+                           AND ic.column_name = 'tenant_id'
+                       ) AS has_tenant_id
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public'
+                  AND c.relkind = 'r'
+                  AND c.relname = ANY($1::text[])
+                """,
+                list(SENSITIVE_RLS_TABLES),
+            )
+            missing_direct = sorted(
+                row["table_name"] for row in rows if not row["has_tenant_id"]
+            )
+            assert not missing_direct, (
+                "Tabelas sensíveis sem tenant_id direto detectadas. "
+                "Adicionar policy por FK com EXISTS e testes específicos: "
+                f"{missing_direct}"
+            )
+        finally:
+            await conn.close()

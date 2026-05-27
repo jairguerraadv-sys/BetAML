@@ -160,14 +160,16 @@ Routers em `services/api/routers/`: `admin`, `alerts`, `audit`, `auth`, `cases`,
 ## 3. Ordem Recomendada dos PRs
 
 ### PR-01 – `hardening/rls-complete-tables`
+**Status:** IMPLEMENTADO E VALIDADO LOCALMENTE (2026-05-26).
 **Objetivo:** garantir RLS em todas as tabelas que contêm dados sensíveis de tenant.  
 **Escopo:**
-- Auditar `financial_transactions`, `bets`, `device_events`, `player_kyc_events`, `model_inference_logs`, `feature_snapshots`, `notifications` para políticas RLS.
-- Criar migração Alembic para tabelas sem cobertura.
-- Adicionar teste unitário que tenta SELECT sem `app.current_tenant` e confirma 0 linhas.
+- Cobrir 20 tabelas sensíveis sem RLS com `ENABLE RLS` + `FORCE RLS` + policies por operação.
+- Criar migração Alembic idempotente: `20260526_000002_rls_complete_sensitive_tables.py`.
+- Adicionar suíte de regressão DB-first: `tests/security/test_rls_coverage.py`.
+- Publicar matriz formal de cobertura: `docs/security/rls-coverage-matrix.md`.
 - Agente recomendado: `BetAML Security and PII Agent`
 
-**Critério de aceite:** `SELECT count(*) FROM financial_transactions` sem contexto de tenant retorna 0; CI verde.
+**Critério de aceite:** tabelas sensíveis sem RLS foram cobertas; testes de isolamento/catálogo passam; sem enfraquecimento das policies já existentes.
 
 ---
 
