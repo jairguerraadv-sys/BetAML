@@ -73,6 +73,7 @@ ALLOWLIST_GLOBS = (
     "*.example",
     ".env",
     ".env.*",
+    "scripts/check_secret_hygiene.py",
     "infra/docker-compose*.yml",
     "infra/docker-compose*.yaml",
 )
