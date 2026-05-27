@@ -174,14 +174,19 @@ Routers em `services/api/routers/`: `admin`, `alerts`, `audit`, `auth`, `cases`,
 ---
 
 ### PR-02 – `hardening/coverage-threshold`
+**Status:** IMPLEMENTADO LOCALMENTE, validacao CI pendente.
 **Objetivo:** elevar threshold de coverage de 40% para 70% em rotas críticas.  
 **Escopo:**
-- Aumentar `--cov-fail-under` para 70 no batch crítico (cases, alerts, auth, ingest).
-- Adicionar módulos faltantes ao `--cov` source (rules_engine, stream_processor stubs).
-- Mapear quais routers têm < 50% de coverage com `--cov-report=term-missing`.
+- Ativar gate crítico dedicado com `--critical-coverage` no runner batelado e enforcement final via `coverage report --include=... --fail-under=70`.
+- Padronizar source de cobertura para `--cov=services/api` e remover uso instável de `--cov` por path (evita `module-not-imported`/`no-data-collected`).
+- Ajustar CI para rodar `scripts/run_critical_unit_batches.sh --critical-coverage --include-remainder -q --tb=short`.
+- Adicionar testes unitários de alto valor em `cases`, `reports` e `players` para elevar baseline real e reduzir risco de regressão silenciosa.
+- Publicar política formal em `docs/engineering/coverage-policy.md` com baseline, escopo do gate e backlog de expansão.
 - Agente recomendado: `BetAML ML Hardening Agent` (para ML) + direto para outros módulos.
 
 **Critério de aceite:** `pytest ... --cov-fail-under=70` passa no CI sem falsos positivos.
+
+**Risco residual após PR-02:** módulos volumosos fora do gate crítico imediato (principalmente `routers/cases.py` e `routers/alerts.py`) seguem monitorados no backlog de cobertura para expansão incremental do escopo sem comprometer estabilidade do pipeline.
 
 ---
 
