@@ -249,14 +249,18 @@ Routers em `services/api/routers/`: `admin`, `alerts`, `audit`, `auth`, `cases`,
 ---
 
 ### PR-08 – `hardening/audit-immutability`
+**Status:** IMPLEMENTADO E VALIDADO LOCALMENTE, validacao CI pendente.
 **Objetivo:** garantir que logs de auditoria não podem ser apagados.  
 **Escopo:**
-- Adicionar trigger PostgreSQL em `audit_logs`: `BEFORE DELETE RAISE EXCEPTION`.
-- Ou: revogar `DELETE` privilege do role `betaml_app` na tabela `audit_logs`.
-- Adicionar teste que confirma DELETE retorna erro mesmo com SUPER_ADMIN.
+- Adicionar migration Alembic dedicada de compliance para `audit_logs` com trigger
+  `BEFORE UPDATE OR DELETE` e funcao de bloqueio no banco.
+- Garantir idempotencia removendo trigger legado e recriando nome canonico.
+- Adicionar suite DB-first em `tests/security/test_audit_immutability.py` cobrindo
+  INSERT permitido, UPDATE/DELETE bloqueados, SUPER_ADMIN da aplicacao sem bypass,
+  isolamento cross-tenant e comportamento sem tenant context.
 - Agente recomendado: `BetAML Security and PII Agent`
 
-**Critério de aceite:** `DELETE FROM audit_logs WHERE id = ...` retorna erro; teste de regressão verde.
+**Critério de aceite:** `UPDATE/DELETE FROM audit_logs WHERE id = ...` retorna erro de imutabilidade no banco; testes de regressao verdes.
 
 ---
 

@@ -34,7 +34,7 @@ Bypass controlado já existente (não introduzido neste PR):
 | cases | REGULATÓRIA | Sim | N/A | Não | Não | Sim | Sim | tenant_id = current_tenant_id() | WITH CHECK tenant_id = current_tenant_id() | USING+WITH CHECK tenant_id = current_tenant_id() | USING tenant_id = current_tenant_id() | Casos investigativos |
 | case_events | REGULATÓRIA | Sim | case_id (opcional) | Não | Não | Sim | Sim | tenant_id = current_tenant_id() | WITH CHECK tenant_id = current_tenant_id() | USING+WITH CHECK tenant_id = current_tenant_id() | USING tenant_id = current_tenant_id() | Tem FK para `cases`, mas usa tenant_id direto |
 | report_packages | REGULATÓRIA | Sim | case_id/player_id (opcional) | Não | Não | Sim | Sim | tenant_id = current_tenant_id() | WITH CHECK tenant_id = current_tenant_id() | USING+WITH CHECK tenant_id = current_tenant_id() | USING tenant_id = current_tenant_id() | Cadeia de custódia/coaf protocol |
-| audit_logs | COMPLIANCE | Sim | N/A | Não | Não | Sim | Sim | tenant_id = current_tenant_id() | WITH CHECK tenant_id = current_tenant_id() | USING false | USING false | Imutabilidade forte segue no PR-08; trigger já existente em migração anterior |
+| audit_logs | COMPLIANCE | Sim | N/A | Não | Não | Sim | Sim | tenant_id = current_tenant_id() | WITH CHECK tenant_id = current_tenant_id() | USING false | USING false | Imutabilidade reforcada no PR-08 com trigger dedicado `trg_prevent_audit_logs_mutation` bloqueando UPDATE/DELETE no banco |
 | model_inference_logs | OPERACIONAL | Sim | player_id/model_id (opcional) | Não | Não | Sim | Sim | tenant_id = current_tenant_id() | WITH CHECK tenant_id = current_tenant_id() | USING false | USING false | Log append-only de inferência |
 | feature_snapshots | OPERACIONAL | Sim | player_id (opcional) | Não | Não | Sim | Sim | tenant_id = current_tenant_id() | WITH CHECK tenant_id = current_tenant_id() | USING+WITH CHECK tenant_id = current_tenant_id() | USING tenant_id = current_tenant_id() | Features/snapshot por player |
 | scoring_configs | OPERACIONAL | Sim | N/A | Não | Não | Sim | Sim | tenant_id = current_tenant_id() | WITH CHECK tenant_id = current_tenant_id() | USING+WITH CHECK tenant_id = current_tenant_id() | USING tenant_id = current_tenant_id() | 1 config por tenant (unique tenant_id) |
@@ -84,6 +84,5 @@ Antes de considerar este hardening como validado para produção, a suíte deve 
 
 A introspecção de catálogo continua validando que tabelas sensíveis permanecem com `relrowsecurity=true` e `relforcerowsecurity=true`.
 
-- PR-08 (`hardening/audit-immutability`): reforçar imutabilidade anti-DELETE/UPDATE em `audit_logs` com hardening dedicado de compliance.
 - PR-09 (`hardening/cross-tenant-e2e`): validação E2E Playwright de isolamento cross-tenant em fluxos críticos de UI/API.
 - Se surgir tabela tenant-scoped sem `tenant_id` direto, adicionar policies com `EXISTS (...)` via FK e testes específicos.
