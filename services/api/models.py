@@ -489,6 +489,7 @@ class ModelRegistry(Base):
     training_rows        = Column(Integer)    # linhas usadas no treino
     feature_columns      = Column(JSONB, default=[])   # lista de features usadas no treino
     metrics              = Column(JSONB, nullable=False, default={})
+    trained_on_synthetic = Column(Boolean, nullable=False, default=False)
     is_active            = Column(Boolean, nullable=False, default=False)
     status               = Column(String(20), nullable=False, default="STAGING")
     is_challenger        = Column(Boolean, nullable=False, default=False)
