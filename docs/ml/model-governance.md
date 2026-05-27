@@ -60,5 +60,37 @@ A avaliacao e centralizada em libs/ml_governance.py.
 
 Este PR fecha o risco de promocao sintetica silenciosa.
 
-PR-07 continua responsavel por governanca avancada de champion/challenger,
-com thresholds formais de precision/FPR, feedback loop e aprovacao operacional.
+## Governanca de promocao (PR-07)
+
+Promocao de challenger para champion agora passa por gate unificado (manual e automatico)
+com thresholds por tenant em `scoring_configs`:
+
+- `min_precision` (default `0.80`)
+- `max_false_positive_rate` (default `0.20`)
+- `min_recall` (opcional)
+- `require_manual_approval` (default `true`)
+
+### Regras aplicadas
+
+- Promocao bloqueia se `precision < min_precision`.
+- Promocao bloqueia se `false_positive_rate > max_false_positive_rate`.
+- Se `min_recall` estiver configurado, promocao bloqueia quando `recall < min_recall`.
+- Em `staging/production`, ausencia de metricas obrigatorias bloqueia promocao.
+- Se `require_manual_approval=true`, auto-promocao e bloqueada.
+- Em `staging/production`, promocao manual exige `approval_reason` quando
+  `require_manual_approval=true`.
+
+### Auditoria obrigatoria
+
+- `ml_model_promotion_blocked`
+- `ml_model_promotion_approved`
+- `ml_model_demoted`
+- `ml_model_auto_promotion_blocked`
+- `ml_model_auto_promotion_approved`
+
+Todos os eventos registram `metrics`, `thresholds`, ambiente e motivos de bloqueio.
+
+## Risco residual
+
+- `recall` pode permanecer ausente em modelos legados; em ambiente estrito isso bloqueia
+  promocao somente quando `min_recall` estiver definido.

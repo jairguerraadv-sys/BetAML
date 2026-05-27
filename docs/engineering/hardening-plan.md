@@ -242,14 +242,17 @@ aprovação explícita de promoção e feedback loop operacional completo perman
 ---
 
 ### PR-07 – `hardening/ml-feedback-loop`
+**Status:** IMPLEMENTADO LOCALMENTE, validacao CI pendente.
 **Objetivo:** fechar o ciclo de feedback do ML para evitar degradação silenciosa.  
 **Escopo:**
-- Adicionar `min_precision` e `max_false_positive_rate` como campos obrigatórios ao `ScoringConfig`.
-- Gate de promoção: modelo não pode ser promovido se métricas estão abaixo do threshold.
-- Registrar no AuditLog toda promoção/rebaixamento de modelo.
+- Adicionar `min_precision`, `max_false_positive_rate`, `min_recall` e
+  `require_manual_approval` ao `ScoringConfig`.
+- Gate unificado de promoção manual e auto-promocao com reasons estruturados.
+- Exigir `approval_reason` em ambientes estritos quando aprovacao manual estiver ativa.
+- Registrar no `AuditLog` aprovacoes, bloqueios e democoes.
 - Agente recomendado: `BetAML ML Hardening Agent`
 
-**Critério de aceite:** promoção de modelo com precision < threshold falha com 422; auditlog registra tentativa.
+**Critério de aceite:** promoção com métricas abaixo de threshold falha com 422; auto-promocao respeita `require_manual_approval`; auditlog registra tentativa/aprovacao/democao.
 
 ---
 
