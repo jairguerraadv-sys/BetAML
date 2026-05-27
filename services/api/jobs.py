@@ -18,6 +18,7 @@ from sqlalchemy import select, and_, text, func
 
 from config import settings
 from database import AsyncSessionLocal
+from libs.ml_governance import blocks_synthetic_model_promotion, is_synthetic_model
 from models import Alert, AuditLog, Case, FeatureSnapshot, ModelRegistry, Notification, Player, ReportPackage, ScoringConfig, Tenant, User, FinancialTransaction, Bet, IngestError
 
 logger = structlog.get_logger(__name__)
@@ -1220,6 +1221,39 @@ async def auto_promote_challenger_models() -> None:
                         continue
 
                     delta = ch_precision - cp_precision
+
+                    blocked_synthetic = (
+                        is_synthetic_model(
+                            getattr(challenger, "metrics", None),
+                            getattr(challenger, "trained_on_synthetic", None),
+                        )
+                        and blocks_synthetic_model_promotion(settings.environment)
+                    )
+                    if blocked_synthetic:
+                        db.add(AuditLog(
+                            tenant_id=tenant.id,
+                            user_id=None,
+                            action="CHALLENGER_PROMOTION_BLOCKED_SYNTHETIC",
+                            entity_type="ModelRegistry",
+                            entity_id=str(challenger.id),
+                            after={
+                                "model_type": challenger.model_type,
+                                "challenger_precision": round(ch_precision, 4),
+                                "champion_precision": round(cp_precision, 4),
+                                "delta": round(delta, 4),
+                                "threshold": PROMOTION_THRESHOLD,
+                                "environment": settings.environment,
+                                "reason": "synthetic_model_promotion_blocked",
+                            },
+                        ))
+                        await db.commit()
+                        logger.warning(
+                            "challenger_promotion_blocked_synthetic",
+                            tenant_id=tenant.id,
+                            challenger_id=str(challenger.id),
+                            environment=settings.environment,
+                        )
+                        continue
 
                     if delta >= PROMOTION_THRESHOLD:
                         # ── AUTO-PROMOÇÃO ─────────────────────────────────

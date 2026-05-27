@@ -36,6 +36,11 @@ from prometheus_client import REGISTRY, Counter
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 
+from libs.ml_governance import (
+    blocks_synthetic_model_promotion,
+    is_synthetic_model,
+    sync_synthetic_metrics,
+)
 from libs.telemetry import init_opentelemetry_stub
 
 logger = structlog.get_logger()
@@ -358,28 +363,51 @@ def register_model_db(
     model_type: str | None = None,
     model_version: str | None = None,
     status: str = "champion",
+    is_active: bool = True,
+    trained_on_synthetic: bool | None = None,
 ) -> None:
     import sqlalchemy as sa
     normalized_model_type = (model_type or "ANOMALY").strip().upper()[:20] or "ANOMALY"
     resolved_model_name = (model_name or algorithm or "model").strip()
     resolved_model_version = (model_version or model_id).strip()
-    with engine.begin() as conn:
-        # Desativa versões anteriores do mesmo tenant
-        conn.execute(
-            sa.text(
-                "UPDATE model_registry SET is_active = false "
-                "WHERE tenant_id = :tid AND is_active = true"
-            ),
-            {"tid": tenant_id},
+    synthetic_flag = is_synthetic_model(metrics, trained_on_synthetic)
+    metrics_payload = sync_synthetic_metrics(metrics, synthetic_flag)
+
+    if is_active and synthetic_flag and blocks_synthetic_model_promotion(ENVIRONMENT):
+        logger.warning(
+            "synthetic_model_promotion_blocked",
+            tenant_id=tenant_id,
+            model_id=model_id,
+            model_type=normalized_model_type,
+            environment=ENVIRONMENT,
+            status=status,
         )
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Synthetic bootstrap models cannot be promoted to active/champion "
+                "outside development or test environments."
+            ),
+        )
+
+    with engine.begin() as conn:
+        if is_active:
+            # Desativa versões anteriores do mesmo tenant
+            conn.execute(
+                sa.text(
+                    "UPDATE model_registry SET is_active = false "
+                    "WHERE tenant_id = :tid AND is_active = true"
+                ),
+                {"tid": tenant_id},
+            )
         conn.execute(sa.text("""
             INSERT INTO model_registry
                 (id, tenant_id, model_name, model_type, model_version, algorithm,
-                 artifact_uri, is_active, status, trained_at,
+                 artifact_uri, is_active, status, trained_on_synthetic, trained_at,
                  training_rows, metrics, feature_columns, trained_by)
             VALUES
                 (:id, :tid, :model_name, :model_type, :model_version, :algo,
-                 :uri, true, :status, :ts, :rows, :metrics, :fc, :by)
+                 :uri, :is_active, :status, :trained_on_synthetic, :ts, :rows, :metrics, :fc, :by)
         """), {
             "id":    model_id,
             "tid":   tenant_id,
@@ -388,10 +416,12 @@ def register_model_db(
             "model_version": resolved_model_version,
             "algo":  algorithm,
             "uri":   artifact_uri,
+            "is_active": is_active,
             "status": status,
+            "trained_on_synthetic": synthetic_flag,
             "ts":    _utcnow(),
-            "rows":  int(metrics.get("training_rows", 0)),
-            "metrics": json.dumps(metrics),
+            "rows":  int(metrics_payload.get("training_rows", 0)),
+            "metrics": json.dumps(metrics_payload),
             "fc":    json.dumps(feature_columns),
             "by":    trained_by,
         })
@@ -815,6 +845,8 @@ def train(req: TrainRequest):
             model_type="ANOMALY",
             model_version=model_id,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("model_register_failed", error=str(e))
 
@@ -1111,6 +1143,8 @@ def train_structuring(req: TrainRequest):
                           model_name="StructuringDetector",
                           model_type="STRUCTURING",
                           model_version=model_id)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("model_register_failed", error=str(e))
 
@@ -1176,6 +1210,8 @@ def train_graph(req: TrainRequest):
                           model_name="GraphClustering",
                           model_type="NETWORK",
                           model_version=model_id)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("graph_register_failed", error=str(e))
 
@@ -1248,6 +1284,8 @@ def train_recurrence(req: TrainRequest):
                           model_name="RecurrenceEstimator",
                           model_type="RECURRENCE",
                           model_version=model_id)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("recurrence_register_failed", error=str(e))
 
