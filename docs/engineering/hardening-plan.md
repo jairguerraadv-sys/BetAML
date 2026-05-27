@@ -272,6 +272,7 @@ Routers em `services/api/routers/`: `admin`, `alerts`, `audit`, `auth`, `cases`,
 ---
 
 ### PR-10 – `hardening/bandit-b608-review`
+**Status:** IMPLEMENTADO LOCALMENTE, validação CI pendente.
 **Objetivo:** revisar e documentar formalmente cada uso de SQL dinâmico que justifica B608 skip.  
 **Escopo:**
 - Listar todos os usos de `text()` e `execute()` com strings dinâmicas.

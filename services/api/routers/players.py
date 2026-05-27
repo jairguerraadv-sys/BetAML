@@ -24,6 +24,104 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["players"])
 
 
+_FEATURE_HISTORY_COLUMNS = [
+    "feature_date", "deposit_sum_24h", "deposit_sum_7d", "deposit_sum_30d",
+    "deposit_count_24h", "deposit_count_7d",
+    "withdrawal_sum_24h", "withdrawal_sum_7d", "withdrawal_count_24h",
+    "bet_stake_sum_24h", "bet_stake_sum_7d",
+    "ratio_w2d_7d", "baseline_avg_deposit", "baseline_stddev_deposit",
+    "zscore_deposit", "new_payment_flag", "new_device_flag",
+    "shared_device_count", "shared_bank_count", "chargeback_count_30d",
+    "deposit_velocity", "unique_instruments_7d", "night_activity_ratio",
+    "weekend_activity_ratio", "avg_odds_bet_7d", "win_loss_ratio_30d",
+    "avg_dep_to_wdraw_hours", "inconsistent_currency_flag", "chargeback_rate_30d",
+    "bonus_to_real_ratio_30d", "cashout_ratio_7d", "shared_instrument_score",
+    "feature_version",
+    "computed_at",
+]
+
+_FEATURE_HISTORY_SQL_BY_SORT_COLUMN = {
+    "feature_date": """
+        SELECT feature_date, deposit_sum_24h, deposit_sum_7d, deposit_sum_30d,
+               deposit_count_24h, deposit_count_7d,
+               withdrawal_sum_24h, withdrawal_sum_7d, withdrawal_count_24h,
+               bet_stake_sum_24h, bet_stake_sum_7d,
+               ratio_w2d_7d, baseline_avg_deposit, baseline_stddev_deposit,
+               zscore_deposit, new_payment_flag, new_device_flag,
+               shared_device_count, shared_bank_count, chargeback_count_30d,
+               deposit_velocity, unique_instruments_7d, night_activity_ratio,
+               weekend_activity_ratio, avg_odds_bet_7d, win_loss_ratio_30d,
+               avg_dep_to_wdraw_hours, inconsistent_currency_flag, chargeback_rate_30d,
+               bonus_to_real_ratio_30d, cashout_ratio_7d, shared_instrument_score,
+               feature_version, computed_at
+        FROM betaml.player_features_daily FINAL
+        WHERE tenant_id = %(tid)s
+          AND player_id = %(pid)s
+          AND feature_date >= today() - %(days)s
+        ORDER BY feature_date DESC
+    """,
+}
+
+_ERASURE_COUNT_SQL_BY_TABLE = {
+    "alerts": """
+        SELECT COUNT(*)
+        FROM alerts
+        WHERE tenant_id = :tid
+          AND player_id = (
+              SELECT id
+              FROM players
+              WHERE external_player_id = :pid AND tenant_id = :tid
+              LIMIT 1
+          )
+    """,
+    "cases": """
+        SELECT COUNT(*)
+        FROM cases
+        WHERE tenant_id = :tid
+          AND player_id = (
+              SELECT id
+              FROM players
+              WHERE external_player_id = :pid AND tenant_id = :tid
+              LIMIT 1
+          )
+    """,
+    "transactions": """
+        SELECT COUNT(*)
+        FROM transactions
+        WHERE tenant_id = :tid
+          AND player_id = (
+              SELECT id
+              FROM players
+              WHERE external_player_id = :pid AND tenant_id = :tid
+              LIMIT 1
+          )
+    """,
+    "report_packages": """
+        SELECT COUNT(*)
+        FROM report_packages
+        WHERE tenant_id = :tid
+          AND player_id = (
+              SELECT id
+              FROM players
+              WHERE external_player_id = :pid AND tenant_id = :tid
+              LIMIT 1
+          )
+    """,
+}
+
+
+def _resolve_feature_history_sort_column(sort_by: str) -> str:
+    if sort_by not in _FEATURE_HISTORY_SQL_BY_SORT_COLUMN:
+        raise ValueError(f"Invalid sort column: {sort_by}")
+    return sort_by
+
+
+def _build_erasure_related_count_sql(table: str) -> str:
+    if table not in _ERASURE_COUNT_SQL_BY_TABLE:
+        raise ValueError(f"Invalid table target: {table}")
+    return _ERASURE_COUNT_SQL_BY_TABLE[table]
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -263,35 +361,10 @@ async def get_player_feature_history(
 
     from libs.clients import ClickHouseClient
 
-    _COLUMNS = [
-        "feature_date", "deposit_sum_24h", "deposit_sum_7d", "deposit_sum_30d",
-        "deposit_count_24h", "deposit_count_7d",
-        "withdrawal_sum_24h", "withdrawal_sum_7d", "withdrawal_count_24h",
-        "bet_stake_sum_24h", "bet_stake_sum_7d",
-        "ratio_w2d_7d", "baseline_avg_deposit", "baseline_stddev_deposit",
-        "zscore_deposit", "new_payment_flag", "new_device_flag",
-        "shared_device_count", "shared_bank_count", "chargeback_count_30d",
-        "deposit_velocity", "unique_instruments_7d", "night_activity_ratio",
-        "weekend_activity_ratio", "avg_odds_bet_7d", "win_loss_ratio_30d",
-        "avg_dep_to_wdraw_hours", "inconsistent_currency_flag", "chargeback_rate_30d",
-        "bonus_to_real_ratio_30d", "cashout_ratio_7d", "shared_instrument_score",
-        "feature_version",
-        "computed_at",
-    ]
-
     def _query_ch() -> list:
         ch = ClickHouseClient()
-        col_clause = ", ".join(_COLUMNS)
-        sql = (  # nosec B608
-            f"""
-            SELECT {col_clause}
-                        FROM betaml.player_features_daily FINAL
-            WHERE tenant_id = %(tid)s
-              AND player_id = %(pid)s
-              AND feature_date >= today() - %(days)s
-            ORDER BY feature_date DESC
-            """
-        )
+        sort_col = _resolve_feature_history_sort_column("feature_date")
+        sql = _FEATURE_HISTORY_SQL_BY_SORT_COLUMN[sort_col]
         return ch.execute(
             sql,
             {"tid": current_user.tenant_id, "pid": player_id, "days": days},
@@ -308,7 +381,7 @@ async def get_player_feature_history(
         "player_id": player_id,
         "days_requested": days,
         "count": len(rows),
-        "data": [_normalize_feature_history_row(_COLUMNS, row) for row in rows],
+        "data": [_normalize_feature_history_row(_FEATURE_HISTORY_COLUMNS, row) for row in rows],
     }
 
 
@@ -441,10 +514,11 @@ async def erase_player_data(
     # Count related records for LGPD completeness audit
     from sqlalchemy import text as _text
     erased_from: dict[str, int] = {}
-    for table, col in [("alerts", "player_id"), ("cases", "player_id"), ("transactions", "player_id"), ("report_packages", "player_id")]:
+    for table in _ERASURE_COUNT_SQL_BY_TABLE:
         try:
+            sql = _build_erasure_related_count_sql(table)
             row = (await db.execute(
-                _text(f"SELECT COUNT(*) FROM {table} WHERE tenant_id = :tid AND {col} = (SELECT id FROM players WHERE external_player_id = :pid AND tenant_id = :tid LIMIT 1)"),
+                _text(sql),
                 {"tid": tenant_id, "pid": player_id},
             )).scalar_one_or_none()
             erased_from[table] = int(row or 0)

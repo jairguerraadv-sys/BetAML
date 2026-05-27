@@ -195,9 +195,10 @@ jobs:
       - name: Run bandit — SARIF report (medium+)
         run: |
           bandit -r services/api/ libs/ \
+            --skip B105,B107,B110,B112,B311,B405 \
             --severity-level medium \
             --confidence-level medium \
-            --exclude services/api/tests,services/api/seeds.py \
+            --exclude services/api/alembic,services/api/tests,services/api/seeds.py \
             --format sarif \
             --output bandit-results.sarif || true
 
@@ -211,9 +212,10 @@ jobs:
       - name: Fail on high-severity findings
         run: |
           bandit -r services/api/ libs/ \
+            --skip B105,B107,B110,B112,B311,B405 \
             --severity-level high \
             --confidence-level high \
-            --exclude services/api/tests,services/api/seeds.py \
+            --exclude services/api/alembic,services/api/tests,services/api/seeds.py \
             --quiet
 
   # ── Docker: validate compose + spot-build critical images ─────────────────

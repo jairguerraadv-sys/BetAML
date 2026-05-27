@@ -10,5 +10,4 @@ skips = [
   "B112", # parser loops intentionally skip malformed optional values
   "B311", # synthetic seed/test data does not require cryptographic randomness
   "B405", # XML parsing uses defusedxml where input is untrusted
-  "B608", # dynamic SQL uses static allowlists/migrations plus bound user parameters
 ]
