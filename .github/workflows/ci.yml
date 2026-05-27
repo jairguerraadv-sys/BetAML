@@ -102,6 +102,23 @@ jobs:
         run: |
           bash scripts/run_critical_unit_batches.sh --critical-coverage --include-remainder -q --tb=short
 
+      - name: Run OpenAPI contract tests
+        env:
+          JWT_SECRET: ci-test-secret-at-least-32-characters-long
+          PII_ENCRYPTION_KEY: ci-pii-test-key-32-characters-long!!
+          ENVIRONMENT: test
+        run: |
+          pytest tests/contract/test_openapi_contracts.py -q
+
+      - name: Check OpenAPI export drift
+        env:
+          JWT_SECRET: ci-test-secret-at-least-32-characters-long
+          PII_ENCRYPTION_KEY: ci-pii-test-key-32-characters-long!!
+          ENVIRONMENT: test
+        run: |
+          python scripts/export_openapi.py --output artifacts/openapi/openapi.json
+          git diff --exit-code artifacts/openapi/openapi.json
+
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         if: always()
@@ -168,9 +185,15 @@ jobs:
         working-directory: services/frontend
         run: npm ci
 
+      - name: Generate API types and check drift
+        working-directory: services/frontend
+        run: |
+          npm run generate:api-types
+          git diff --exit-code lib/generated/api-types.ts
+
       - name: TypeScript strict check
         working-directory: services/frontend
-        run: npx tsc --noEmit
+        run: npm run typecheck
 
   # ── Backend: security scan (bandit) ───────────────────────────────────────
   backend-security:

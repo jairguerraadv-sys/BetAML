@@ -248,6 +248,7 @@ aprovação explícita de promoção e feedback loop operacional completo perman
 ---
 
 ### PR-06 – `hardening/ui-api-contracts`
+**Status:** IMPLEMENTADO LOCALMENTE, validacao CI pendente.
 **Objetivo:** garantir que contratos entre frontend e API estão alinhados nos arquivos modificados.  
 **Escopo:**
 - Validar payloads de `cases/[id]`, `reports/[id]`, `alerts`, `cases/new` contra OpenAPI spec.
@@ -255,6 +256,16 @@ aprovação explícita de promoção e feedback loop operacional completo perman
 - Agente recomendado: `BetAML UI API Contract Agent`
 
 **Critério de aceite:** `tsc --noEmit` passa; nenhuma rota 404 nos flows críticos do smoke E2E.
+
+**Entregas implementadas no PR-06:**
+- Contratos OpenAPI críticos explicitados com `response_model` para fluxos de `cases`, `alerts` e `reports`.
+- Endpoint dedicado de detalhe de dossiê (`/report-packages/{rp_id}`) para alinhar `reports/[id]` sem lookup client-side em lista.
+- Testes de contrato OpenAPI adicionados em `tests/contract/test_openapi_contracts.py`.
+- Pipeline de tipos frontend com `openapi-typescript` e script `generate:api-types`.
+- Smoke E2E crítico de navegação/estabilidade criado em `e2e/tests/ui-api-contracts.spec.ts`.
+- Matriz e política de contratos documentadas em `docs/engineering/ui-api-contracts.md`.
+
+**Risco residual apos PR-06:** contratos críticos de `cases`/`alerts`/`reports` ficam tipados e validados, mas cobertura E2E cross-tenant e autorização negativa profunda permanecem no PR-09.
 
 ---
 
