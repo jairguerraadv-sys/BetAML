@@ -578,6 +578,10 @@ class ScoringConfigOut(BaseModel):
     income_volume_ratio_threshold: float = 1.50
     ingest_rate_limit_tpm: int = 1000
     ml_challenger_pct: int = 0
+    min_precision: float = 0.80
+    max_false_positive_rate: float = 0.20
+    min_recall: Optional[float] = None
+    require_manual_approval: bool = True
     updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
@@ -605,6 +609,10 @@ class ScoringConfigUpdate(BaseModel):
     income_volume_ratio_threshold: Optional[float] = None
     ingest_rate_limit_tpm: Optional[int] = None
     ml_challenger_pct: Optional[int] = None
+    min_precision: Optional[float] = None
+    max_false_positive_rate: Optional[float] = None
+    min_recall: Optional[float] = None
+    require_manual_approval: Optional[bool] = None
 
 
 class ScoringPreviewIn(BaseModel):
