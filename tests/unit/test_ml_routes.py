@@ -49,7 +49,13 @@ def _make_model(
     m.model_version = "20260314030000"
     m.version = "20260314030000"   # @property alias
     m.is_challenger = is_challenger
-    m.metrics = {"f1_score": 0.80, "precision": 0.82, "recall": 0.78, "auc_roc": 0.85}
+    m.metrics = {
+        "f1_score": 0.80,
+        "precision": 0.82,
+        "false_positive_rate": 0.12,
+        "recall": 0.78,
+        "auc_roc": 0.85,
+    }
     m.training_rows = 200
     m.feature_columns = []
     m.promoted_by = None
@@ -118,16 +124,33 @@ async def test_list_models_filters_by_model_type():
 
 @pytest.mark.asyncio
 async def test_promote_model_archives_champion_and_promotes_model():
-    from routers.ml import promote_model
+    from routers.ml import PromoteModelRequest, promote_model
 
     model = _make_model(model_id="model-a", status="challenger", is_challenger=True)
-    # First execute → find model; second execute → bulk update champion
+    # First execute -> find model
+    # Second execute -> scoring config
+    # Third execute -> current champion
+    # Fourth execute -> bulk update champion
     call_count = [0]
     results = []
 
     find_result = MagicMock()
     find_result.scalar_one_or_none = MagicMock(return_value=model)
     results.append(find_result)
+
+    scoring_cfg = SimpleNamespace(
+        min_precision=0.8,
+        max_false_positive_rate=0.2,
+        min_recall=0.7,
+        require_manual_approval=False,
+    )
+    scoring_result = MagicMock()
+    scoring_result.scalar_one_or_none = MagicMock(return_value=scoring_cfg)
+    results.append(scoring_result)
+
+    champion_result = MagicMock()
+    champion_result.scalar_one_or_none = MagicMock(return_value=None)
+    results.append(champion_result)
 
     bulk_result = MagicMock()
     results.append(bulk_result)
@@ -144,7 +167,12 @@ async def test_promote_model_archives_champion_and_promotes_model():
     db.execute = execute_side_effect
 
     with patch("routers.ml._write_audit", new_callable=AsyncMock):
-        response = await promote_model("model-a", db=db, current_user=_make_user())
+        response = await promote_model(
+            "model-a",
+            body=PromoteModelRequest(approval_reason="Promocao aprovada apos revisao"),
+            db=db,
+            current_user=_make_user(),
+        )
 
     assert response["status"] == "promoted"
     assert model.status == "champion"
