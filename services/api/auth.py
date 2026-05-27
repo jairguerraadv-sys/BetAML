@@ -82,6 +82,7 @@ _PERMISSIONS: dict[str, frozenset[str]] = {
         "alerts:read",      "alerts:write",
         "cases:read",       "cases:write",   "cases:admin",
         "players:read",     "players:write",
+        "players:erase",
         "reports:read",     "reports:write", "reports_kpi:read",
         "notifications:read",
         "audit:read",
@@ -105,7 +106,15 @@ _PERMISSIONS: dict[str, frozenset[str]] = {
         "platform_audit:read",
         "roles_global:admin",
         "users:read",     "users:write",
+        "players:erase",
         "*",   # superpermissão
+    }),
+    "AUDITOR": frozenset({
+        "alerts:read",
+        "cases:read",
+        "players:read",
+        "reports:read",
+        "audit:read",
     }),
 }
 

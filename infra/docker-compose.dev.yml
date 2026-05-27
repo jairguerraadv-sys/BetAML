@@ -1,0 +1,4 @@
+# Development compose entrypoint.
+# Keeps local ports exposed and bind mounts enabled for hot reload.
+include:
+  - docker-compose.yml

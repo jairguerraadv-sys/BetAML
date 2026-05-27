@@ -18,43 +18,68 @@ from models import Alert, IngestError, ModelRegistry
 
 logger = structlog.get_logger(__name__)
 
-OPEN_ALERTS_GAUGE = Gauge(
+def _prometheus_metric(factory, name: str, *args, **kwargs):
+    """Create a metric, or reuse it when tests import modules under aliases."""
+    try:
+        return factory(name, *args, **kwargs)
+    except ValueError as exc:
+        if "Duplicated timeseries" not in str(exc):
+            raise
+        try:
+            from prometheus_client import REGISTRY
+
+            for collector, names in REGISTRY._collector_to_names.items():  # type: ignore[attr-defined]
+                if any(metric_name == name or metric_name.startswith(f"{name}_") for metric_name in names):
+                    return collector
+        except Exception:
+            pass
+        raise
+
+
+OPEN_ALERTS_GAUGE = _prometheus_metric(
+    Gauge,
     "betaml_open_alerts_total",
     "Number of open alerts by severity and tenant",
     ["severity", "tenant_id"],
 )
 
-ML_LAST_TRAINED = Gauge(
+ML_LAST_TRAINED = _prometheus_metric(
+    Gauge,
     "betaml_ml_last_trained_seconds",
     "Unix timestamp of the most recent model training run",
     ["tenant_id"],
 )
 
-INGEST_ERR_GAUGE = Gauge(
+INGEST_ERR_GAUGE = _prometheus_metric(
+    Gauge,
     "betaml_ingest_errors_unresolved",
     "Number of unresolved ingest errors (DLQ) per tenant",
     ["tenant_id"],
 )
 
-KAFKA_LAG_GAUGE = Gauge(
+KAFKA_LAG_GAUGE = _prometheus_metric(
+    Gauge,
     "betaml_kafka_consumer_lag",
     "Kafka consumer group lag per tenant (best-effort)",
     ["tenant_id"],
 )
 
-KAFKA_LAG_BY_GROUP_TOPIC = Gauge(
+KAFKA_LAG_BY_GROUP_TOPIC = _prometheus_metric(
+    Gauge,
     "betaml_kafka_consumer_lag_messages",
     "Kafka consumer lag per consumer group and topic",
     ["group_id", "topic"],
 )
 
-EXTERNAL_VALIDATION_REQUESTS = Counter(
+EXTERNAL_VALIDATION_REQUESTS = _prometheus_metric(
+    Counter,
     "betaml_external_validation_requests_total",
     "Total de solicitações de validação externa por provider e tipo",
     ["provider", "validation_type"],
 )
 
-EXTERNAL_VALIDATION_RESULTS = Counter(
+EXTERNAL_VALIDATION_RESULTS = _prometheus_metric(
+    Counter,
     "betaml_external_validation_results_total",
     "Total de resultados de validação externa por provider e status",
     ["provider", "status"],

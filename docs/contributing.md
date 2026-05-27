@@ -33,6 +33,15 @@ DEBUG=false bash scripts/run_critical_unit_batches.sh -q --tb=short \
   --cov-fail-under=40
 ```
 
+Suites focadas de hardening:
+
+```bash
+pytest tests/security -q
+pytest tests/compliance -q
+pytest tests/ingest -q
+python scripts/check_docs_links.py
+```
+
 ## Frontend
 
 Type check estrito:
@@ -95,6 +104,7 @@ rm -rf e2e/playwright-report e2e/test-results e2e/playwright-report-* e2e/test-r
 ## Workflows relacionados
 
 - CI geral: `.github/workflows/ci.yml`
+- Security: `.github/workflows/security.yml`
 - E2E: `.github/workflows/e2e.yml`
 - Readiness: `.github/workflows/release-readiness.yml`
 - Integracao externa: `.github/workflows/external-validation-integration.yml`

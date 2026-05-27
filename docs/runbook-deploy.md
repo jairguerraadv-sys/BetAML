@@ -419,7 +419,7 @@ cd services/api
 DATABASE_URL="$DATABASE_URL" alembic current
 
 # Preflight operacional com evidência anexável
-cd /workspaces/BetAML
+cd <repo>
 bash scripts/readiness_preflight.sh --evidence-out /tmp/betaml-readiness-preflight.txt
 ```
 

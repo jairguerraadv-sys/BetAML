@@ -119,7 +119,7 @@ open http://localhost:3001   # admin / admin123
 ### 3.3 Bootstrap de acesso inicial
 
 ```bash
-cd /workspaces/BetAML/services/api
+cd services/api
 python seeds.py
 ```
 

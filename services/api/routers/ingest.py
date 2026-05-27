@@ -69,27 +69,50 @@ ALLOWED_SOURCE_SYSTEMS = frozenset(
 
 router = APIRouter(tags=["ingest"])
 
-_INGEST_CONTRACT_INFO = Info(
+def _prometheus_metric(factory, name: str, *args, **kwargs):
+    """Create a metric, or reuse it when tests import this module twice."""
+    try:
+        return factory(name, *args, **kwargs)
+    except ValueError as exc:
+        if "Duplicated timeseries" not in str(exc):
+            raise
+        try:
+            from prometheus_client import REGISTRY
+
+            for collector, names in REGISTRY._collector_to_names.items():  # type: ignore[attr-defined]
+                if any(metric_name == name or metric_name.startswith(f"{name}_") for metric_name in names):
+                    return collector
+        except Exception:
+            pass
+        raise
+
+
+_INGEST_CONTRACT_INFO = _prometheus_metric(
+    Info,
     "betaml_ingest_contract",
     "Official ingest contract metadata for operational monitoring",
 )
 
-_INGEST_LATENCY = Histogram(
+_INGEST_LATENCY = _prometheus_metric(
+    Histogram,
     "betaml_ingest_latency_seconds",
     "End-to-end ingest request latency in seconds",
     ["tenant_id", "source_system"],
 )
-_INGEST_REJECTED = Counter(
+_INGEST_REJECTED = _prometheus_metric(
+    Counter,
     "betaml_ingest_rejected_total",
     "Total ingest requests rejected (rate limit or validation)",
     ["tenant_id", "reason"],
 )
-_DLQ_PUBLISH = Counter(
+_DLQ_PUBLISH = _prometheus_metric(
+    Counter,
     "betaml_dlq_publish_total",
     "Total DLQ publish attempts",
     ["status"],  # success | error
 )
-_ALERT_CREATED = Counter(
+_ALERT_CREATED = _prometheus_metric(
+    Counter,
     "betaml_alert_created_total",
     "Total alerts created by the ingest pipeline",
     ["tenant_id"],

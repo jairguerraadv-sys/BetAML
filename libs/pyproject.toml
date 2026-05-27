@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-# Procura pacotes no diretório PAI deste pyproject.toml (/workspaces/BetAML/)
+# Procura pacotes no diretório PAI deste pyproject.toml (raiz do repositorio)
 # e encontra o pacote `libs` (com __init__.py)
 where = [".."]
 include = ["libs*"]

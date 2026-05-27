@@ -52,7 +52,7 @@ test_data/
 ### 1. Preparar o Ambiente
 
 ```bash
-cd /workspaces/BetAML
+cd <repo>
 
 # Iniciar stack (se não estiver rodando)
 docker-compose up -d

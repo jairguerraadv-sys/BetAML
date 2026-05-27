@@ -42,9 +42,11 @@ Pre-requisitos:
 Comandos:
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d --build
+docker compose -f infra/docker-compose.dev.yml up -d --build
 curl http://localhost:8000/health
 ```
+
+`infra/docker-compose.dev.yml` inclui a stack local com portas expostas e bind mounts para hot reload. Para staging/producao, use IaC/plataforma gerenciada; `infra/docker-compose.prod.example.yml` e apenas uma referencia sem exposicao publica de Postgres, Redis, ClickHouse, MinIO ou Redpanda.
 
 Servicos locais:
 
@@ -157,6 +159,16 @@ DEBUG=false bash scripts/run_critical_unit_batches.sh -q --tb=short \
   --cov-fail-under=40
 ```
 
+Suites de hardening:
+
+```bash
+pytest tests/security -q
+pytest tests/compliance -q
+pytest tests/ingest -q
+python scripts/check_docs_links.py
+docker compose -f infra/docker-compose.dev.yml config
+```
+
 Frontend:
 
 ```bash
@@ -174,18 +186,18 @@ python tests/load/generate_report.py /tmp/betaml_load_results
 
 Guias principais:
 
-- [README de E2E Playwright](/workspaces/BetAML/e2e/README.md)
-- [README da API](/workspaces/BetAML/services/api/README.md)
-- [README do Frontend](/workspaces/BetAML/services/frontend/README.md)
-- [README do Stream Processor](/workspaces/BetAML/services/stream_processor/README.md)
-- [README do Rules Engine](/workspaces/BetAML/services/rules_engine/README.md)
-- [README do ML Service](/workspaces/BetAML/services/ml_service/README.md)
-- [README do ML Trainer](/workspaces/BetAML/services/ml_trainer/README.md)
-- [Guia de Operacoes](/workspaces/BetAML/docs/ops-guide.md)
-- [Guia do Analista PLD](/workspaces/BetAML/docs/analyst-guide.md)
-- [Guia de Contribuicao](/workspaces/BetAML/docs/contributing.md)
-- [OpenAPI por tags](/workspaces/BetAML/docs/openapi-tags.md)
-- [OpenAPI estatico JSON](/workspaces/BetAML/docs/openapi.json)
+- [README de E2E Playwright](e2e/README.md)
+- [README da API](services/api/README.md)
+- [README do Frontend](services/frontend/README.md)
+- [README do Stream Processor](services/stream_processor/README.md)
+- [README do Rules Engine](services/rules_engine/README.md)
+- [README do ML Service](services/ml_service/README.md)
+- [README do ML Trainer](services/ml_trainer/README.md)
+- [Guia de Operacoes](docs/ops-guide.md)
+- [Guia do Analista PLD](docs/analyst-guide.md)
+- [Guia de Contribuicao](docs/contributing.md)
+- [OpenAPI por tags](docs/openapi-tags.md)
+- [OpenAPI estatico JSON](docs/openapi.json)
 
 ## OpenAPI
 
@@ -193,7 +205,7 @@ O contrato da API pode ser consumido de tres formas:
 
 - live: `GET /openapi.json`
 - UI: `GET /docs` e `GET /redoc`
-- snapshot versionado no repositorio: [`docs/openapi.json`](/workspaces/BetAML/docs/openapi.json)
+- snapshot versionado no repositorio: [`docs/openapi.json`](docs/openapi.json)
 
 Para regenerar o snapshot:
 
@@ -203,10 +215,10 @@ python scripts/export_openapi.py
 
 ## Operacao rapida
 
-- Backfill historico: veja [Guia de Operacoes](/workspaces/BetAML/docs/ops-guide.md)
-- Reprocessamento de ingest job: veja [Guia de Operacoes](/workspaces/BetAML/docs/ops-guide.md)
-- Rollback de MappingConfig: veja [Guia de Operacoes](/workspaces/BetAML/docs/ops-guide.md)
-- Investigacao e reporte: veja [Guia do Analista PLD](/workspaces/BetAML/docs/analyst-guide.md)
+- Backfill historico: veja [Guia de Operacoes](docs/ops-guide.md)
+- Reprocessamento de ingest job: veja [Guia de Operacoes](docs/ops-guide.md)
+- Rollback de MappingConfig: veja [Guia de Operacoes](docs/ops-guide.md)
+- Investigacao e reporte: veja [Guia do Analista PLD](docs/analyst-guide.md)
 
 ## Seeds e cenarios
 

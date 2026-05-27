@@ -1,0 +1,115 @@
+name: Security
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: BetAML secret hygiene
+        run: python scripts/check_secret_hygiene.py
+
+  python-security:
+    name: Python dependency and SAST
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            services/api/requirements.txt
+
+      - name: Install scanners
+        run: |
+          pip install --upgrade pip
+          pip install bandit==1.7.8 pip-audit==2.7.3
+
+      - name: Bandit report
+        run: |
+          bandit -r services/api libs \
+            --configfile pyproject.toml \
+            --format json \
+            --output bandit-report.json || true
+
+      - name: Bandit fail on high severity
+        run: |
+          bandit -r services/api libs \
+            --configfile pyproject.toml \
+            --severity-level high \
+            --confidence-level high \
+            --quiet
+
+      - name: pip-audit report
+        run: |
+          pip-audit -r services/api/requirements.txt -r requirements-dev.txt \
+            --format json \
+            --output pip-audit-report.json || true
+
+      - name: pip-audit fail on critical/high fixable issues
+        run: |
+          pip-audit -r services/api/requirements.txt -r requirements-dev.txt --strict
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-python-security
+          path: |
+            bandit-report.json
+            pip-audit-report.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  node-security:
+    name: Node dependency scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: services/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: services/frontend
+        run: npm ci
+
+      - name: npm audit report
+        working-directory: services/frontend
+        run: npm audit --json > ../../npm-audit-frontend.json || true
+
+      - name: Fail on high/critical npm audit findings
+        working-directory: services/frontend
+        run: npm audit --audit-level=high
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artifact-node-security
+          path: npm-audit-frontend.json
+          if-no-files-found: ignore
+          retention-days: 14

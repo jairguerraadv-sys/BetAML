@@ -1,6 +1,6 @@
 # BetAML OpenAPI por Tag
 
-O snapshot oficial do contrato esta em [`docs/openapi.json`](/workspaces/BetAML/docs/openapi.json). A API live expõe o mesmo documento em `GET /openapi.json`.
+O snapshot oficial do contrato esta em [`docs/openapi.json`](openapi.json). A API live expõe o mesmo documento em `GET /openapi.json`.
 
 ## Tags principais
 
