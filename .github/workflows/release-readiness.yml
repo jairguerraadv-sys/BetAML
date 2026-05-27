@@ -164,8 +164,11 @@ jobs:
               && mc mb --ignore-existing backup/betaml-backups >/dev/null \
               && mc cp "/work/postgres_${4}.sql.gz" "backup/betaml-backups/postgres/postgres_${4}.sql.gz" >/dev/null \
               && mc cp /work/probe.txt "backup/betaml-backups/minio/${4}/probe.txt" >/dev/null' \
-            sh http://host.docker.internal:9000 minio minio123 "$TS"
+            sh http://host.docker.internal:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" "$TS"
           echo "RESTORE_DRILL_TIMESTAMP=$TS" >> "$GITHUB_ENV"
+        env:
+          MINIO_ROOT_USER: ${{ vars.MINIO_ROOT_USER || 'minio' }}
+          MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD }}
 
       - name: Run restore drill and capture evidence
         run: |
@@ -248,13 +251,13 @@ jobs:
           EOF
         env:
           E2E_USERNAME: ${{ github.event.inputs.e2e_username || 'analyst_a' }}
-          E2E_PASSWORD: analyst123
-          E2E_ADMIN_USERNAME: admin_a
-          E2E_ADMIN_PASSWORD: admin123
-          E2E_SECONDARY_ADMIN_USERNAME: admin_b
-          E2E_SECONDARY_ADMIN_PASSWORD: admin123
-          E2E_AUDITOR_USERNAME: auditor_a
-          E2E_AUDITOR_PASSWORD: auditor123
+          E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
+          E2E_ADMIN_USERNAME: ${{ vars.E2E_ADMIN_USERNAME || 'admin_a' }}
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+          E2E_SECONDARY_ADMIN_USERNAME: ${{ vars.E2E_SECONDARY_ADMIN_USERNAME || 'admin_b' }}
+          E2E_SECONDARY_ADMIN_PASSWORD: ${{ secrets.E2E_SECONDARY_ADMIN_PASSWORD }}
+          E2E_AUDITOR_USERNAME: ${{ vars.E2E_AUDITOR_USERNAME || 'auditor_a' }}
+          E2E_AUDITOR_PASSWORD: ${{ secrets.E2E_AUDITOR_PASSWORD }}
 
       - name: Run readiness smoke tests
         working-directory: e2e

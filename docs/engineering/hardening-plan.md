@@ -199,6 +199,7 @@ Routers em `services/api/routers/`: `admin`, `alerts`, `audit`, `auth`, `cases`,
 ---
 
 ### PR-04 – `hardening/secrets-scan-gate`
+**Status:** IMPLEMENTADO E VALIDADO LOCALMENTE (2026-05-26).
 **Objetivo:** bloquear credenciais padrão em qualquer arquivo rastreado e validar rotação.  
 **Escopo:**
 - Expandir job `secret-hygiene` no CI para cobrir `values*.yaml` e `configmap.yaml` do Helm.
@@ -207,6 +208,8 @@ Routers em `services/api/routers/`: `admin`, `alerts`, `audit`, `auth`, `cases`,
 - Agente recomendado: `BetAML Security and PII Agent`
 
 **Critério de aceite:** commit com `devpass` ou `admin123` em qualquer arquivo Helm é rejeitado por CI.
+
+**Risco residual após PR-04:** scanner bloqueia defaults inseguros em arquivos rastreados sensíveis (helm/workflows/deploy), porém ainda não comprova rotação efetiva em ambientes reais. Follow-up: validar secrets manager + Kubernetes secrets em staging.
 
 ---
 

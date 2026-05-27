@@ -14,7 +14,7 @@ name: E2E Tests
       e2e_password:
         description: "Senha de teste E2E"
         required: false
-        default: "analyst123"
+        default: ""
   schedule:
     - cron: '0 6 * * 1'      # every Monday 06:00 UTC
 
@@ -100,8 +100,8 @@ jobs:
       - name: Create E2E env file
         working-directory: e2e
         run: |
-          if [ -z "${E2E_USERNAME}" ] || [ -z "${E2E_PASSWORD}" ]; then
-            echo "E2E_USERNAME/E2E_PASSWORD nao definidos nos inputs do workflow." >&2
+          if [ -z "${E2E_USERNAME}" ] || [ -z "${E2E_PASSWORD}" ] || [ -z "${E2E_ADMIN_PASSWORD}" ] || [ -z "${E2E_SECONDARY_ADMIN_PASSWORD}" ] || [ -z "${E2E_AUDITOR_PASSWORD}" ]; then
+            echo "Credenciais E2E ausentes. Configure vars/secrets no workflow." >&2
             exit 1
           fi
           cat > .env.e2e <<EOF
@@ -118,13 +118,13 @@ jobs:
           EOF
         env:
           E2E_USERNAME: ${{ github.event.inputs.e2e_username || 'analyst_a' }}
-          E2E_PASSWORD: ${{ github.event.inputs.e2e_password || 'analyst123' }}
-          E2E_ADMIN_USERNAME: admin_a
-          E2E_ADMIN_PASSWORD: admin123
-          E2E_SECONDARY_ADMIN_USERNAME: admin_b
-          E2E_SECONDARY_ADMIN_PASSWORD: admin123
-          E2E_AUDITOR_USERNAME: auditor_a
-          E2E_AUDITOR_PASSWORD: auditor123
+          E2E_PASSWORD: ${{ github.event.inputs.e2e_password || secrets.E2E_PASSWORD }}
+          E2E_ADMIN_USERNAME: ${{ vars.E2E_ADMIN_USERNAME || 'admin_a' }}
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+          E2E_SECONDARY_ADMIN_USERNAME: ${{ vars.E2E_SECONDARY_ADMIN_USERNAME || 'admin_b' }}
+          E2E_SECONDARY_ADMIN_PASSWORD: ${{ secrets.E2E_SECONDARY_ADMIN_PASSWORD }}
+          E2E_AUDITOR_USERNAME: ${{ vars.E2E_AUDITOR_USERNAME || 'auditor_a' }}
+          E2E_AUDITOR_PASSWORD: ${{ secrets.E2E_AUDITOR_PASSWORD }}
 
       - name: Install Playwright browsers
         working-directory: e2e

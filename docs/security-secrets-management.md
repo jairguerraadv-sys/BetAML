@@ -4,6 +4,41 @@
 
 **Em produção, NUNCA use secrets em plaintext** no `.env` ou no código. Este guia mostra como migrar para um secrets manager adequado.
 
+## Secrets Obrigatórios da Plataforma
+
+- `JWT_SECRET`
+- `PII_ENCRYPTION_KEY`
+- `EPSILON_WEBHOOK_SECRET`
+- `INTERNAL_WEBHOOK_SECRET`
+- `DATABASE_URL`
+- `REDIS_URL`
+- `MINIO_SECRET_KEY`
+- `ML_INTERNAL_API_KEY` (quando ML service exigir chamada interna autenticada)
+
+### Onde armazenar
+
+- Local dev: `.env` local não versionado
+- AWS: Secrets Manager
+- Azure: Key Vault
+- Kubernetes: `Secret` + External Secrets Operator
+
+### O que nunca commitar
+
+- credenciais reais de banco/redis/minio
+- chaves JWT/PII de ambiente real
+- tokens de webhook internos
+- API keys de integração externa
+
+## Validação Local do Gate de Secrets
+
+Execute sempre antes de abrir PR:
+
+```bash
+python scripts/check_secret_hygiene.py
+```
+
+O scanner falha quando encontra defaults inseguros em arquivos sensíveis rastreados (helm/workflows/deploy), mas permite exemplos didáticos em docs e arquivos `.example`.
+
 ---
 
 ## Por Que É Crítico?
@@ -177,6 +212,13 @@ spec:
    db.execute("UPDATE players SET cpf_encrypted = %s, pii_encryption_key_version = 2", cpf_v2_encrypted)
    ```
 4. Após 100% migrados, remover key_v1 do secrets manager
+
+### Procedimento mínimo obrigatório antes da rotação de PII_ENCRYPTION_KEY
+
+1. Backup consistente do banco e validação de restore drill.
+2. Janela operacional aprovada (impacta criptografia de dados PII já persistidos).
+3. Plano de re-encryption validado em staging.
+4. Plano de rollback testado (restauração de backup + chave anterior).
 
 ---
 
