@@ -18,7 +18,7 @@ from sqlalchemy import select, and_, text, func
 
 from config import settings
 from database import AsyncSessionLocal
-from libs.ml_governance import blocks_synthetic_model_promotion, is_synthetic_model
+from libs.ml_governance import evaluate_model_promotion_candidate
 from models import Alert, AuditLog, Case, FeatureSnapshot, ModelRegistry, Notification, Player, ReportPackage, ScoringConfig, Tenant, User, FinancialTransaction, Bet, IngestError
 
 logger = structlog.get_logger(__name__)
@@ -1126,6 +1126,11 @@ async def auto_promote_challenger_models() -> None:
 
             for tenant in tenants:
                 await _set_db_tenant_context(db, tenant.id)
+                scoring_cfg = (
+                    await db.execute(
+                        select(ScoringConfig).where(ScoringConfig.tenant_id == tenant.id).limit(1)
+                    )
+                ).scalar_one_or_none()
 
                 # Busca challenger ativo do tenant (por model_type)
                 challengers = (
@@ -1194,7 +1199,7 @@ async def auto_promote_challenger_models() -> None:
                         )
                     ).scalars().all()
 
-                    def _precision_for_model(model_id: str) -> float | None:
+                    def _model_stats(model_id: str) -> tuple[int, int, float | None, float | None]:
                         tp = fp = 0
                         for a in alerts_30d:
                             evidence = a.evidence or {}
@@ -1206,10 +1211,13 @@ async def auto_promote_challenger_models() -> None:
                                 tp += 1
                             elif a.label == "FALSE_POSITIVE":
                                 fp += 1
-                        return tp / (tp + fp) if (tp + fp) >= 5 else None
+                        sample = tp + fp
+                        if sample < 5:
+                            return tp, fp, None, None
+                        return tp, fp, tp / sample, fp / sample
 
-                    ch_precision = _precision_for_model(str(challenger.id))
-                    cp_precision = _precision_for_model(str(champion.id))
+                    ch_tp, ch_fp, ch_precision, ch_fpr = _model_stats(str(challenger.id))
+                    _cp_tp, _cp_fp, cp_precision, _cp_fpr = _model_stats(str(champion.id))
 
                     if ch_precision is None or cp_precision is None:
                         # Amostras insuficientes (< 5 alertas) — não decide ainda
@@ -1222,36 +1230,69 @@ async def auto_promote_challenger_models() -> None:
 
                     delta = ch_precision - cp_precision
 
-                    blocked_synthetic = (
-                        is_synthetic_model(
-                            getattr(challenger, "metrics", None),
-                            getattr(challenger, "trained_on_synthetic", None),
-                        )
-                        and blocks_synthetic_model_promotion(settings.environment)
+                    challenger_metrics = dict(getattr(challenger, "metrics", None) or {})
+                    challenger_metrics.setdefault("precision", round(ch_precision, 4))
+                    challenger_metrics.setdefault("false_positive_rate", round(ch_fpr or 0.0, 4))
+
+                    decision = evaluate_model_promotion_candidate(
+                        metrics=challenger_metrics,
+                        trained_on_synthetic=getattr(challenger, "trained_on_synthetic", None),
+                        scoring_config=scoring_cfg,
+                        environment=settings.environment,
                     )
-                    if blocked_synthetic:
+
+                    if bool(decision.thresholds.get("require_manual_approval")):
                         db.add(AuditLog(
                             tenant_id=tenant.id,
                             user_id=None,
-                            action="CHALLENGER_PROMOTION_BLOCKED_SYNTHETIC",
+                            action="ml_model_auto_promotion_blocked",
                             entity_type="ModelRegistry",
                             entity_id=str(challenger.id),
                             after={
                                 "model_type": challenger.model_type,
+                                "reason": "manual_approval_required",
+                                "environment": settings.environment,
+                                "metrics": decision.metrics,
+                                "thresholds": decision.thresholds,
+                                "challenger_precision": round(ch_precision, 4),
+                                "champion_precision": round(cp_precision, 4),
+                                "delta": round(delta, 4),
+                                "threshold": PROMOTION_THRESHOLD,
+                            },
+                        ))
+                        await db.commit()
+                        logger.info(
+                            "challenger_auto_promotion_blocked_manual_approval",
+                            tenant_id=tenant.id,
+                            challenger_id=str(challenger.id),
+                        )
+                        continue
+
+                    if not decision.allowed:
+                        db.add(AuditLog(
+                            tenant_id=tenant.id,
+                            user_id=None,
+                            action="ml_model_auto_promotion_blocked",
+                            entity_type="ModelRegistry",
+                            entity_id=str(challenger.id),
+                            after={
+                                "model_type": challenger.model_type,
+                                "reasons": decision.reasons,
+                                "metrics": decision.metrics,
+                                "thresholds": decision.thresholds,
                                 "challenger_precision": round(ch_precision, 4),
                                 "champion_precision": round(cp_precision, 4),
                                 "delta": round(delta, 4),
                                 "threshold": PROMOTION_THRESHOLD,
                                 "environment": settings.environment,
-                                "reason": "synthetic_model_promotion_blocked",
                             },
                         ))
                         await db.commit()
-                        logger.warning(
-                            "challenger_promotion_blocked_synthetic",
+                        logger.info(
+                            "challenger_auto_promotion_blocked_governance",
                             tenant_id=tenant.id,
                             challenger_id=str(challenger.id),
-                            environment=settings.environment,
+                            reasons=decision.reasons,
                         )
                         continue
 
@@ -1272,11 +1313,13 @@ async def auto_promote_challenger_models() -> None:
                         db.add(AuditLog(
                             tenant_id=tenant.id,
                             user_id=None,
-                            action="CHALLENGER_AUTO_PROMOTED",
+                            action="ml_model_auto_promotion_approved",
                             entity_type="ModelRegistry",
                             entity_id=str(challenger.id),
                             after={
                                 "model_type": challenger.model_type,
+                                "metrics": decision.metrics,
+                                "thresholds": decision.thresholds,
                                 "challenger_precision": round(ch_precision, 4),
                                 "champion_precision": round(cp_precision, 4),
                                 "delta": round(delta, 4),

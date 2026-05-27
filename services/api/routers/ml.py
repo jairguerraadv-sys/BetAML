@@ -10,13 +10,17 @@ from typing import Any, Optional
 import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import desc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import AppRole, require_role_any
 from config import settings
 from database import get_db
-from libs.ml_governance import blocks_synthetic_model_promotion, is_synthetic_model
+from libs.ml_governance import (
+    blocks_synthetic_model_promotion,
+    evaluate_model_promotion_candidate,
+)
 from libs.models import Alert, AuditLog, ModelInferenceLog, ModelRegistry, ScoringConfig
 from libs.schemas import (
     ModelABMetricsOut,
@@ -113,6 +117,10 @@ def _status_rank(status: str) -> tuple[int, str]:
         "ARCHIVED": 3,
     }
     return ordering.get(status, 9), status
+
+
+class PromoteModelRequest(BaseModel):
+    approval_reason: str | None = None
 
 
 def _build_performance_summary(
@@ -515,6 +523,7 @@ async def get_model_ab_metrics(
 @router.post("/model-registry/{model_id}/promote")
 async def promote_model(
     model_id: str,
+    body: PromoteModelRequest | None = None,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_role_any(MODEL_REGISTRY_WRITE_ROLES)),
 ):
@@ -530,30 +539,60 @@ async def promote_model(
     if str(getattr(model, "status", "")) != "challenger" or not bool(getattr(model, "is_challenger", False)):
         raise HTTPException(409, "Somente challenger designado pode ser promovido")
 
-    synthetic_flag = is_synthetic_model(
-        getattr(model, "metrics", None),
-        getattr(model, "trained_on_synthetic", None),
+    scoring_cfg = (await db.execute(
+        select(ScoringConfig).where(ScoringConfig.tenant_id == current_user.tenant_id).limit(1)
+    )).scalar_one_or_none()
+    decision = evaluate_model_promotion_candidate(
+        metrics=getattr(model, "metrics", None),
+        trained_on_synthetic=getattr(model, "trained_on_synthetic", None),
+        scoring_config=scoring_cfg,
+        environment=settings.environment,
     )
-    if synthetic_flag and blocks_synthetic_model_promotion(settings.environment):
+    approval_reason = (body.approval_reason.strip() if body and body.approval_reason else None)
+    strict_environment = blocks_synthetic_model_promotion(settings.environment)
+    missing_approval_reason = (
+        bool(decision.thresholds.get("require_manual_approval"))
+        and strict_environment
+        and not approval_reason
+    )
+
+    if not decision.allowed or missing_approval_reason:
+        blocked_reasons = list(decision.reasons)
+        if missing_approval_reason:
+            blocked_reasons.append("missing_approval_reason")
         await _write_audit(
             db,
             current_user.tenant_id,
             current_user.id,
-            "PROMOTE_MODEL_BLOCKED_SYNTHETIC",
+            "ml_model_promotion_blocked",
             "ModelRegistry",
             model_id,
             {
                 "model_type": model.model_type,
                 "environment": settings.environment,
-                "trained_on_synthetic": True,
-                "reason": "synthetic_model_promotion_blocked",
+                "approval_reason": approval_reason,
+                "reasons": blocked_reasons,
+                "metrics": decision.metrics,
+                "thresholds": decision.thresholds,
             },
         )
         await db.commit()
         raise HTTPException(
             422,
-            "Synthetic bootstrap models cannot be promoted to active/champion outside development or test environments.",
+            {
+                "message": "Model promotion blocked by governance policy",
+                "reasons": blocked_reasons,
+            },
         )
+
+    current_champion = (await db.execute(
+        select(ModelRegistry).where(
+            _tenant_filter(ModelRegistry, current_user.tenant_id),
+            ModelRegistry.model_type == model.model_type,
+            ModelRegistry.id != model_id,
+            ModelRegistry.status.in_(["champion", "active", "PRODUCTION"]),
+        ).order_by(desc(ModelRegistry.trained_at))
+    )).scalar_one_or_none()
 
     await db.execute(
         update(ModelRegistry).where(
@@ -569,9 +608,33 @@ async def promote_model(
     model.champion_id = None
     model.promoted_by = current_user.id
     model.promoted_at = datetime.now(UTC)
-    await _write_audit(db, current_user.tenant_id, current_user.id,
-                       "PROMOTE_MODEL", "ModelRegistry", model_id,
-                       {"model_type": model.model_type})
+    if current_champion is not None:
+        await _write_audit(
+            db,
+            current_user.tenant_id,
+            current_user.id,
+            "ml_model_demoted",
+            "ModelRegistry",
+            str(current_champion.id),
+            {
+                "new_champion_id": model_id,
+                "model_type": model.model_type,
+            },
+        )
+    await _write_audit(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        "ml_model_promotion_approved",
+        "ModelRegistry",
+        model_id,
+        {
+            "model_type": model.model_type,
+            "approval_reason": approval_reason,
+            "metrics": decision.metrics,
+            "thresholds": decision.thresholds,
+        },
+    )
     await db.commit()
     return {"status": "promoted", "model_id": model_id}
 
