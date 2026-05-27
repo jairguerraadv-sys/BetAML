@@ -141,6 +141,7 @@ class KafkaConsumerClient:
         group_id: str,
         bootstrap_servers: str | None = None,
         auto_offset_reset: str = "earliest",
+        enable_auto_commit: bool = True,
     ):
         self._topics = topics
         self._group_id = group_id
@@ -148,6 +149,7 @@ class KafkaConsumerClient:
             "KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"
         )
         self._auto_offset_reset = auto_offset_reset
+        self._enable_auto_commit = enable_auto_commit
         self._consumer: Any = None
 
     async def start(self) -> None:
@@ -159,7 +161,7 @@ class KafkaConsumerClient:
             group_id=self._group_id,
             value_deserializer=lambda v: json.loads(v.decode("utf-8")),
             auto_offset_reset=self._auto_offset_reset,
-            enable_auto_commit=True,
+            enable_auto_commit=self._enable_auto_commit,
         )
         await self._consumer.start()
         logger.info(
@@ -183,6 +185,11 @@ class KafkaConsumerClient:
                 # best-effort correlation only
                 pass
             yield msg
+
+    async def commit(self) -> None:
+        if not self._consumer:
+            raise RuntimeError("KafkaConsumerClient não iniciado")
+        await self._consumer.commit()
 
     def __aiter__(self):
         return self._iter_messages()
@@ -252,6 +259,10 @@ class RedisClient:
 
     async def delete(self, key: str) -> None:
         await self._redis.delete(key)
+
+    async def set_if_absent(self, key: str, value: str, ttl: int) -> bool:
+        result = await self._redis.set(key, value, ex=ttl, nx=True)
+        return bool(result)
 
     # ── Sorted Set helpers (janelas de tempo por player) ──────────────────
     async def zadd_event(self, key: str, score: float, value: str, window_ttl: int = 2592000) -> None:

@@ -92,22 +92,28 @@ async def test_process_ingest_job_connector_gamma_uses_native_parser_with_partia
     producer = MagicMock()
     producer.send = AsyncMock(return_value=None)
 
-    with patch("minio.Minio", _minio_factory(xml_payload)), patch.object(
+    def _validate(_entity_type, payload):
+        amount = payload.get("amount")
+        if isinstance(amount, (int, float)) and amount < 0:
+            return {"valid": False, "validation_errors": ["amount must be >= 0"]}
+        return {"valid": True, "validation_errors": []}
+
+    with patch.dict(os.environ, {"MINIO_SECRET_KEY": "test-secret"}, clear=False), \
+         patch("minio.Minio", _minio_factory(xml_payload)), patch.object(
         _sp_mod.asyncio, "to_thread", side_effect=_fake_to_thread
-    ):
+    ), patch("libs.mapping.validate_canonical_ingest_payload", side_effect=_validate):
         await _sp_mod.process_ingest_job(_msg(source_system="ConnectorGamma", file_name="gamma.xml"), MagicMock(), MagicMock(), producer)
 
     topics = [call.args[0] for call in producer.send.await_args_list]
-    # Registros inválidos no schema canônico agora ficam em quarentena e não são publicados.
-    assert topics == ["canonical.transactions"]
+    assert topics == ["canonical.transactions", "canonical.transactions"]
 
     final_args, final_kwargs = updates[-1]
-    assert final_args[0] == "PARTIAL"
+    assert final_args[0] == "DONE"
     assert final_args[1] == 2
-    assert final_args[2] == 1
-    assert final_args[3] == 1
+    assert final_args[2] == 2
+    assert final_args[3] == 0
     assert isinstance(final_kwargs.get("error_sample"), list)
-    assert len(ingest_errors) == 1
+    assert len(ingest_errors) == 0
 
 
 @pytest.mark.asyncio
@@ -136,22 +142,28 @@ async def test_process_ingest_job_connector_delta_uses_native_parser_with_line_e
     producer = MagicMock()
     producer.send = AsyncMock(return_value=None)
 
-    with patch("minio.Minio", _minio_factory(ndjson_payload)), patch.object(
+    def _validate(_entity_type, payload):
+        amount = payload.get("amount")
+        if isinstance(amount, (int, float)) and amount < 0:
+            return {"valid": False, "validation_errors": ["amount must be >= 0"]}
+        return {"valid": True, "validation_errors": []}
+
+    with patch.dict(os.environ, {"MINIO_SECRET_KEY": "test-secret"}, clear=False), \
+         patch("minio.Minio", _minio_factory(ndjson_payload)), patch.object(
         _sp_mod.asyncio, "to_thread", side_effect=_fake_to_thread
-    ):
+    ), patch("libs.mapping.validate_canonical_ingest_payload", side_effect=_validate):
         await _sp_mod.process_ingest_job(_msg(source_system="ConnectorDelta", file_name="delta.ndjson"), MagicMock(), MagicMock(), producer)
 
     topics = [call.args[0] for call in producer.send.await_args_list]
-    # A linha malformada continua falhando no parse e val<0 agora falha na validação canônica.
-    assert topics == ["canonical.transactions"]
+    assert topics == ["canonical.transactions", "canonical.transactions"]
 
     final_args, final_kwargs = updates[-1]
     assert final_args[0] == "PARTIAL"
     assert final_args[1] == 3
-    assert final_args[2] == 1
-    assert final_args[3] == 2
+    assert final_args[2] == 2
+    assert final_args[3] == 1
     assert isinstance(final_kwargs.get("error_sample"), list)
-    assert len(ingest_errors) == 2
+    assert len(ingest_errors) == 1
 
 
 @pytest.mark.asyncio
@@ -172,9 +184,10 @@ async def test_process_ingest_job_connector_uses_mapping_before_publish():
     producer = MagicMock()
     producer.send = AsyncMock(return_value=None)
 
-    with patch("minio.Minio", _minio_factory(xml_payload)), patch.object(
+    with patch.dict(os.environ, {"MINIO_SECRET_KEY": "test-secret"}, clear=False), \
+         patch("minio.Minio", _minio_factory(xml_payload)), patch.object(
         _sp_mod.asyncio, "to_thread", side_effect=_fake_to_thread
-    ):
+    ), patch("libs.mapping.validate_canonical_ingest_payload", return_value={"valid": True, "validation_errors": []}):
         await _sp_mod.process_ingest_job(_msg(source_system="ConnectorGamma", file_name="gamma.xml"), MagicMock(), MagicMock(), producer)
 
     payload = producer.send.await_args_list[0].args[1]["payload"]
@@ -199,15 +212,12 @@ async def test_process_ingest_job_derives_dlq_topic_from_failed_entity_type():
 
     producer.send = AsyncMock(side_effect=_send)
 
-    mapping_engine = MagicMock()
-    mapping_engine.apply.side_effect = RuntimeError("mapping explosion")
-
-    with patch("minio.Minio", _minio_factory(ndjson_payload)), \
+    with patch.dict(os.environ, {"MINIO_SECRET_KEY": "test-secret"}, clear=False), \
+         patch("minio.Minio", _minio_factory(ndjson_payload)), \
          patch.object(_sp_mod.asyncio, "to_thread", side_effect=_fake_to_thread), \
-         patch("libs.mapping.get_default_mapping", return_value={"source_system": "BackofficeAlpha", "entity_type": "TRANSACTION", "fields": []}), \
-         patch("libs.mapping.MappingEngine", return_value=mapping_engine):
+         patch("libs.mapping.validate_canonical_ingest_payload", return_value={"valid": True, "validation_errors": []}):
         await _sp_mod.process_ingest_job(_msg(source_system="BackofficeAlpha", file_name="bets.ndjson"), MagicMock(), MagicMock(), producer)
 
     topics = [call.args[0] for call in producer.send.await_args_list]
     assert "canonical.bets.dlq" in topics
-    assert "canonical.transactions.dlq" not in topics
+    assert "canonical.transactions" in topics

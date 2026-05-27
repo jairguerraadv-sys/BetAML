@@ -224,6 +224,7 @@ aprovação explícita de promoção e feedback loop operacional completo perman
 ---
 
 ### PR-05 – `hardening/pipeline-real-dlq`
+**Status:** IMPLEMENTADO LOCALMENTE, validacao CI/stack pendente.
 **Objetivo:** validar que o pipeline Kafka tem DLQ funcional e backfill testado.  
 **Escopo:**
 - Mapear tópicos reais no stream-processor vs. tópicos declarados em `ingest-contract.md`.
@@ -232,6 +233,17 @@ aprovação explícita de promoção e feedback loop operacional completo perman
 - Agente recomendado: `BetAML Real Pipeline Agent`
 
 **Critério de aceite:** mensagem inválida vai ao DLQ; replay processa sem duplicata; teste de integração verde.
+
+**Entregas implementadas no PR-05:**
+- `stream_processor` com commit manual de offset (`enable_auto_commit=false`) e commit somente apos sucesso ou DLQ.
+- Publicacao DLQ com metadata operacional (`original_topic`, `error_type`, `retry_count`, `correlation_id`, mensagem sanitizada).
+- Replay idempotente na API com chave Redis NX (`tenant_id + source_system + source_event_id`).
+- Testes unitarios de DLQ/dedupe/contrato e teste de integracao stack-required para replay.
+- Documentacao de inventario/runbook: `docs/engineering/pipeline-dlq-replay.md`.
+
+**Risco residual apos PR-05:**
+- Fluxo de integracao completa (DLQ->replay->reprocessamento ponta-a-ponta) depende de stack local (`TEST_STACK_UP=1`) e validacao CI.
+- Idempotencia baseada em TTL no Redis cobre janela operacional, nao historico infinito.
 
 ---
 

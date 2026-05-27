@@ -217,6 +217,7 @@ class Settings(BaseSettings):
 
     # Ingest DLQ
     dlq_max_retries: int = 3
+    dlq_topic: str = ""
 
     # Internal webhook secret (AlertManager → /internal/alerts/webhook)
     # Em produção, gere com: python -c "import secrets; print(secrets.token_hex(32))"

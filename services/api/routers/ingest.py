@@ -41,6 +41,7 @@ from libs.connectors import (
 from libs.mapping import MappingEngine, get_default_mapping, validate_canonical_ingest_payload
 from models import IngestError, IngestJob, MappingConfig, ScoringConfig, SystemFlag, User
 from utils import (
+    _get_rate_redis,
     get_producer,
     redact_sensitive_payload_for_storage,
     redis_rate_limit,
@@ -302,6 +303,24 @@ def _kafka_headers_from_context() -> list[tuple[str, bytes]] | None:
     return None
 
 
+def _resolve_dlq_topic(topic: str) -> str:
+    configured = str(getattr(settings, "dlq_topic", "") or "").strip()
+    return configured or f"{topic}.dlq"
+
+
+def _error_type(exc: Exception) -> str:
+    msg = str(exc).lower()
+    if any(marker in msg for marker in ("validation", "schema", "missing", "invalid")):
+        return "validation_error"
+    if any(marker in msg for marker in ("timeout", "temporar", "network", "connection", "broker")):
+        return "transient_error"
+    return "processing_error"
+
+
+def _safe_error_message(exc: Exception) -> str:
+    return redact_sensitive_payload_for_storage(str(exc))
+
+
 @router.get("/ingest/contract", response_model=IngestContractOut)
 async def get_ingest_contract(
     current_user: User = Depends(require_roles("ADMIN", "AML_ANALYST", "BetAML_SuperAdmin")),
@@ -344,23 +363,33 @@ async def _publish_with_retries(
         except Exception as exc:  # noqa: BLE001
             if attempt >= max_retries:
                 try:
+                    correlation_id = str(
+                        payload.get("correlation_id")
+                        or payload.get("source_event_id")
+                        or payload.get("event_id")
+                        or ""
+                    )
                     await _send_best_effort(
-                        f"{topic}.dlq",
+                        _resolve_dlq_topic(topic),
                         {
                             "tenant_id": tenant_id,
+                            "correlation_id": correlation_id,
                             "source_system": source_system,
                             "target_topic": topic,
-                            "reason": str(exc),
+                            "original_topic": topic,
+                            "error_type": _error_type(exc),
+                            "error_message": _safe_error_message(exc),
+                            "retry_count": attempt,
                             "attempt": attempt,
                             "max_retries": max_retries,
                             "failed_at": datetime.now(timezone.utc).isoformat(),
-                            "payload": payload,
+                            "payload": sanitize_sensitive_payload(payload),
                             "context": context or {},
                         },
                     )
                     _DLQ_PUBLISH.labels(status="success").inc()
                 except Exception as dlq_exc:  # noqa: BLE001
-                    logger.error("ingest_dlq_publish_failed", error=str(dlq_exc), topic=topic)
+                    logger.error("ingest_dlq_publish_failed", error=_safe_error_message(dlq_exc), topic=topic)
                     _DLQ_PUBLISH.labels(status="error").inc()
                 return False
             await asyncio.sleep(0.1 * attempt)
@@ -501,8 +530,10 @@ def _build_envelope(
     event_id = str(uuid.uuid4())
     ctx = structlog.contextvars.get_contextvars()
     request_id = ctx.get("request_id")
+    correlation_id = str(request_id or source_event_id or event_id)
     return {
         "event_id": event_id,
+        "correlation_id": correlation_id,
         "tenant_id": tenant_id,
         "source_system": source_system,
         "source_event_id": source_event_id,
@@ -1391,6 +1422,18 @@ async def replay_ingest_error(
         or body.corrected_payload.get("event_id")
         or uuid.uuid4()
     )
+
+    dedupe_key = f"betaml:replay:dedupe:{current_user.tenant_id}:{err.source_system}:{source_event_id}"
+    rate_redis = await _get_rate_redis()
+    if rate_redis is not None:
+        was_new = await rate_redis.set(dedupe_key, "1", ex=7 * 24 * 3600, nx=True)
+        if not was_new:
+            return {
+                "status": "already_processed",
+                "source_event_id": source_event_id,
+                "ingest_error_id": err.id,
+                "resolved": err.resolved,
+            }
 
     producer = await get_producer()
     if not producer:

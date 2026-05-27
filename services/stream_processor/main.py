@@ -92,6 +92,124 @@ def _stored_error_payload(value) -> str:
 def _error_sample_row(line, reason: str, raw):
     return {"line": line, "reason": reason, "raw": _sanitize_sensitive_payload(raw)}
 
+
+def _resolve_dlq_topic(original_topic: str) -> str:
+    return DLQ_TOPIC_FALLBACK or f"{original_topic}.dlq"
+
+
+def _error_type(exc: Exception) -> str:
+    msg = str(exc).lower()
+    transient_markers = (
+        "timeout",
+        "temporar",
+        "temporarily",
+        "connection reset",
+        "connection refused",
+        "broker",
+        "leader not available",
+        "network",
+    )
+    validation_markers = (
+        "validation",
+        "missing required",
+        "invalid payload",
+        "schema",
+        "jsondecodeerror",
+        "valueerror",
+    )
+    if any(marker in msg for marker in validation_markers):
+        return "validation_error"
+    if any(marker in msg for marker in transient_markers):
+        return "transient_error"
+    return "processing_error"
+
+
+def _safe_error_message(exc: Exception) -> str:
+    return _stored_error_payload(str(exc))
+
+
+def _extract_event_identity(value: dict) -> tuple[str | None, str | None, str | None]:
+    tenant_id = str(value.get("tenant_id") or "") or None
+    source_event_id = str(value.get("source_event_id") or value.get("event_id") or "") or None
+    correlation_id = (
+        str(value.get("correlation_id") or "")
+        or str((value.get("ingest_metadata") or {}).get("request_id") or "")
+        or source_event_id
+    )
+    return tenant_id, source_event_id, (correlation_id or None)
+
+
+def _validate_event_envelope(value: dict) -> list[str]:
+    errors: list[str] = []
+    if not str(value.get("tenant_id") or ""):
+        errors.append("missing tenant_id")
+    if not str(value.get("event_id") or value.get("source_event_id") or ""):
+        errors.append("missing event_id/source_event_id")
+    if value.get("payload") is None or not isinstance(value.get("payload"), dict):
+        errors.append("missing or invalid payload")
+    if not str(value.get("occurred_at") or ""):
+        errors.append("missing occurred_at")
+    return errors
+
+
+async def _publish_to_dlq(
+    *,
+    producer,
+    topic: str,
+    msg,
+    message: dict,
+    error: Exception,
+    retry_count: int,
+) -> bool:
+    tenant_id, source_event_id, correlation_id = _extract_event_identity(message)
+    dlq_payload = {
+        "event_id": str(uuid.uuid4()),
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+        "schema_version": "v1",
+        "event_type": "dlq_event",
+        "occurred_at": _iso_now(),
+        "payload": {
+            "original_message": _sanitize_sensitive_payload(message),
+            "original_topic": topic,
+            "original_partition": getattr(msg, "partition", None),
+            "original_offset": getattr(msg, "offset", None),
+            "source_event_id": source_event_id,
+            "error_type": _error_type(error),
+            "error_message": _safe_error_message(error),
+            "retry_count": retry_count,
+            "failed_at": _iso_now(),
+        },
+    }
+    dlq_topic = _resolve_dlq_topic(topic)
+    try:
+        await producer.send(dlq_topic, dlq_payload, key=str(source_event_id or dlq_payload["event_id"]))
+        STREAM_DLQ_PUBLISHED_TOTAL.labels(status="success", topic=topic, error_type=_error_type(error)).inc()
+        logger.warning(
+            "message_sent_to_dlq",
+            topic=topic,
+            dlq_topic=dlq_topic,
+            tenant_id=tenant_id,
+            source_event_id=source_event_id,
+            correlation_id=correlation_id,
+            error_type=_error_type(error),
+            retry_count=retry_count,
+        )
+        return True
+    except Exception as dlq_exc:  # noqa: BLE001
+        STREAM_DLQ_PUBLISHED_TOTAL.labels(status="error", topic=topic, error_type=_error_type(error)).inc()
+        logger.error(
+            "dlq_publish_failed",
+            topic=topic,
+            dlq_topic=dlq_topic,
+            tenant_id=tenant_id,
+            source_event_id=source_event_id,
+            correlation_id=correlation_id,
+            error_type=_error_type(error),
+            dlq_error=_safe_error_message(dlq_exc),
+        )
+        return False
+
 KAFKA_SERVERS  = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 REDIS_URL      = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CH_HOST        = os.getenv("CLICKHOUSE_HOST", "localhost")
@@ -151,6 +269,10 @@ TOPICS = [
     "ingest.jobs.reprocess",
 ]
 
+DLQ_TOPIC_FALLBACK = os.getenv("BETAML_DLQ_TOPIC", "").strip()
+DLQ_MAX_RETRIES = int(os.getenv("DLQ_MAX_RETRIES", "3") or "3")
+DEDUPE_TTL_SECONDS = int(os.getenv("STREAM_DEDUPE_TTL_SECONDS", str(7 * 24 * 3600)) or str(7 * 24 * 3600))
+
 _oltp_engine = None
 
 
@@ -189,6 +311,27 @@ CONSUMER_LAG = _get_or_create_metric(
     "betaml_stream_consumer_lag_messages",
     "Lag estimado do consumer do stream processor por tópico",
     ["group_id", "topic"],
+)
+
+STREAM_FAILED_TOTAL = _get_or_create_metric(
+    Counter,
+    "betaml_stream_messages_failed_total",
+    "Total de mensagens com falha no stream processor",
+    ["topic", "error_type"],
+)
+
+STREAM_DLQ_PUBLISHED_TOTAL = _get_or_create_metric(
+    Counter,
+    "betaml_stream_dlq_published_total",
+    "Total de publicações em DLQ pelo stream processor",
+    ["status", "topic", "error_type"],
+)
+
+STREAM_DEDUPE_TOTAL = _get_or_create_metric(
+    Counter,
+    "betaml_stream_dedupe_total",
+    "Total de mensagens deduplicadas pelo stream processor",
+    ["topic", "reason"],
 )
 
 
@@ -566,6 +709,7 @@ async def process_raw_transaction(msg_value: dict, producer) -> None:
 
     canonical = {
         "event_id": msg_value.get("event_id") or str(uuid.uuid4()),
+        "correlation_id": msg_value.get("correlation_id") or msg_value.get("source_event_id") or msg_value.get("event_id"),
         "tenant_id": msg_value.get("tenant_id"),
         "source_system": msg_value.get("source_system", "unknown"),
         "source_event_id": msg_value.get("source_event_id") or msg_value.get("event_id") or str(uuid.uuid4()),
@@ -587,6 +731,7 @@ async def process_raw_bet(msg_value: dict, producer) -> None:
 
     canonical = {
         "event_id": msg_value.get("event_id") or str(uuid.uuid4()),
+        "correlation_id": msg_value.get("correlation_id") or msg_value.get("source_event_id") or msg_value.get("event_id"),
         "tenant_id": msg_value.get("tenant_id"),
         "source_system": msg_value.get("source_system", "unknown"),
         "source_event_id": msg_value.get("source_event_id") or msg_value.get("event_id") or str(uuid.uuid4()),
@@ -608,6 +753,7 @@ async def process_raw_device_event(msg_value: dict, producer) -> None:
 
     canonical = {
         "event_id": msg_value.get("event_id") or str(uuid.uuid4()),
+        "correlation_id": msg_value.get("correlation_id") or msg_value.get("source_event_id") or msg_value.get("event_id"),
         "tenant_id": msg_value.get("tenant_id"),
         "source_system": msg_value.get("source_system", "unknown"),
         "source_event_id": msg_value.get("source_event_id") or msg_value.get("event_id") or str(uuid.uuid4()),
@@ -739,6 +885,25 @@ async def warm_feature_store_cache(redis_client) -> int:
     except Exception as exc:  # noqa: BLE001
         logger.warning("stream_feature_store_cache_warm_failed", error=str(exc))
     return warmed
+
+
+async def _claim_event_for_processing(redis_client, message: dict, topic: str) -> bool:
+    tenant_id, source_event_id, _ = _extract_event_identity(message)
+    if not tenant_id or not source_event_id:
+        return True
+    source_system = str(message.get("source_system") or "unknown")
+    dedupe_key = redis_client.dedup_key(tenant_id, source_system, source_event_id)
+    claimed = await redis_client.set_if_absent(dedupe_key, topic, ttl=DEDUPE_TTL_SECONDS)
+    if not claimed:
+        STREAM_DEDUPE_TOTAL.labels(topic=topic, reason="already_processed").inc()
+        logger.info(
+            "message_deduplicated",
+            topic=topic,
+            tenant_id=tenant_id,
+            source_event_id=source_event_id,
+            source_system=source_system,
+        )
+    return claimed
 
 
 async def compute_features(
@@ -1850,7 +2015,7 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
 
     mapping_cfg = _resolve_mapping_cfg()
 
-    max_retries = int(os.getenv("DLQ_MAX_RETRIES", "3"))
+    max_retries = DLQ_MAX_RETRIES
 
     async def _publish_with_retries(topic: str, envelope: dict, key: str, row_data: dict, line_number: int) -> bool:
         for attempt in range(1, max_retries + 1):
@@ -1860,18 +2025,19 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
             except Exception as pub_exc:  # noqa: BLE001
                 if attempt >= max_retries:
                     await producer.send(
-                        f"{topic}.dlq",
+                        _resolve_dlq_topic(topic),
                         {
                             "tenant_id": tenant_id,
                             "job_id": job_id,
                             "source_system": source_system,
                             "line_number": line_number,
-                            "reason": str(pub_exc),
+                            "error_type": _error_type(pub_exc),
+                            "reason": _safe_error_message(pub_exc),
                             "attempt": attempt,
                             "max_retries": max_retries,
                             "failed_at": datetime.now(timezone.utc).isoformat(),
                             "target_topic": topic,
-                            "raw_payload": row_data,
+                            "raw_payload": _sanitize_sensitive_payload(row_data),
                         },
                         key=str(job_id),
                     )
@@ -2125,18 +2291,19 @@ async def process_ingest_job(msg_value: dict, redis_client, ch_client, producer)
 
                 try:
                     await producer.send(
-                        f"{target_topic}.dlq",
+                        _resolve_dlq_topic(target_topic),
                         {
                             "tenant_id": tenant_id,
                             "job_id": job_id,
                             "source_system": source_system,
                             "line_number": idx,
-                            "reason": reason,
+                            "error_type": _error_type(exc),
+                            "reason": _safe_error_message(exc),
                             "attempt": max_retries,
                             "max_retries": max_retries,
                             "failed_at": datetime.now(timezone.utc).isoformat(),
                             "target_topic": target_topic,
-                            "raw_payload": row_data,
+                            "raw_payload": _sanitize_sensitive_payload(row_data),
                         },
                         key=str(job_id),
                     )
@@ -2201,6 +2368,7 @@ async def main():
         topics=TOPICS,
         group_id="stream-processor",
         bootstrap_servers=KAFKA_SERVERS,
+        enable_auto_commit=False,
     )
     await consumer.start()
 
@@ -2211,8 +2379,11 @@ async def main():
         async for msg in consumer:
             started = time.monotonic()
             topic = getattr(msg, "topic", "unknown")
+            value: dict | None = None
             try:
                 value = msg.value if isinstance(msg.value, dict) else json.loads(msg.value)
+                if not isinstance(value, dict):
+                    raise ValueError("invalid payload type (expected dict)")
                 structlog.contextvars.bind_contextvars(
                     event_id=str(value.get("event_id") or value.get("source_event_id") or ""),
                     tenant_id=str(value.get("tenant_id") or ""),
@@ -2221,6 +2392,15 @@ async def main():
                 offset = getattr(msg, "offset", None)
                 if isinstance(highwater, int) and isinstance(offset, int):
                     CONSUMER_LAG.labels(group_id="stream-processor", topic=topic).set(max(highwater - offset - 1, 0))
+
+                validation_errors = _validate_event_envelope(value)
+                if validation_errors:
+                    raise ValueError(f"validation_error: {'; '.join(validation_errors)}")
+
+                claimed = await _claim_event_for_processing(redis_client, value, topic)
+                if not claimed:
+                    await consumer.commit()
+                    continue
 
                 if topic == "raw.transactions":
                     await process_raw_transaction(value, producer)
@@ -2246,10 +2426,26 @@ async def main():
                 elif topic == "ingest.jobs.reprocess":
                     await process_ingest_job(value, redis_client, ch_client, producer)
                 EVENTS_PROCESSED.labels(topic=topic, status="processed").inc()
+                await consumer.commit()
 
             except Exception as e:
                 EVENTS_PROCESSED.labels(topic=topic, status="failed").inc()
-                logger.error("message_processing_error", topic=topic, error=str(e))
+                STREAM_FAILED_TOTAL.labels(topic=topic, error_type=_error_type(e)).inc()
+                logger.error("message_processing_error", topic=topic, error=_safe_error_message(e), error_type=_error_type(e))
+                try:
+                    value_for_dlq = value if isinstance(value, dict) else {"raw": str(getattr(msg, "value", ""))}
+                    published = await _publish_to_dlq(
+                        producer=producer,
+                        topic=topic,
+                        msg=msg,
+                        message=value_for_dlq,
+                        error=e,
+                        retry_count=DLQ_MAX_RETRIES,
+                    )
+                    if published:
+                        await consumer.commit()
+                except Exception as dlq_err:  # noqa: BLE001
+                    logger.error("message_dlq_flow_failed", topic=topic, error=_safe_error_message(dlq_err))
             finally:
                 PROCESSING_LATENCY.labels(topic=topic).observe(time.monotonic() - started)
 

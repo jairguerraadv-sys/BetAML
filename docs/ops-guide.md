@@ -951,6 +951,95 @@ Resposta inclui:
 - `status` (`DONE`, `PARTIAL` ou `FAILED`)
 - `summary.accepted`, `summary.failed`, `summary.total`, `summary.errors`
 
+### 12.5 Runbook DLQ e replay idempotente (PR-05)
+
+Pre-condicoes:
+
+- API e stream_processor saudaveis (`/health`, `/health/ready`).
+- Kafka/Redpanda e Redis disponiveis.
+- Token com permissao de ingest e replay.
+
+#### 12.5.1 Dry-run (sem publicar replay)
+
+```bash
+BETAML_API_URL="http://localhost:8000" \
+BETAML_API_TOKEN="$TOKEN" \
+python scripts/replay_dlq.py --dry-run --limit 20
+```
+
+Resultado esperado:
+
+- Lista de erros elegiveis.
+- Mensagem `Dry-run ativo: nenhum replay executado`.
+
+#### 12.5.2 Replay efetivo
+
+Replay de um erro especifico:
+
+```bash
+BETAML_API_URL="http://localhost:8000" \
+BETAML_API_TOKEN="$TOKEN" \
+python scripts/replay_dlq.py --error-id "$ERROR_ID" --reason "dlq replay operacao"
+```
+
+Replay em lote (lista retornada por `/ingest/errors`):
+
+```bash
+BETAML_API_URL="http://localhost:8000" \
+BETAML_API_TOKEN="$TOKEN" \
+python scripts/replay_dlq.py --limit 20 --reason "batch replay"
+```
+
+#### 12.5.3 Validacao pos-replay
+
+1. Consultar erro reprocessado:
+
+```bash
+curl -s "http://localhost:8000/ingest/errors?limit=50" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+2. Confirmar comportamento idempotente (segunda tentativa):
+
+```bash
+curl -s -X POST "http://localhost:8000/ingest/errors/$ERROR_ID/replay" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"idempotency check"}'
+```
+
+Resultado esperado: `status=already_processed` ou `status=queued` conforme janela de processamento.
+
+3. Verificar metricas relacionadas:
+
+- `betaml_stream_dlq_published_total`
+- `betaml_stream_messages_failed_total`
+- `betaml_stream_dedupe_total`
+
+#### 12.5.4 Evidencia operacional minima
+
+- Comando dry-run executado e output salvo.
+- IDs replayados e status final (`queued` ou `already_processed`).
+- Snapshot de metricas antes/depois.
+- Numero do incidente/change associado.
+
+### 12.6 Semantica de commit e seguranca de offset
+
+- O `stream_processor` opera com `enable_auto_commit=false`.
+- Offset e commitado somente apos sucesso de processamento ou apos publicacao em DLQ.
+- Em falha de publicacao na DLQ, offset nao e commitado (mensagem volta para consumo).
+
+### 12.7 Padrao de classificacao de erro
+
+- `validation_error`: envelope/payload invalido.
+- `transient_error`: falha de infraestrutura (broker/rede/timeout).
+- `processing_error`: excecao nao classificada no processamento de negocio.
+
+### 12.8 Topico de DLQ em runtime
+
+- Usa `BETAML_DLQ_TOPIC` quando configurado.
+- Se vazio, usa fallback por topico de origem: `<topic>.dlq`.
+
 ## 13. Verificações de Isolamento Multi-tenant (Checklist)
 
 Use dois tokens de tenants distintos (`$TOKEN_A` e `$TOKEN_B`) para validar
