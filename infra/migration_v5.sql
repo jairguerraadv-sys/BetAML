@@ -133,7 +133,7 @@ CREATE POLICY notifications_tenant_isolation ON notifications
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'betaml_app') THEN
-        CREATE ROLE betaml_app WITH LOGIN PASSWORD 'app_devpass_change_me';
+        CREATE ROLE betaml_app WITH LOGIN PASSWORD 'app-set-via-secret-manager';
     END IF;
 END;
 $$;

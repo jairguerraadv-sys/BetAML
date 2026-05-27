@@ -10,6 +10,8 @@ jobs:
     name: AML Data Quality Checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      POSTGRES_PASSWORD: ci-data-quality-postgres-pass
 
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +46,7 @@ jobs:
 
       - name: Run data quality checks
         env:
-          DATABASE_URL: postgresql://betaml:devpass@localhost:5432/betaml_dev
+          DATABASE_URL: postgresql://betaml:${{ env.POSTGRES_PASSWORD }}@localhost:5432/betaml_dev
         run: python scripts/data_quality_checks.py
 
       - name: Stop services

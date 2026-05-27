@@ -26,12 +26,8 @@ jobs:
             exit 1
           fi
 
-      - name: Block known default credentials in tracked files
-        run: |
-          if git grep -nE 'E2E_PASSWORD=(admin123|analyst123)' -- ':!e2e/.env.e2e.example'; then
-            echo "ERROR: credenciais default detectadas em arquivo versionado." >&2
-            exit 1
-          fi
+      - name: Run forbidden dev secret scanner
+        run: python3 scripts/check_secret_hygiene.py
 
   # ── Sanity: comandos documentados e scripts essenciais ─────────────────────
   contributor-sanity:
