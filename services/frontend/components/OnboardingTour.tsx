@@ -69,7 +69,7 @@ const STEPS: TourStep[] = [
     icon: FileBarChart2,
     title: 'Relatórios Reguladores',
     description:
-      'Gere dossiês e arquivos de comunicação ao COAF diretamente de dentro do caso. ' +
+      'Gere dossiês e arquivos de comunicação ao Coaf diretamente de dentro do caso. ' +
       'O sistema organiza os campos Siscoaf com base na sua narrativa e decisão.',
     hint: 'O arquivo de comunicação só pode ser gerado para casos com status "Encerrado" ou "Reportado".',
     href: '/reports',

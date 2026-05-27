@@ -323,9 +323,9 @@ export default function FeatureDetailPage({ params }: Props) {
                     <th className="px-4 py-2.5 text-left">Data</th>
                     <th className="px-4 py-2.5 text-right">Depósitos 24h</th>
                     <th className="px-4 py-2.5 text-right">Volume 30d</th>
-                    <th className="px-4 py-2.5 text-right">Score Instrumento</th>
+                    <th className="px-4 py-2.5 text-right">Risco do instrumento</th>
                     <th className="px-4 py-2.5 text-right">Cluster</th>
-                    <th className="px-4 py-2.5 text-center">Drift Score</th>
+                    <th className="px-4 py-2.5 text-center">Mudança de padrão</th>
                     <th className="px-4 py-2.5 text-right">Versão</th>
                   </tr>
                 </thead>
@@ -376,7 +376,7 @@ export default function FeatureDetailPage({ params }: Props) {
           <div className="flex items-center gap-3">
             <BarChart2 size={16} className="text-gray-400" />
             <span className="text-xs text-gray-500">
-              Estatísticas calculadas sobre todos os jogadores do tenant — job diário às 06:00 UTC.
+              Estatísticas calculadas sobre todos os jogadores do operador — atualização diária às 06:00 UTC.
             </span>
           </div>
 
@@ -406,13 +406,13 @@ export default function FeatureDetailPage({ params }: Props) {
                   </strong>
                 </span>
                 <span>
-                  Score máx:{' '}
+                  Maior desvio:{' '}
                   <strong className="text-gray-700 dark:text-gray-200">
                     {quality.max_drift_score.toFixed(4)}
                   </strong>
                 </span>
                 <span>
-                  Alertou ADMIN:{' '}
+                  Aviso enviado à administração:{' '}
                   <strong className="text-gray-700 dark:text-gray-200">
                     {quality.admin_notification_sent ? 'Sim' : 'Não'}
                   </strong>

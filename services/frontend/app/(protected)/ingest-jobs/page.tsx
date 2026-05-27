@@ -492,16 +492,16 @@ export default function IngestJobsPage() {
                       aria-label="Motivo do reprocessamento do job"
                       value={reprocessReason}
                       onChange={(e) => setReprocessReason(e.target.value)}
-                      placeholder="Ex.: mapping atualizado, payload corrigido"
+                      placeholder="Ex.: mapeamento atualizado, registro corrigido"
                       className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                     />
                     <div className="grid gap-2">
                       <div>
                         <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
-                          MappingConfig
+                          Mapeamento de dados
                         </label>
                         <select
-                          aria-label="MappingConfig do reprocessamento do job"
+                          aria-label="Mapeamento de dados do reprocessamento"
                           value={effectiveMappingId}
                           onChange={(e) => {
                             setSelectedMappingId(e.target.value);

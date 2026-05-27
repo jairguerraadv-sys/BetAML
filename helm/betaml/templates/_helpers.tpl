@@ -60,3 +60,17 @@ Resolve image tag: component tag > global tag.
 {{- $globalTag }}
 {{- end }}
 {{- end }}
+
+{{/*
+Resolve full image reference using optional global.imageRegistry.
+*/}}
+{{- define "betaml.image" -}}
+{{- $registry := trimSuffix "/" (default "" .registry) -}}
+{{- $repository := trimPrefix "/" .repository -}}
+{{- $tag := include "betaml.imageTag" (dict "componentTag" .tag "globalTag" .globalTag) -}}
+{{- if $registry -}}
+{{- printf "%s/%s:%s" $registry $repository $tag -}}
+{{- else -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end }}

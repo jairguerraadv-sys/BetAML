@@ -225,7 +225,7 @@ export default function DashboardPage() {
           icon={ShieldAlert}
           title="Jogadores alto risco"
           value={stats?.high_risk_players ?? 0}
-          sub="risk band HIGH"
+          sub="classificação de risco alto"
           href="/players"
           tone={(stats?.high_risk_players ?? 0) > 0 ? 'warning' : 'default'}
         />
@@ -291,7 +291,7 @@ export default function DashboardPage() {
           icon={ShieldAlert}
           title="Protocolos pendentes"
           value={filingOverview?.missing_protocol_count ?? 0}
-          sub="FILED sem protocolo COAF"
+          sub="comunicações sem protocolo Coaf"
           href="/reports"
           tone={(filingOverview?.missing_protocol_count ?? 0) > 0 ? 'warning' : 'success'}
         />
@@ -299,7 +299,7 @@ export default function DashboardPage() {
           icon={Clock}
           title="Pior pendência COAF"
           value={filingOverview?.oldest_pending_submission_days != null ? `${filingOverview.oldest_pending_submission_days}d` : '—'}
-          sub="idade do pacote mais antigo"
+          sub="idade do dossiê mais antigo"
           href="/reports"
           tone={(filingOverview?.deadline_state_counts?.BREACH ?? 0) > 0 ? 'danger' : 'default'}
         />

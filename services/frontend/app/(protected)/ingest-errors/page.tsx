@@ -536,10 +536,10 @@ export default function IngestErrorsPage() {
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  MappingConfig
+                  Mapeamento de dados
                 </label>
                 <select
-                  aria-label="MappingConfig do replay de ingestão"
+                  aria-label="Mapeamento de dados do replay de ingestão"
                   value={effectiveMappingId}
                   onChange={(e) => {
                     setSelectedMappingId(e.target.value);

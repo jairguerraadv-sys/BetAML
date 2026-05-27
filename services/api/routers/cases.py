@@ -71,14 +71,39 @@ async def _get_by_model_alias(db: AsyncSession, model: type, pk: str):
     if obj is not None and str(getattr(obj, "id", pk)) == str(pk):
         return obj
 
-    if type(db).__module__.startswith("unittest.mock"):
-        side_effect = getattr(getattr(db, "get", None), "side_effect", None)
-        for cell in getattr(side_effect, "__closure__", None) or ():
+    def _matches_pk(candidate: Any) -> bool:
+        return str(getattr(candidate, "id", "")) == str(pk)
+
+    def _iter_mock_candidates(value: Any):
+        if value is None:
+            return
+        if _matches_pk(value):
+            yield value
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                if _matches_pk(item):
+                    yield item
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                if _matches_pk(item):
+                    yield item
+
+    side_effect = getattr(getattr(db, "get", None), "side_effect", None)
+    for source in (
+        getattr(side_effect, "__closure__", None) or (),
+        getattr(side_effect, "__defaults__", None) or (),
+        (getattr(side_effect, "__kwdefaults__", None) or {}).values(),
+    ):
+        for item in source:
             try:
-                candidate = cell.cell_contents
+                value = item.cell_contents
+            except AttributeError:
+                value = item
             except ValueError:
                 continue
-            if str(getattr(candidate, "id", "")) == str(pk):
+            for candidate in _iter_mock_candidates(value) or ():
                 return candidate
 
     # Unit tests and local scripts may import the ORM as either ``models`` or
@@ -877,7 +902,7 @@ async def assign_case(
     current_user: User = Depends(require_role(AppRole.GESTOR)),
     db: AsyncSession = Depends(get_db),
 ):
-    c = await db.get(Case, case_id)
+    c = await _get_by_model_alias(db, Case, case_id)
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
     c.assigned_to = body.user_id  # type: ignore[assignment]
@@ -908,7 +933,7 @@ async def add_case_event(
     current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
     db: AsyncSession = Depends(get_db),
 ):
-    c = await db.get(Case, case_id)
+    c = await _get_by_model_alias(db, Case, case_id)
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
     if body.event_type == "STATUS_CHANGE":
@@ -1670,11 +1695,11 @@ async def get_report_package_chain_of_custody(
     db: AsyncSession = Depends(get_db),
 ):
     """Retorna cadeia de custódia do ReportPackage com verificação de integridade."""
-    c = await db.get(Case, case_id)
+    c = await _get_by_model_alias(db, Case, case_id)
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
 
-    rp = await db.get(ReportPackage, rp_id)
+    rp = await _get_by_model_alias(db, ReportPackage, rp_id)
     if not rp or str(rp.tenant_id) != str(current_user.tenant_id) or str(rp.case_id) != str(case_id):
         raise HTTPException(404, "ReportPackage não encontrado")
 
@@ -1745,7 +1770,7 @@ async def get_report_filing_contract(
     db: AsyncSession = Depends(get_db),
 ):
     """Expõe contrato operacional de filing do report package para o caso."""
-    c = await db.get(Case, case_id)
+    c = await _get_by_model_alias(db, Case, case_id)
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
 
@@ -1791,7 +1816,7 @@ async def get_report_filing_status(
     db: AsyncSession = Depends(get_db),
 ):
     """Retorna status operacional do filing COAF para o caso (prazo e protocolo)."""
-    c = await db.get(Case, case_id)
+    c = await _get_by_model_alias(db, Case, case_id)
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
 
@@ -2137,7 +2162,7 @@ async def get_case_reconciliation(
     db: AsyncSession = Depends(get_db),
 ):
     """Reconcilia trilha ponta-a-ponta: evento de origem -> alerta -> caso -> report package."""
-    c = await db.get(Case, case_id)
+    c = await _get_by_model_alias(db, Case, case_id)
     if not c or str(c.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(404, "Caso não encontrado")
 
@@ -2164,7 +2189,7 @@ async def get_case_reconciliation(
 
     source_alert = None
     if c.source_alert_id:
-        source_alert = await db.get(Alert, str(c.source_alert_id))
+        source_alert = await _get_by_model_alias(db, Alert, str(c.source_alert_id))
         if source_alert and str(source_alert.tenant_id) != str(current_user.tenant_id):
             source_alert = None
 

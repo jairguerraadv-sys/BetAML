@@ -1,0 +1,56 @@
+{{- if .Values.streamProcessor.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "betaml.fullname" . }}-stream-processor
+  labels:
+    {{- include "betaml.labels" . | nindent 4 }}
+    app.kubernetes.io/component: stream-processor
+spec:
+  replicas: {{ .Values.streamProcessor.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "betaml.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: stream-processor
+  template:
+    metadata:
+      labels:
+        {{- include "betaml.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: stream-processor
+    spec:
+      containers:
+        - name: stream-processor
+          image: "{{ include "betaml.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.streamProcessor.image.repository "tag" .Values.streamProcessor.image.tag "globalTag" .Values.global.imageTag) }}"
+          imagePullPolicy: {{ .Values.streamProcessor.image.pullPolicy }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.streamProcessor.metricsPort }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ .Values.streamProcessor.healthPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.streamProcessor.resources | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "betaml.fullname" . }}-config
+            - secretRef:
+                name: {{ .Values.api.existingSecret }}
+          env:
+            - name: METRICS_PORT
+              value: {{ .Values.streamProcessor.metricsPort | quote }}
+            - name: HEALTH_PORT
+              value: {{ .Values.streamProcessor.healthPort | quote }}
+{{- end }}

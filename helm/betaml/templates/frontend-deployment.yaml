@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: "{{ .Values.frontend.image.repository }}:{{ include "betaml.imageTag" (dict "componentTag" .Values.frontend.image.tag "globalTag" .Values.global.imageTag) }}"
+          image: "{{ include "betaml.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.frontend.image.repository "tag" .Values.frontend.image.tag "globalTag" .Values.global.imageTag) }}"
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
           ports:
             - name: http

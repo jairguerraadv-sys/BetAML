@@ -16,6 +16,7 @@ import {
   Send,
   ShieldCheck,
 } from 'lucide-react';
+import { useGlossary } from '@/lib/use-glossary';
 
 interface ReportPackageDetail {
   id: string;
@@ -48,6 +49,7 @@ export default function ReportPackageDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const qc = useQueryClient();
+  const { translate } = useGlossary();
   const [submitMsg, setSubmitMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -92,7 +94,7 @@ export default function ReportPackageDetailPage() {
       qc.invalidateQueries({ queryKey: ['report-filing-queue'] });
       qc.invalidateQueries({ queryKey: ['report-filing-overview'] });
     } catch {
-      setSubmitMsg('Erro ao submeter. Verifique a decisão do pacote (deve ser FILE_SAR ou REPORT).');
+      setSubmitMsg('Erro ao registrar envio. Verifique se a decisão exige comunicação ao Coaf.');
     } finally {
       setSubmitting(false);
     }
@@ -107,7 +109,7 @@ export default function ReportPackageDetailPage() {
         >
           <ArrowLeft size={16} /> Voltar
         </button>
-        <h1 className="text-xl font-bold text-gray-900">Dossiê de Reporte</h1>
+        <h1 className="text-xl font-bold text-gray-900">Dossiê COS</h1>
       </div>
 
       {isLoading && (
@@ -118,7 +120,7 @@ export default function ReportPackageDetailPage() {
 
       {isError && (
         <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          Pacote não encontrado ou sem permissão de acesso.
+          Dossiê não encontrado ou sem permissão de acesso.
         </div>
       )}
 
@@ -128,7 +130,7 @@ export default function ReportPackageDetailPage() {
           <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                <ShieldCheck size={15} className="text-gray-400" /> Metadados do Pacote
+                <ShieldCheck size={15} className="text-gray-400" /> Dados do dossiê
               </h2>
               <div className="flex items-center gap-2">
                 <button
@@ -149,7 +151,7 @@ export default function ReportPackageDetailPage() {
                     disabled={submitting}
                     className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
                   >
-                    <Send size={13} /> {submitting ? 'Submetendo...' : 'Submeter ao COAF'}
+                    <Send size={13} /> {submitting ? 'Registrando...' : 'Registrar envio ao Coaf'}
                   </button>
                 )}
               </div>
@@ -162,7 +164,7 @@ export default function ReportPackageDetailPage() {
             )}
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <MetaField label="ID do Pacote" value={rp.id} mono />
+              <MetaField label="ID do dossiê" value={rp.id} mono />
               <MetaField label="Caso" value={
                 <Link href={`/cases/${rp.case_id}`} className="font-mono text-brand hover:underline">
                   {rp.case_id.slice(0, 12)}...
@@ -170,13 +172,13 @@ export default function ReportPackageDetailPage() {
               } />
               <MetaField label="Status" value={
                 <span className={`rounded px-2 py-0.5 text-xs font-semibold ${STATUS_CLS[rp.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                  {rp.status}
+                  {translate.cosStatus(rp.status)}
                 </span>
               } />
               <MetaField label="Decisão" value={
                 rp.decision ? (
                   <span className={`rounded px-2 py-0.5 text-xs font-semibold ${DECISION_CLS[rp.decision] ?? 'bg-gray-100 text-gray-600'}`}>
-                    {rp.decision}
+                    {translate.caseDecision(rp.decision)}
                   </span>
                 ) : '—'
               } />
@@ -184,7 +186,7 @@ export default function ReportPackageDetailPage() {
               <MetaField label="PDF" value={rp.pdf_available ? 'Disponível' : 'Não gerado'} />
               <MetaField label="Gerado em" value={rp.created_at ? new Date(rp.created_at).toLocaleString('pt-BR') : '—'} />
               <MetaField label="Submetido em" value={rp.filed_at ? new Date(rp.filed_at).toLocaleString('pt-BR') : '—'} />
-              <MetaField label="Protocolo COAF" value={rp.coaf_protocol_number ?? '—'} mono />
+              <MetaField label="Protocolo Coaf" value={rp.coaf_protocol_number ?? '—'} mono />
             </div>
           </section>
 
@@ -192,7 +194,7 @@ export default function ReportPackageDetailPage() {
           <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <h2 className="mb-2 text-sm font-semibold text-gray-700">Cadeia de Custódia</h2>
             <p className="mb-3 text-xs text-gray-500">
-              Verificação de integridade e histórico de auditoria do pacote.
+              Verificação de integridade e histórico de auditoria do dossiê.
             </p>
             <Link
               href={`/cases/${rp.case_id}?tab=decision`}

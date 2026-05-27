@@ -102,14 +102,14 @@ export default function OpsPage() {
 
   // Derive operational alerts from health checks + KPIs
   const opAlerts: { label: string; severity: 'warn' | 'error' }[] = [];
-  if (health?.checks.kafka !== 'ok') opAlerts.push({ label: 'Kafka broker inacessível', severity: 'error' });
-  if (health?.checks.ml_service !== 'ok') opAlerts.push({ label: 'Serviço ML degradado', severity: 'warn' });
-  if (health?.checks.rules_engine && health.checks.rules_engine !== 'ok') opAlerts.push({ label: 'Rules engine sem métricas/health', severity: 'warn' });
-  if (health?.checks.stream_processor && health.checks.stream_processor !== 'ok') opAlerts.push({ label: 'Stream processor sem métricas/health', severity: 'warn' });
+  if (health?.checks.kafka !== 'ok') opAlerts.push({ label: 'Fila de eventos inacessível', severity: 'error' });
+  if (health?.checks.ml_service !== 'ok') opAlerts.push({ label: 'Serviço de classificação automática degradado', severity: 'warn' });
+  if (health?.checks.rules_engine && health.checks.rules_engine !== 'ok') opAlerts.push({ label: 'Motor de regras sem sinal de saúde', severity: 'warn' });
+  if (health?.checks.stream_processor && health.checks.stream_processor !== 'ok') opAlerts.push({ label: 'Processamento de eventos sem sinal de saúde', severity: 'warn' });
   if (health?.checks.redis !== 'ok') opAlerts.push({ label: 'Redis inacessível', severity: 'error' });
   if (health?.checks.minio !== 'ok') opAlerts.push({ label: 'MinIO inacessível', severity: 'warn' });
   const unresolvedErrors = typeof opsSummary?.unresolved_dlq_events === 'number' ? opsSummary.unresolved_dlq_events : 0;
-  if (unresolvedErrors > 0) opAlerts.push({ label: `DLQ com ${unresolvedErrors} erros pendentes`, severity: 'warn' });
+  if (unresolvedErrors > 0) opAlerts.push({ label: `Quarentena com ${unresolvedErrors} erros pendentes`, severity: 'warn' });
   const slaBreach = typeof kpis?.sla_breach_rate_open_cases_percent === 'number' ? Number(kpis.sla_breach_rate_open_cases_percent) : 0;
   if (slaBreach > 10) opAlerts.push({ label: `Taxa de violação de SLA: ${slaBreach}%`, severity: 'warn' });
   for (const alert of opsSummary?.alerts ?? []) {

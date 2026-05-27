@@ -27,9 +27,13 @@ async def fire_webhook(webhook_url: str, payload: dict[str, Any]) -> None:
                 headers={"Content-Type": "application/json", "User-Agent": "BetAML/1.0"},
             )
             if resp.status_code >= 400:
-                logger.warning("webhook_delivery_failed", url=webhook_url, status=resp.status_code)
+                logger.warning(
+                    "webhook_delivery_failed url=%s status=%s",
+                    webhook_url,
+                    resp.status_code,
+                )
     except Exception as exc:
-        logger.warning("webhook_delivery_error", url=webhook_url, error=str(exc))
+        logger.warning("webhook_delivery_error url=%s error=%s", webhook_url, exc)
 
 
 async def notify_operator_webhook(
@@ -61,4 +65,4 @@ async def notify_operator_webhook(
         }
         asyncio.create_task(fire_webhook(row[0], payload))
     except Exception as exc:
-        logger.warning("webhook_lookup_failed", tenant_id=tenant_id, error=str(exc))
+        logger.warning("webhook_lookup_failed tenant_id=%s error=%s", tenant_id, exc)

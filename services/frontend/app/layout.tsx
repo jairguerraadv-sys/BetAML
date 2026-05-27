@@ -3,8 +3,8 @@ import './globals.css';
 import Providers from './providers';
 
 export const metadata: Metadata = {
-  title: 'BetAML — PLD/FT Intelligence',
-  description: 'Multi-tenant AML platform for Brazilian betting operators',
+  title: 'BetAML — PLD/FT para apostas',
+  description: 'Plataforma multioperador de PLD/FT para apostas no Brasil',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

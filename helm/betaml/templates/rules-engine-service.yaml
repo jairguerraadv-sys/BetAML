@@ -1,0 +1,23 @@
+{{- if .Values.rulesEngine.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "betaml.fullname" . }}-rules-engine
+  labels:
+    {{- include "betaml.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rules-engine
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.rulesEngine.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+    - port: {{ .Values.rulesEngine.healthPort }}
+      targetPort: health
+      protocol: TCP
+      name: health
+  selector:
+    {{- include "betaml.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: rules-engine
+{{- end }}

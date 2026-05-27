@@ -96,8 +96,8 @@ export default function PlayerListsPage() {
         <div className="flex items-center gap-2">
           <List size={22} className="text-brand" />
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Player Lists</h1>
-            <p className="text-sm text-gray-500">Whitelist, blacklist, watch list e listas customizadas por tenant.</p>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Listas de Monitoramento</h1>
+            <p className="text-sm text-gray-500">Listas de permissão, bloqueio, acompanhamento especial e perfis por operador.</p>
           </div>
         </div>
         <button

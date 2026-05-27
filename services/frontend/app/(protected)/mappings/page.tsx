@@ -53,7 +53,7 @@ function highlightLine(line: string, format: EditorFormat): ReactNode {
     return (
       <>
         <span className="text-slate-500">{indent}</span>
-        <span className="text-cyan-300">"{key}"</span>
+        <span className="text-cyan-300">{JSON.stringify(key)}</span>
         <span className="text-slate-300">:{rest}</span>
       </>
     );

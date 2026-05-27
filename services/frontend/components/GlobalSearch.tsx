@@ -176,7 +176,7 @@ export default function GlobalSearch() {
             <p className="px-4 py-3 text-sm text-gray-400">Buscando…</p>
           )}
           {!loading && query.length >= 2 && results.length === 0 && (
-            <p className="px-4 py-3 text-sm text-gray-400">Nenhum resultado para "{query}"</p>
+            <p className="px-4 py-3 text-sm text-gray-400">Nenhum resultado para <span className="font-medium">{query}</span></p>
           )}
           {results.map((r, i) => {
             const Icon = ICONS[r.type];

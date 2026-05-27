@@ -421,7 +421,7 @@ export default function SensitivityPage() {
 
         {!preview && (
           <p className="text-sm text-gray-400">
-            Clique em "Simular impacto" para ver quantos alertas cada categoria teria com a nova configuração.
+            Clique em <span className="font-medium">Simular impacto</span> para ver quantos alertas cada categoria teria com a nova configuração.
           </p>
         )}
 

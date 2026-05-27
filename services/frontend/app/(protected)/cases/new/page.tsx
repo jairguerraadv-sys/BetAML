@@ -89,10 +89,10 @@ function NewCasePageContent() {
               onChange={(e) => setSeverity(e.target.value)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
             >
-              <option value="LOW">Baixa</option>
-              <option value="MEDIUM">Média</option>
-              <option value="HIGH">Alta</option>
-              <option value="CRITICAL">Crítica</option>
+              <option value="LOW">Baixo</option>
+              <option value="MEDIUM">Médio</option>
+              <option value="HIGH">Alto</option>
+              <option value="CRITICAL">Crítico</option>
             </select>
           </div>
         </div>

@@ -15,10 +15,10 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const SEVERITY_LABELS: Record<string, string> = {
-  CRITICAL: 'Crítica',
-  HIGH: 'Alta',
-  MEDIUM: 'Média',
-  LOW: 'Baixa',
+  CRITICAL: 'Crítico',
+  HIGH: 'Alto',
+  MEDIUM: 'Médio',
+  LOW: 'Baixo',
 };
 
 export const SEVERITY_COLORS: Record<string, string> = {
@@ -172,12 +172,10 @@ export const COS_FILING_CHANNEL_LABELS: Record<string, string> = {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const TRIAGE_DISPOSITION_LABELS: Record<string, string> = {
-  TRUE_POSITIVE: 'Positivo verdadeiro',
+  CONFIRMED: 'Confirmado como risco real',
+  IN_REVIEW: 'Manter em análise',
   FALSE_POSITIVE: 'Falso positivo',
-  ESCALATE_TO_CASE: 'Abrir caso',
-  REQUIRES_REVIEW: 'Requer revisão',
-  UNKNOWN: 'Não classificado',
-  PENDING: 'Pendente',
+  DISMISSED: 'Arquivar sem ação',
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════

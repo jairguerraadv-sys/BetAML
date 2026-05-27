@@ -1,0 +1,19 @@
+{{- if .Values.mlService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "betaml.fullname" . }}-ml-service
+  labels:
+    {{- include "betaml.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ml-service
+spec:
+  type: {{ .Values.mlService.service.type }}
+  ports:
+    - port: {{ .Values.mlService.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "betaml.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ml-service
+{{- end }}

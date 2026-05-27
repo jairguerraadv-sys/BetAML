@@ -30,7 +30,7 @@ api:
     targetCPUUtilizationPercentage: 70
   env:
     DATABASE_URL: ""          # set via secret
-    REDIS_URL: "redis://redis:6379/0"
+    REDIS_URL: ""             # defaults to redis://<release>-redis:6379/0
     KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
     LOG_LEVEL: "INFO"
     DEPLOYMENT_MODE: "saas"
@@ -59,6 +59,61 @@ frontend:
   env:
     NEXT_PUBLIC_API_URL: ""   # e.g. https://api.betaml.io
     NEXT_PUBLIC_DEPLOYMENT_MODE: "saas"
+
+## ─── ML SERVICE ──────────────────────────────────────────────────────────────
+mlService:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: betaml/ml-service
+    pullPolicy: IfNotPresent
+    tag: ""
+  service:
+    type: ClusterIP
+    port: 8001
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+## ─── RULES ENGINE ────────────────────────────────────────────────────────────
+rulesEngine:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: betaml/rules-engine
+    pullPolicy: IfNotPresent
+    tag: ""
+  metricsPort: 8002
+  healthPort: 8012
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+## ─── STREAM PROCESSOR ────────────────────────────────────────────────────────
+streamProcessor:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: betaml/stream-processor
+    pullPolicy: IfNotPresent
+    tag: ""
+  metricsPort: 8003
+  healthPort: 8013
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
 
 ## ─── ML TRAINER ─────────────────────────────────────────────────────────────
 mlTrainer:
@@ -143,6 +198,12 @@ config:
   MINIO_ENDPOINT: "minio:9000"
   MINIO_BUCKET: "betaml-models"
   MINIO_ACCESS_KEY: "betaml"
+  CLICKHOUSE_HOST: "clickhouse"
+  CLICKHOUSE_PORT: "9000"
+  CLICKHOUSE_DB: "betaml"
+  ML_SERVICE_URL: ""                  # defaults to http://<release>-ml-service:8001
+  RULES_ENGINE_METRICS_URL: ""        # defaults to http://<release>-rules-engine:8002/metrics
+  STREAM_PROCESSOR_METRICS_URL: ""    # defaults to http://<release>-stream-processor:8003/metrics
 
 ## ─── BACKUP (Postgres + MinIO) ─────────────────────────────────────────────
 backup:

@@ -11,6 +11,13 @@ import { Bell, CheckCheck, Filter } from 'lucide-react';
 import { useLocale, fmtDate } from '@/lib/i18n';
 import { useGlossary } from '@/lib/use-glossary';
 
+const referenceTypeLabel: Record<string, string> = {
+  Case: 'Caso',
+  ReportPackage: 'Dossiê COS',
+  alert: 'Alerta',
+  Alert: 'Alerta',
+};
+
 export default function NotificationsPage() {
   const qc = useQueryClient();
   const [locale] = useLocale();
@@ -133,7 +140,7 @@ export default function NotificationsPage() {
                   </span>
                   {n.reference_type && (
                     <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
-                      {n.reference_type}
+                      {referenceTypeLabel[n.reference_type] ?? n.reference_type}
                     </span>
                   )}
                 </div>

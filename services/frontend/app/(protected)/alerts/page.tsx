@@ -180,10 +180,10 @@ function AlertCard({
 
 // ── Contador por prioridade ────────────────────────────────────────────────────
 const SEV_PT_LABELS: Record<string, string> = {
-  CRITICAL: 'Crítica',
-  HIGH: 'Alta',
-  MEDIUM: 'Média',
-  LOW: 'Baixa',
+  CRITICAL: 'Crítico',
+  HIGH: 'Alto',
+  MEDIUM: 'Médio',
+  LOW: 'Baixo',
 };
 
 function PriorityTab({

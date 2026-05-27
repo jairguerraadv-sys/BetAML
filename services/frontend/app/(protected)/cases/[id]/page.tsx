@@ -98,10 +98,10 @@ const STATUS_CLS: Record<string, string> = {
 };
 
 const SEV_LABEL: Record<string, string> = {
-  CRITICAL: 'Crítica',
-  HIGH: 'Alta',
-  MEDIUM: 'Média',
-  LOW: 'Baixa',
+  CRITICAL: 'Crítico',
+  HIGH: 'Alto',
+  MEDIUM: 'Médio',
+  LOW: 'Baixo',
 };
 
 const SEV_CLS: Record<string, string> = {
@@ -139,7 +139,7 @@ const EVT_PT: Record<string, string> = {
   STATUS_CHANGE:      'Status atualizado',
   ALERT_LINKED:       'Alerta vinculado',
   REPORT_GENERATED:   'Relatório gerado',
-  REPORT_SUBMITTED:   'Relatório submetido ao COAF',
+  REPORT_SUBMITTED:   'Dossiê submetido ao Coaf',
   SYSTEM_AUTO_CREATED:'Auto-criado pelo sistema',
   EVIDENCE_UPLOAD:    'Evidência enviada',
 };
@@ -277,12 +277,12 @@ function nextActionForCase(c: CaseDetail) {
   if (c.status === 'CLOSED') {
     return {
       title: 'Gerar ou arquivar dossiê',
-      body: 'Gere o dossiê final quando houver comunicação ao COAF ou mantenha o registro arquivado com justificativa.',
+      body: 'Gere o dossiê final quando houver comunicação ao Coaf ou mantenha o registro arquivado com justificativa.',
     };
   }
   if (c.status === 'REPORTED') {
     return {
-      title: 'Registrar protocolo COAF',
+      title: 'Registrar protocolo Coaf',
       body: 'Confirme se o protocolo de envio foi registrado no histórico do dossiê.',
     };
   }
@@ -378,7 +378,7 @@ function TabOverview({ c }: { c: CaseDetail }) {
           {c.player_id && (
             <li className="flex items-start gap-2">
               <span className="mt-1 h-1.5 w-1.5 rounded-full bg-blue-500 shrink-0" />
-              Apostador vinculado ao caso — veja a aba "Perfil do Apostador".
+              Apostador vinculado ao caso — veja a aba <span className="font-medium">Perfil do Apostador</span>.
             </li>
           )}
         </ul>
@@ -690,7 +690,7 @@ function TabProfile({ playerId }: { playerId: string | undefined }) {
               </span>
             )}
           </div>
-          <p className="text-xs text-gray-600 italic">"{econ.interpretation}"</p>
+          <p className="text-xs text-gray-600 italic">{econ.interpretation}</p>
           <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
             <div>
               <dt className="text-gray-400">Depósitos 30d</dt>
@@ -1086,6 +1086,7 @@ function TabNetwork({ playerId }: { playerId: string | undefined }) {
 
 // ── Tab: Decisão e Relatório ──────────────────────────────────────────────────
 function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: ReturnType<typeof useQueryClient> }) {
+  const { translate } = useGlossary();
   const [narrative, setNarrative] = useState('');
   const [decision, setDecision]   = useState<'FILE_SAR' | 'NO_ACTION' | 'PENDING'>('PENDING');
   const [rpResult, setRpResult]   = useState<{ report_package_id: string; pdf_path: string | null } | null>(null);
@@ -1165,10 +1166,10 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                <ShieldCheck size={15} className="text-gray-400" /> Status de Filing COAF
+                <ShieldCheck size={15} className="text-gray-400" /> Status da comunicação ao Coaf
               </h3>
               <p className="mt-1 text-xs text-gray-500">
-                Canal {filingStatus.filing_channel} · pacote {filingStatus.report_package_id ? `${filingStatus.report_package_id.slice(0, 8)}...` : 'não gerado'}
+                Canal {translate.filingChannel(filingStatus.filing_channel)} · dossiê {filingStatus.report_package_id ? `${filingStatus.report_package_id.slice(0, 8)}...` : 'não gerado'}
               </p>
             </div>
             <span className={`rounded border px-2 py-1 text-xs font-bold ${FILING_CLS[filingStatus.deadline_state] ?? FILING_CLS.OK}`}>
@@ -1184,7 +1185,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
           <div className="mt-4 grid gap-3 text-xs sm:grid-cols-3">
             <div className="rounded-lg bg-gray-50 px-3 py-2">
               <p className="text-gray-400">Decisão</p>
-              <p className="mt-0.5 font-semibold text-gray-700">{filingStatus.report_decision ?? '—'}</p>
+              <p className="mt-0.5 font-semibold text-gray-700">{translate.caseDecision(filingStatus.report_decision) ?? '—'}</p>
             </div>
             <div className="rounded-lg bg-gray-50 px-3 py-2">
               <p className="text-gray-400">Submissão</p>
@@ -1232,12 +1233,12 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
         </div>
       </div>
 
-      {/* Geração de relatório */}
+      {/* Geração de dossiê */}
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h3 className="mb-3 text-sm font-semibold text-gray-700">Gerar Dossiê para Reporte</h3>
+        <h3 className="mb-3 text-sm font-semibold text-gray-700">Gerar Dossiê COS</h3>
         {rpResult ? (
           <div className="rounded-lg border border-green-200 bg-green-50 p-4 space-y-3">
-            <p className="font-semibold text-green-800">Relatório gerado com sucesso</p>
+            <p className="font-semibold text-green-800">Dossiê gerado com sucesso</p>
             <p className="mt-0.5 text-xs text-green-600 font-mono">{rpResult.report_package_id}</p>
             {rpResult.pdf_path && (
               <a
@@ -1246,7 +1247,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                 rel="noopener noreferrer"
                 className="mt-3 inline-flex items-center gap-1 rounded-lg bg-green-700 px-4 py-2 text-xs font-semibold text-white hover:bg-green-800"
               >
-                Baixar PDF (COAF)
+                Baixar PDF do dossiê
               </a>
             )}
             {(c.status === 'CLOSED' || c.status === 'REPORTED') && (
@@ -1256,7 +1257,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                 rel="noopener noreferrer"
                 className="mt-3 inline-flex items-center gap-1 rounded-lg border border-green-600 px-4 py-2 text-xs font-semibold text-green-700 hover:bg-green-50"
               >
-                Baixar arquivo COAF
+                Baixar arquivo para o Coaf
               </a>
             )}
             {submitResult?.xml_sha256 && (
@@ -1266,7 +1267,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
             )}
             {submitResult && (
               <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 p-3">
-                <p className="mb-1 text-xs font-semibold text-blue-800">Registrar Número de Protocolo COAF</p>
+                <p className="mb-1 text-xs font-semibold text-blue-800">Registrar número de protocolo Coaf</p>
                 <p className="mb-2 text-xs text-blue-600">Informe o número obtido no portal Siscoaf após envio do XML.</p>
                 <div className="flex gap-2">
                   <input
@@ -1275,7 +1276,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                     onChange={(e) => setProtocolInput(e.target.value)}
                     placeholder="Ex: COAF-2026-000123"
                     className="flex-1 rounded-lg border border-blue-200 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-300"
-                    aria-label="Número de protocolo COAF"
+                    aria-label="Número de protocolo Coaf"
                   />
                   <button
                     onClick={() => {
@@ -1303,7 +1304,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
               <label className="mb-1 block text-xs font-semibold text-gray-600">Decisão da investigação</label>
               <div className="space-y-2">
                 {([
-                  ['FILE_SAR',  'Comunicar ao COAF — indícios suficientes de LD/FT',   'border-red-200 bg-red-50 text-red-700'],
+                  ['FILE_SAR',  'Comunicar ao Coaf — indícios suficientes de LD/FT',   'border-red-200 bg-red-50 text-red-700'],
                   ['NO_ACTION', 'Arquivar — operação lícita ou sem indícios relevantes', 'border-green-200 bg-green-50 text-green-700'],
                   ['PENDING',   'Manter em análise — aguardar mais informações',         'border-yellow-200 bg-yellow-50 text-yellow-700'],
                 ] as [typeof decision, string, string][]).map(([val, label, cls]) => (
@@ -1317,7 +1318,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                       type="radio"
                       name="decision"
                       value={val}
-                      aria-label={`Decisão no Report Package: ${val}`}
+                      aria-label={`Decisão da investigação: ${label}`}
                       checked={decision === val}
                       onChange={() => setDecision(val)}
                       className="accent-brand"
@@ -1331,7 +1332,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
             <div>
               <label className="mb-1 block text-xs font-semibold text-gray-600">
                 Narrativa analítica{' '}
-                {decision === 'FILE_SAR' && <span className="text-red-500">— obrigatório para comunicação COAF</span>}
+                {decision === 'FILE_SAR' && <span className="text-red-500">— obrigatório para comunicação ao Coaf</span>}
               </label>
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <button
@@ -1345,11 +1346,11 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                 {suggestionError && <span className="text-xs text-red-600">{suggestionError}</span>}
               </div>
               <textarea
-                aria-label="Narrativa analítica do report package"
+                aria-label="Narrativa analítica do dossiê"
                 rows={5}
                 value={narrative}
                 onChange={(e) => setNarrative(e.target.value)}
-                placeholder="Descreva de forma objetiva: o que foi detectado, quais padrões são suspeitos e por quê a operação/apostador merece (ou não) ser reportada..."
+                placeholder="Descreva de forma objetiva: o que foi detectado, quais padrões são suspeitos e por que a operação ou o jogador deve, ou não, ser comunicado ao Coaf..."
                 className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
               />
             </div>
@@ -1357,7 +1358,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
             {/* ── Siscoaf 97 — Campos obrigatórios (Portaria SPA/MF 1.143/2024) ── */}
             <div className={`space-y-4 rounded-xl border p-4 ${decision === 'FILE_SAR' ? 'border-red-200 bg-red-50' : 'border-gray-100 bg-gray-50'}`}>
               <div className="flex items-center gap-2">
-                <span className="rounded bg-red-700 px-2 py-0.5 text-xs font-bold text-white">COAF</span>
+                <span className="rounded bg-red-700 px-2 py-0.5 text-xs font-bold text-white">Coaf</span>
                 <h4 className="text-xs font-semibold text-gray-700">
                   Siscoaf — Portaria SPA/MF 1.143/2024 (Comunicado 97)
                   {decision === 'FILE_SAR' && <span className="ml-1 text-red-600">— campos obrigatórios</span>}
@@ -1499,7 +1500,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
               {reportMut.isPending ? 'Gerando dossiê...' : 'Gerar Dossiê'}
             </button>
             {decision === 'FILE_SAR' && occurrenceCodes.length === 0 && (
-              <p className="text-xs text-red-600">Selecione ao menos um código de ocorrência Siscoaf para comunicar ao COAF.</p>
+              <p className="text-xs text-red-600">Selecione ao menos um código de ocorrência Siscoaf para comunicar ao Coaf.</p>
             )}
             {decision === 'FILE_SAR' && !infoAdicionais.trim() && (
               <p className="text-xs text-red-600">Informações Adicionais são obrigatórias (Comunicado Siscoaf 97).</p>
@@ -1537,7 +1538,7 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                   <p className="text-blue-600">Comunicado em: {new Date(rp.filed_at).toLocaleString('pt-BR')}</p>
                 )}
                 {rp.coaf_protocol_number ? (
-                  <p className="text-green-700 font-medium">Protocolo COAF: {rp.coaf_protocol_number}</p>
+                  <p className="text-green-700 font-medium">Protocolo Coaf: {rp.coaf_protocol_number}</p>
                 ) : rp.status === 'FILED' ? (
                   <div className="mt-1 flex gap-1">
                     {protocolRpId === rp.id ? (
@@ -1546,9 +1547,9 @@ function TabDecision({ caseId, c, qc }: { caseId: string; c: CaseDetail; qc: Ret
                           type="text"
                           value={protocolInput}
                           onChange={(e) => setProtocolInput(e.target.value)}
-                          placeholder="Protocolo COAF"
+                          placeholder="Protocolo Coaf"
                           className="rounded border border-blue-200 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300"
-                          aria-label="Número de protocolo COAF"
+                          aria-label="Número de protocolo Coaf"
                         />
                         <button
                           onClick={() => {

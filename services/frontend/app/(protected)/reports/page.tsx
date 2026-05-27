@@ -175,7 +175,7 @@ export default function ReportsPage() {
           </div>
           <div className="flex items-center gap-2">
             <select
-              aria-label="Quantidade de itens na fila de filing"
+              aria-label="Quantidade de itens na fila de comunicação ao Coaf"
               value={filingLimit}
               onChange={(e) => setFilingLimit(Number(e.target.value))}
               className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-brand"
@@ -197,7 +197,7 @@ export default function ReportsPage() {
 
         {filingOverviewError && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-            Não foi possível carregar a governança de filing.
+            Não foi possível carregar a governança das comunicações ao Coaf.
           </div>
         )}
 
@@ -277,9 +277,9 @@ export default function ReportsPage() {
                 {(filingQueue?.items ?? []).map((item) => (
                   <tr key={item.report_package_id} className="hover:bg-gray-50">
                     <td className="px-3 py-2 font-mono text-gray-700">{item.case_id.slice(0, 8)}...</td>
-                    <td className="px-3 py-2 text-gray-600">{item.report_decision ?? '—'}</td>
+                    <td className="px-3 py-2 text-gray-600">{translate.caseDecision(item.report_decision) ?? '—'}</td>
                     <td className="px-3 py-2 text-gray-600">
-                      {item.report_status}
+                      {translate.cosStatus(item.report_status)}
                       {item.protocol_registered && <span className="ml-1 text-green-700">· protocolo</span>}
                     </td>
                     <td className="px-3 py-2">
@@ -308,7 +308,7 @@ export default function ReportsPage() {
                             onClick={() => handleSubmit(item.report_package_id)}
                             disabled={submittingId === item.report_package_id}
                             className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-                            title="Registrar submissão COAF"
+                            title="Registrar envio ao Coaf"
                           >
                             <Send size={11} /> {submittingId === item.report_package_id ? '...' : 'Submeter'}
                           </button>

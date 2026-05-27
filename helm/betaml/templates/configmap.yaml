@@ -10,3 +10,11 @@ data:
   MINIO_ENDPOINT: {{ .Values.config.MINIO_ENDPOINT | quote }}
   MINIO_BUCKET: {{ .Values.config.MINIO_BUCKET | quote }}
   MINIO_ACCESS_KEY: {{ .Values.config.MINIO_ACCESS_KEY | quote }}
+  REDIS_URL: {{ default (printf "redis://%s-redis:6379/0" (include "betaml.fullname" .)) .Values.api.env.REDIS_URL | quote }}
+  KAFKA_BOOTSTRAP_SERVERS: {{ .Values.api.env.KAFKA_BOOTSTRAP_SERVERS | quote }}
+  CLICKHOUSE_HOST: {{ .Values.config.CLICKHOUSE_HOST | quote }}
+  CLICKHOUSE_PORT: {{ .Values.config.CLICKHOUSE_PORT | quote }}
+  CLICKHOUSE_DB: {{ .Values.config.CLICKHOUSE_DB | quote }}
+  ML_SERVICE_URL: {{ default (printf "http://%s-ml-service:%v" (include "betaml.fullname" .) .Values.mlService.service.port) .Values.config.ML_SERVICE_URL | quote }}
+  RULES_ENGINE_METRICS_URL: {{ default (printf "http://%s-rules-engine:%v/metrics" (include "betaml.fullname" .) .Values.rulesEngine.metricsPort) .Values.config.RULES_ENGINE_METRICS_URL | quote }}
+  STREAM_PROCESSOR_METRICS_URL: {{ default (printf "http://%s-stream-processor:%v/metrics" (include "betaml.fullname" .) .Values.streamProcessor.metricsPort) .Values.config.STREAM_PROCESSOR_METRICS_URL | quote }}

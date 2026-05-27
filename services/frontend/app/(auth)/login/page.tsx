@@ -44,13 +44,13 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-gray-100">
       <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-lg">
         <h1 className="mb-2 text-2xl font-bold text-brand">BetAML</h1>
-        <p className="mb-6 text-sm text-gray-500">PLD/FT Intelligence — Brazilian Betting Operators</p>
+        <p className="mb-6 text-sm text-gray-500">Plataforma de PLD/FT para operadores de apostas no Brasil</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <input
             type="text"
-            aria-label="Tenant"
-            placeholder="Tenant"
+            aria-label="Operador"
+            placeholder="Operador"
             value={tenantSlug}
             onChange={(e) => setTenantSlug(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"

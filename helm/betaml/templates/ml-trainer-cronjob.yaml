@@ -23,7 +23,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: ml-trainer
-              image: "{{ .Values.mlTrainer.image.repository }}:{{ include "betaml.imageTag" (dict "componentTag" .Values.mlTrainer.image.tag "globalTag" .Values.global.imageTag) }}"
+              image: "{{ include "betaml.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.mlTrainer.image.repository "tag" .Values.mlTrainer.image.tag "globalTag" .Values.global.imageTag) }}"
               imagePullPolicy: {{ .Values.mlTrainer.image.pullPolicy }}
               resources:
                 {{- toYaml .Values.mlTrainer.resources | nindent 16 }}

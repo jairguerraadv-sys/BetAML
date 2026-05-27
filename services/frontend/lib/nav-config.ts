@@ -57,7 +57,7 @@ const SECTION_GESTAO: NavSection = {
   items: [
     { path: '/sensitivity',      label: 'Ajustes de Sensibilidade', icon: 'SlidersHorizontal', tooltip: 'Calibre o volume e precisão dos alertas' },
     { path: '/players',          label: 'Perfis de Apostadores',    icon: 'Users',             tooltip: 'Apostadores monitorados do operador' },
-    { path: '/rules',            label: 'Condições de Risco',       icon: 'BookOpen',           tooltip: 'Regras de detecção no tenant' },
+    { path: '/rules',            label: 'Condições de Risco',       icon: 'BookOpen',           tooltip: 'Regras de detecção no operador' },
     { path: '/rules/builder',    label: 'Construtor Visual',        icon: 'Wand2',              tooltip: 'Editor guiado de condições de risco' },
     { path: '/rules/compound',   label: 'Condições Combinadas',     icon: 'GitBranch',          tooltip: 'Combinações de condições de risco' },
     { path: '/player-lists',     label: 'Listas de Monitoramento',  icon: 'List',               tooltip: 'Listas PEP, sanções e monitoramento especial' },
@@ -72,8 +72,8 @@ const SECTION_INTEGRACAO: NavSection = {
     { path: '/mappings',      label: 'Integração de Dados',    icon: 'Plug',         tooltip: 'Configure mapeamentos de campos dos conectores' },
     { path: '/ingest-jobs',   label: 'Jobs de Ingestão',       icon: 'Activity',     tooltip: 'Histórico de envios de dados ao BetAML' },
     { path: '/ingest-errors', label: 'Quarentena de Erros',    icon: 'AlertOctagon', tooltip: 'Registros com falha de validação ou mapeamento' },
-    { path: '/admin',         label: 'Usuários do Operador',   icon: 'Shield',       tooltip: 'Gerencie usuários, chaves e flags do seu tenant' },
-    { path: '/settings',      label: 'Parâmetros de Sistema',  icon: 'Settings',     tooltip: 'Configurações técnicas do tenant' },
+    { path: '/admin',         label: 'Usuários do Operador',   icon: 'Shield',       tooltip: 'Gerencie usuários, chaves e parâmetros do operador' },
+    { path: '/settings',      label: 'Parâmetros de Sistema',  icon: 'Settings',     tooltip: 'Configurações técnicas do operador' },
     { path: '/audit-logs',    label: 'Log de Auditoria',       icon: 'ScrollText',   tooltip: 'Registro de ações da plataforma' },
   ],
 };
@@ -82,8 +82,8 @@ const SECTION_INTEGRACAO: NavSection = {
 const SECTION_PLATAFORMA: NavSection = {
   label: 'Plataforma BetAML',
   items: [
-    { path: '/admin',            label: 'Operadores (Tenants)',    icon: 'Building2',      tooltip: 'Gerencie operadores e recursos administrativos da plataforma' },
-    { path: '/admin/onboarding', label: 'Onboarding de Operadores', icon: 'LayoutTemplate', tooltip: 'Fluxo guiado de criação e bootstrap de novos tenants' },
+    { path: '/admin',            label: 'Operadores',             icon: 'Building2',      tooltip: 'Gerencie operadores e recursos administrativos da plataforma' },
+    { path: '/admin/onboarding', label: 'Onboarding de Operadores', icon: 'LayoutTemplate', tooltip: 'Fluxo guiado de criação e configuração inicial de operadores' },
     { path: '/model-registry',   label: 'Analisadores Automáticos', icon: 'BrainCircuit',   tooltip: 'Versionamento dos analisadores automáticos de risco' },
     { path: '/admin/ops',        label: 'Métricas da Plataforma',  icon: 'BarChart3',      tooltip: 'Saúde operacional e indicadores consolidados' },
     { path: '/audit-logs',       label: 'Auditoria da Plataforma', icon: 'ShieldCheck',    tooltip: 'Log de ações administrativas e trilha de auditoria' },

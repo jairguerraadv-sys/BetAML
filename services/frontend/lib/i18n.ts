@@ -133,7 +133,7 @@ const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     'players.title': 'Perfis de Clientes',
     'players.table.cpf': 'CPF',
     'players.table.risk_band': 'Faixa de Risco',
-    'players.table.score': 'Risk Score',
+    'players.table.score': 'Risco',
     'players.table.pep': 'PEP',
     'players.erased': 'Registro anonimizado (LGPD)',
 
@@ -230,7 +230,7 @@ const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     'cases.status.investigating': 'Investigating',
     'cases.status.pending_review': 'Pending Review',
     'cases.status.closed': 'Closed',
-    'cases.status.reported': 'Reported to COAF',
+    'cases.status.reported': 'Reported to Coaf',
     'cases.table.reference': 'Reference',
     'cases.table.priority': 'Priority',
     'cases.table.assigned': 'Assigned to',
@@ -240,7 +240,7 @@ const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     'players.title': 'Customer Profiles',
     'players.table.cpf': 'Tax ID',
     'players.table.risk_band': 'Risk Band',
-    'players.table.score': 'Risk Score',
+    'players.table.score': 'Risk',
     'players.table.pep': 'PEP',
     'players.erased': 'Anonymised record (LGPD)',
 
