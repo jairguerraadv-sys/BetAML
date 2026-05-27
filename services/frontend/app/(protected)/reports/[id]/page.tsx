@@ -4,9 +4,9 @@ import { useParams, useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import {
-  api,
   downloadReportPackage,
   exportReportPackageHtml,
+  fetchReportPackage,
   submitReportPackageFiling,
 } from '@/lib/api';
 import {
@@ -55,12 +55,7 @@ export default function ReportPackageDetailPage() {
 
   const { data: rp, isLoading, isError } = useQuery<ReportPackageDetail>({
     queryKey: ['report-package-detail', id],
-    queryFn: () => api.get(`/report-packages?status=&limit=200`).then((r) => {
-      const items: ReportPackageDetail[] = r.data;
-      const found = items.find((i) => i.id === id);
-      if (!found) throw new Error('not found');
-      return found;
-    }),
+    queryFn: () => fetchReportPackage(id) as Promise<ReportPackageDetail>,
     enabled: !!id,
     retry: false,
   });

@@ -27,6 +27,63 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["alerts"])
 
 
+class AlertListItemOut(BaseModel):
+    id: str
+    severity: str
+    status: str
+    title: str
+    alert_type: str
+    player_id: str
+    rule_id: str | None = None
+    anomaly_score: float | None = None
+    composite_score: float | None = None
+    case_id: str | None = None
+    label: str | None = None
+    triaged_by: str | None = None
+    triaged_at: str | None = None
+    priority: str | None = None
+    sla_due_at: str | None = None
+    sla_status: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AlertsListOut(BaseModel):
+    total: int
+    next_cursor: dict[str, str | None] | None = None
+    items: list[AlertListItemOut]
+
+
+class AlertDetailOut(BaseModel):
+    id: str
+    severity: str
+    status: str
+    title: str
+    description: str | None = None
+    alert_type: str
+    evidence: dict[str, object]
+    player_id: str
+    rule_id: str | None = None
+    anomaly_score: float | None = None
+    composite_score: float | None = None
+    score_breakdown: dict[str, object] = Field(default_factory=dict)
+    source_event_id: str | None = None
+    case_id: str | None = None
+    created_at: datetime
+    case_reference_number: str | None = None
+    case_status: str | None = None
+    case_title: str | None = None
+    triaged_by: str | None = None
+    triaged_at: datetime | None = None
+    triage_note: str | None = None
+    label: str | None = None
+    label_note: str | None = None
+    labeled_at: datetime | None = None
+    priority: str | None = None
+    sla_due_at: str | None = None
+    sla_status: str | None = None
+
+
 def _numeric_or_none(value):
     try:
         if value is None:
@@ -153,7 +210,7 @@ def _build_ml_explainability(alert: Alert) -> dict[str, object] | None:
     }
 
 
-@router.get("/alerts")
+@router.get("/alerts", response_model=AlertsListOut)
 async def list_alerts(
     severity: Optional[str] = None,
     status_filter: Optional[str] = Query(None, alias="status"),
@@ -354,7 +411,7 @@ async def export_alerts_csv(
     )
 
 
-@router.get("/alerts/{alert_id}")
+@router.get("/alerts/{alert_id}", response_model=AlertDetailOut)
 async def get_alert(
     alert_id: str,
     current_user: User = Depends(get_current_user),

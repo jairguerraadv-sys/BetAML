@@ -30,6 +30,53 @@ class MonthlyReportIn(BaseModel):
     month: int = Field(..., ge=1, le=12)
 
 
+class MonthlyPeriodOut(BaseModel):
+    from_: str = Field(alias="from")
+    to: str
+
+
+class MonthlyReportTopRuleOut(BaseModel):
+    rule_id: str
+    rule_name: str
+    fires: int
+
+
+class MonthlyReportTopPlayerOut(BaseModel):
+    player_id: str
+    external_id: str
+    avg_risk_score: float
+
+
+class MonthlyReportQualityOut(BaseModel):
+    labeled_alerts: int
+    true_positive_count: int
+    false_positive_count: int
+    unknown_count: int
+    true_positive_rate: float | None = None
+    false_positive_rate: float | None = None
+
+
+class MonthlyReportOut(BaseModel):
+    period: MonthlyPeriodOut
+    alerts_by_severity: dict[str, int]
+    total_alerts: int
+    cases_summary: dict[str, int]
+    total_cases: int
+    total_cases_opened: int
+    total_cases_closed: int
+    total_cases_reported: int
+    top_rules_by_fires: list[MonthlyReportTopRuleOut]
+    top_players_by_risk: list[MonthlyReportTopPlayerOut]
+    total_ingested_events: int
+    bets_by_product_type: dict[str, int]
+    total_communications_generated: int
+    false_positive_rate: float | None = None
+    total_sar_reports: int
+    true_positive_rate: float | None = None
+    quality_metrics: MonthlyReportQualityOut
+    generated_at: str
+
+
 # ── Core aggregation helper ───────────────────────────────────────────────────
 
 async def _build_monthly_report(
@@ -284,7 +331,7 @@ async def generate_monthly_report(
     return {"status": "queued", "year": body.year, "month": body.month}
 
 
-@router.get("/reports/monthly-summary")
+@router.get("/reports/monthly-summary", response_model=MonthlyReportOut)
 async def get_monthly_summary(
     date_from: str = Query(..., description="Data inicial YYYY-MM-DD (inclusivo)"),
     date_to: str = Query(..., description="Data final YYYY-MM-DD (inclusivo)"),

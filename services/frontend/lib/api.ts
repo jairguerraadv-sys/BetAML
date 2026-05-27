@@ -1,4 +1,5 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import type { paths } from '@/lib/generated/api-types';
 
 // Sempre usa o proxy local — o servidor Next.js encaminha para a API.
 // Isso garante que localhost:8000 nunca é chamado direto do browser,
@@ -6,6 +7,10 @@ import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 const BASE = '/api-proxy';
 
 export const api = axios.create({ baseURL: BASE });
+
+type AlertsListResponse = paths['/alerts']['get']['responses']['200']['content']['application/json'];
+type CasesListResponse = paths['/cases']['get']['responses']['200']['content']['application/json'];
+type ReportPackageDetailResponse = paths['/report-packages/{rp_id}']['get']['responses']['200']['content']['application/json'];
 
 type RetriableRequestConfig = InternalAxiosRequestConfig & { _retry?: boolean };
 
@@ -164,8 +169,8 @@ export interface User {
 
 export interface Alert {
   id: string; title: string; severity: string; status: string;
-  player_id: string; alert_type: string; created_at: string; rule_id?: string;
-  anomaly_score?: number; case_id?: string; case_reference_number?: string | null;
+  player_id: string; alert_type: string; created_at: string; rule_id?: string | null;
+  anomaly_score?: number | null; case_id?: string | null; case_reference_number?: string | null;
   game_type?: string;
 }
 
@@ -471,7 +476,7 @@ export interface Rule {
 // ── Resources ─────────────────────────────────────────────────────────────────
 
 export const fetchAlerts = (params?: Record<string, string>) =>
-  api.get<{ total: number; items: Alert[] }>('/alerts', { params }).then((r) => r.data);
+  api.get<AlertsListResponse>('/alerts', { params }).then((r) => r.data);
 
 export const fetchAlert = (id: string) =>
   api.get<AlertDetail>(`/alerts/${id}`).then((r) => r.data);
@@ -480,7 +485,7 @@ export const fetchAlertExplainability = (id: string) =>
   api.get<AlertExplainability>(`/alerts/${id}/explainability`).then((r) => r.data);
 
 export const fetchCases = (params?: Record<string, string | number>) =>
-  api.get<Case[]>('/cases', { params }).then((r) => r.data);
+  api.get<CasesListResponse>('/cases', { params }).then((r) => r.data as Case[]);
 
 export const fetchCase = (id: string) =>
   api.get<CaseDetail>(`/cases/${id}`).then((r) => r.data);
@@ -685,6 +690,9 @@ export const submitReportPackageFiling = (rpId: string) =>
   api.post<{ report_package_id: string; status: string; filed_at: string; channel: string; message: string }>(
     `/report-packages/${rpId}/submit-filing`,
   ).then((r) => r.data);
+
+export const fetchReportPackage = (rpId: string) =>
+  api.get<ReportPackageDetailResponse>(`/report-packages/${rpId}`).then((r) => r.data);
 
 export const assignCase = (caseId: string, userId: string) =>
   api.post(`/cases/${caseId}/assign`, { user_id: userId }).then((r) => r.data);

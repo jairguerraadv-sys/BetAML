@@ -445,6 +445,98 @@ class CaseLinkTransactionIn(BaseModel):
     transaction_id: str
 
 
+class CaseCreateOut(BaseModel):
+    id: str
+    title: str
+    status: str
+    reference_number: str
+
+
+class CaseSummaryOut(BaseModel):
+    id: str
+    title: str
+    status: str
+    severity: str | None = None
+    player_id: str | None = None
+    assigned_to: str | None = None
+    created_at: datetime
+    reference_number: str
+    priority: str
+    sla_due_at: datetime | None = None
+    auto_created: bool
+
+
+class CaseAlertSummaryOut(BaseModel):
+    id: str
+    severity: str | None = None
+    title: str | None = None
+
+
+class CaseTimelineEventOut(BaseModel):
+    id: str
+    event_type: str
+    content: dict[str, Any]
+    created_at: datetime
+
+
+class CaseEvidenceFileOut(BaseModel):
+    event_id: str
+    file_name: str | None = None
+    description: str | None = None
+    content_type: str | None = None
+    size_bytes: int
+    sha256: str | None = None
+    storage_backend: str | None = None
+    uploaded_at: datetime | None = None
+    download_path: str
+
+
+class ReportPackageMetaOut(BaseModel):
+    id: str
+    status: str
+    format: str
+    decision: str | None = None
+    created_at: datetime
+    generated_by: str | None = None
+    pdf_available: bool
+
+
+class CaseDetailOut(BaseModel):
+    id: str
+    title: str
+    status: str
+    severity: str | None = None
+    description: str | None = None
+    player_id: str | None = None
+    assigned_to: str | None = None
+    created_at: datetime
+    reference_number: str
+    priority: str
+    sla_due_at: datetime | None = None
+    auto_created: bool
+    alerts: list[CaseAlertSummaryOut]
+    timeline: list[CaseTimelineEventOut]
+    evidence_files: list[CaseEvidenceFileOut]
+    report_packages: list[ReportPackageMetaOut] = Field(default_factory=list)
+
+
+class ReportPackageListItemOut(BaseModel):
+    id: str
+    case_id: str
+    player_id: str | None = None
+    status: str
+    format: str
+    decision: str | None = None
+    created_at: datetime
+    generated_by: str | None = None
+    pdf_available: bool
+
+
+class ReportPackageDetailOut(ReportPackageListItemOut):
+    coaf_protocol_number: str | None = None
+    filed_at: datetime | None = None
+
+
 def _map_report_decision(decision: str) -> str:
     mapping = {
         "FILE_SAR": "REPORT",
@@ -736,7 +828,7 @@ def _suggest_analyst_narrative(case_obj: Case, alerts: list[Alert], player_info:
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@router.post("/cases", status_code=201)
+@router.post("/cases", status_code=201, response_model=CaseCreateOut)
 async def create_case(
     body: CaseCreate,
     current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN])),
@@ -799,7 +891,7 @@ async def create_case(
     return response_payload
 
 
-@router.get("/cases")
+@router.get("/cases", response_model=list[CaseSummaryOut])
 async def list_cases(
     status_filter: Optional[str] = None,
     player_id: Optional[str] = None,
@@ -837,7 +929,7 @@ async def list_cases(
     ]
 
 
-@router.get("/cases/{case_id}")
+@router.get("/cases/{case_id}", response_model=CaseDetailOut)
 async def get_case(
     case_id: str,
     current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR, AppRole.SUPER_ADMIN])),
@@ -1467,7 +1559,7 @@ async def submit_report_package(
     }
 
 
-@router.get("/cases/{case_id}/report-packages")
+@router.get("/cases/{case_id}/report-packages", response_model=list[ReportPackageMetaOut])
 async def list_report_packages(
     case_id: str,
     current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
@@ -1512,7 +1604,7 @@ async def list_report_packages(
     ]
 
 
-@router.get("/report-packages")
+@router.get("/report-packages", response_model=list[ReportPackageListItemOut])
 async def list_tenant_report_packages(
     case_id: str | None = Query(None),
     status: str | None = Query(None),
@@ -1545,6 +1637,36 @@ async def list_tenant_report_packages(
         }
         for rp in rps
     ]
+
+
+@router.get("/report-packages/{rp_id}", response_model=ReportPackageDetailOut)
+async def get_report_package(
+    rp_id: str,
+    current_user: User = Depends(require_role_any([AppRole.ANALISTA, AppRole.GESTOR])),
+    db: AsyncSession = Depends(get_db),
+):
+    rp = await db.get(ReportPackage, rp_id)
+    if not rp or str(rp.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(404, "ReportPackage não encontrado")
+
+    decision = (
+        (rp.payload or {}).get("decisionLegacy") or (rp.payload or {}).get("decision") or rp.decision
+        if isinstance(rp.payload, dict)
+        else rp.decision
+    )
+    return {
+        "id": rp.id,
+        "case_id": rp.case_id,
+        "player_id": rp.player_id,
+        "status": rp.status,
+        "format": rp.format,
+        "decision": decision,
+        "created_at": rp.created_at,
+        "generated_by": rp.created_by,
+        "pdf_available": rp.pdf_path is not None,
+        "coaf_protocol_number": rp.coaf_protocol_number,
+        "filed_at": rp.filed_at,
+    }
 
 
 class _ProtocolNumberIn(BaseModel):
